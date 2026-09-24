@@ -111,13 +111,13 @@ def test_feedback_idempotency_is_opt_in_and_atomic(brain_home):
 
 
 def test_apply_heat_rules(brain_home):
-    verified = _memory(brain_home, grade="VERIFIED", status="current")
+    current_tested = _memory(brain_home, grade="TESTED", status="current")
     unverified = _memory(brain_home, title="scout promotion", grade="INFERRED", status="current")
-    candidate = _memory(brain_home, title="draft idea", grade="VERIFIED", status="candidate")
+    candidate = _memory(brain_home, title="draft idea", grade="TESTED", status="candidate")
     labile = _memory(brain_home, title="contested rule", grade="OBSERVED", status="current")
     semantic.curate(brain_home, labile, status="labile")
 
-    assert reconsolidation.apply_heat(brain_home, verified, "HOT")["heat"] == "HOT"
+    assert reconsolidation.apply_heat(brain_home, current_tested, "HOT")["heat"] == "HOT"
     with pytest.raises(BrainError, match="HOT"):
         reconsolidation.apply_heat(brain_home, unverified, "HOT")
     with pytest.raises(BrainError, match="HOT"):
@@ -125,13 +125,13 @@ def test_apply_heat_rules(brain_home):
 
     # ARCHIVED is refused for current memories, allowed otherwise.
     with pytest.raises(BrainError, match="ARCHIVED"):
-        reconsolidation.apply_heat(brain_home, verified, "ARCHIVED")
+        reconsolidation.apply_heat(brain_home, current_tested, "ARCHIVED")
     assert reconsolidation.apply_heat(brain_home, candidate, "ARCHIVED")["heat"] == "ARCHIVED"
     assert reconsolidation.apply_heat(brain_home, labile, "ARCHIVED")["heat"] == "ARCHIVED"
 
-    assert reconsolidation.apply_heat(brain_home, verified, "WARM")["heat"] == "WARM"
+    assert reconsolidation.apply_heat(brain_home, current_tested, "WARM")["heat"] == "WARM"
     with pytest.raises(BrainError, match="heat"):
-        reconsolidation.apply_heat(brain_home, verified, "BOILING")
+        reconsolidation.apply_heat(brain_home, current_tested, "BOILING")
     with pytest.raises(BrainError, match="Unknown memory"):
         reconsolidation.apply_heat(brain_home, "mem-000000000000", "COLD")
 
@@ -177,18 +177,19 @@ def test_decay_never_auto_archives(brain_home):
 
 
 def test_protected_never_decays(brain_home):
-    verified = _memory(brain_home, grade="VERIFIED")
+    # Stored VERIFIED without an attestation is a claim, not protection.
+    legacy_verified = _memory(brain_home)
+    _set(brain_home, legacy_verified, evidence_grade="VERIFIED")
     constitution = _memory(brain_home, title="constitution change control", grade="TESTED")
     security = _memory(brain_home, title="security boundaries", grade="INFERRED")
-    for mid in (verified, constitution, security):
+    for mid in (legacy_verified, constitution, security):
         _set(brain_home, mid, heat="HOT", retrieval_count=0, last_retrieved_at=_days_ago(90))
     changes = reconsolidation.decay_pass(brain_home, dry_run=True, now=NOW)
-    assert changes == []
-    # An unprotected memory in the same pass still decays.
+    assert [c["memory_id"] for c in changes] == [legacy_verified]
     mid = _memory(brain_home, title="scout promotion criteria")
     _set(brain_home, mid, heat="HOT", last_retrieved_at=_days_ago(90))
     changes = reconsolidation.decay_pass(brain_home, dry_run=True, now=NOW)
-    assert [c["memory_id"] for c in changes] == [mid]
+    assert {c["memory_id"] for c in changes} == {legacy_verified, mid}
 
 
 def test_decay_determinism(brain_home):

@@ -5,8 +5,9 @@ Advisory-only forgetting. Tracks retrievals and activation outcomes per memory
 runs a decay pass that only moves stale memories OUT of the hot set — it never
 destroys canonical evidence and never auto-archives (plan §52).
 
-Protected memories (current+VERIFIED, or constitution/security-titled) never
-decay. Heat is pure meta-state; status curation synchronizes canonical frontmatter.
+Protected memories are constitution/security-titled, or attested current+VERIFIED.
+Unattested VERIFIED decays. Heat is pure meta-state; status curation synchronizes
+canonical frontmatter.
 Content plans retain version history, evidence, and write-time origin authority.
 """
 
@@ -294,7 +295,7 @@ def apply_heat(home: Path, memory_id: str, heat: str) -> dict:
 
 
 def _protected(row: dict) -> bool:
-    if row["status"] == "current" and row["evidence_grade"] == "VERIFIED":
+    if row["status"] == "current" and semantic.effective_evidence_grade(row) == "VERIFIED":
         return True
     title = (row.get("title") or "").lower()
     return any(word in title for word in PROTECTED_TITLE_WORDS)

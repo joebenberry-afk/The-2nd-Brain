@@ -2,8 +2,9 @@
 
 ## Active candidate: orchestrator removal (2026-09-23)
 
-**Status:** `M00_ORCHESTRATOR_REMOVAL_IN_PROGRESS`; NOT QUALIFIED;
-production NOT ACTIVATED. This register and
+**Status:** `M00_PARTIAL_EXTERNAL_BLOCKER` — every applicable HIGH is fixed,
+refuted or deferred to one external dependency (a non-agent-controlled
+approval/attestation issuer); NOT QUALIFIED; production NOT ACTIVATED. This register and
 [`Second_Brain_M00_OneShot_Closure_Mandate.md`](Second_Brain_M00_OneShot_Closure_Mandate.md)
 form one acceptance contract under the
 [`Orchestrator Removal Mandate`](Second_Brain_Orchestrator_Removal_Mandate_2026-09-23.md).
@@ -33,19 +34,21 @@ candidate manifest is a byte comparison, never protected approval.
 
 | Finding | Retired subject | Applicable retained subject/status |
 |---|---|---|
-| M00-CORD-01/02, SB-ORCH-001, #3/#4/#5 | Coordinator custody, effective-grant worker admission, leases/settlement: `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | Native host noninterference: **executed** (§8 of the disposition record); memory/context consumer integrity: `OPEN` until real path qualified. |
-| SEC-AUTH-01 | Worker issuer only: retired, not fixed | Protected approval and caller-authored verification action: `OPEN — REPRODUCED ON RETAINED PATHS`; owner accept/defer decision required. |
-| SEC-AUTH-02 | Worker completion/observer-only authority: retired | `remember --grade`, origin and trusted-memory authority: `OPEN — REPRODUCED ON RETAINED PATHS`; owner accept/defer decision required. |
+| M00-CORD-01/02, SB-ORCH-001, #3/#4/#5 | Coordinator custody, effective-grant worker admission, leases/settlement: `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | Native host noninterference: **executed** (§8 of the disposition record); memory/context consumer integrity: **executed on the real host path** (`m00-evidence/authority-closure-20260923.md` §3): the candidate extension's advisory packet is host-recorded in the parent stream and consumed, a native child spawns with zero interference markers, Brain-off shows no token. Child-side delivery is an observation (relevance-gated, varied between runs). |
+| SEC-AUTH-01 | Worker issuer only: retired, not fixed | Caller-authored approval/verification: **`FIXED — fail-closed`** (`authority-closure-20260923.md` §1): requested approval is evidence only, a CRITICAL gate always requires approval and cannot complete, the gate writes no model outcome/profile, `models record` refuses. Positive independent approval: **unavailable** — needs a non-agent issuer (`EXTERNAL_BLOCKER`, capability not vulnerability). |
+| SEC-AUTH-02 | Worker completion/observer-only authority: retired | Caller-minted grade/ceiling: **`FIXED — fail-closed`** (§1): new VERIFIED writes refused (`VERIFIED_REQUIRES_ATTESTATION`), origin never raises the ceiling, every trust consumer reads effective grade/ceiling (stored claims rank as TESTED/advisory, cannot bypass holdout or enter the policy lane). Positive attested admission: `EXTERNAL_BLOCKER`. |
 | SEC-INTEGRITY-01 | Active worker settlement branch retired | Ledger chain/replay clauses **refuted** (full-envelope chain, genesis recomputation, replay rejects a broken chain); unkeyed self-anchored chain `DEFERRED` (key custody); unverified rehydration `FIXED + regression-tested` in this packet. |
 | SEC-SKILL-01 / SB-PROMOTION-004 | None of approved skill consumption | Consumption-time byte binding **refuted** on every retained route (Python + TS); approval-record authority `DEFERRED` to the SEC-AUTH-01 channel. |
 | FSUPD-01 / FSPATH-03 | Patched-host activation/rollback retired without qualification | Literal defect retired with the file; surviving installer: post-swap installed-tree verification `FIXED + Pester-tested`, path containment `DEFERRED (operator-chosen)`, protected approval `DEFERRED (blocked)`. |
 | FSLNCH-02 | Patched-host launcher retired; original seal retained | No current patched launcher to qualify. |
 | SEC-HOOK-02 | No general retirement | Outer hook command **pinned to the absolute System32 PowerShell and Pester-covered**; the hook's own interpreter still comes from `SECOND_BRAIN_PYTHON` (`run-hook.ps1:21,46`, `codex-hooks/run.ps1:25,36`) and bare-name resolution survives in other subprocesses: `DEFERRED — LOW`, same-user blast radius, mitigation named in §4 of the disposition record. |
-| SB-PROMPT-002 / 003 | Worker task-context renderer retired | Project-ID model-visible sinks remain subject to validation; retrieved content has no instruction authority: `OPEN` for integrated proof. |
+| SB-PROMPT-002 / 003 | Worker task-context renderer retired | **Integrated proof executed** (`authority-closure-20260923.md` §2): hostile project IDs through every retained ingress on the codex, antigravity and Hermes hook CLIs never reach model-visible text (rendered `default` or refused); an instruction-bearing memory is delivered only inside the framed `[BRAIN_CONTEXT_DELTA v1]` packet with the no-authority rule and `authority: advisory`; sensitivity shown. |
 | SEC-DEP-01 | No security waiver | Dev-only: `js-yaml` HIGH `FIXED` by lockfile bump (audit `high: 0`); two `vitest`/`@vitest/mocker` moderates `DEFERRED` with named semver-major remediation. |
 | Aggregate usage reader | Retained accounting honesty | **FIXED + regression-tested** (`M00-FINAL` §1): counters the host never reported read as `None`/`null`/`-` with `token_usage_seen` coverage, explicit host zeros stay `0`, and `attribute_roles` counts unknown totals in `*_unknown_token_sessions`; `economics.verdict` already drops pairs with unknown tokens. Previously coerced to `0`. |
 | `scripts/run_p3_promotion_campaign.py` | Not an orchestration subject | Retained operator-invoked evaluation harness (operator-frozen model env; no Brain admission/lease/settlement; vendor CLI owns permissions). Scope-boundary header added; any future Brain-authority reach from it is a defect. |
-| #2a/#2b, #6, DOC-14 | Agent reservation/admission retired | Schema/recovery, honest passive usage and missing DOC-14 source: `OPEN` where applicable. |
+| #2a/#2b | Agent reservation/admission retired | #2a `CLOSED` (as scoped); #2b's four remaining items (strict-prefix, VMem public reader, separate-process first open, authority-chosen VMem columns) evidenced in `tests/test_brain_schema.py` / `vmem.py` (correction block below) and green in the full suite. |
+| #6 | Budget reservation retired | Passive billed-request dedupe and unknown-usage honesty `FIXED + regression-tested` (`telemetry.usage_identity`, `governor` unknown counters, `4d74719`); two study readers are a recorded authorized exclusion. |
+| DOC-14 | — | `RETAINED — NOT_YET_AUTHORED / SOURCE_UNAVAILABLE`: a recorded documentation gap, not closable here; unseen clauses are not claimed satisfied. |
 
 An `OPEN` retained HIGH blocks qualification; no row treats removal as an
 historical PASS. The original September 21 audit and former M00 negative
@@ -89,6 +92,12 @@ selection, enabled memory/context for parent and children, clear refusal of
 explicitly enabled retired operations, and matched controls) all remain valid
 *observations* of non-interference; none of them requires or authorizes building
 Brain orchestration.
+
+**Memory/context on the real host path: `EXECUTED`** (2026-09-23,
+[`m00-evidence/authority-closure-20260923.md`](m00-evidence/authority-closure-20260923.md) §3):
+the candidate extension's advisory packet is host-recorded and consumed by the
+parent, one native child spawns with zero interference markers, Brain-off has no
+token. Child-side delivery is observed, not asserted.
 
 ### Test-retirement mapping
 
@@ -184,6 +193,25 @@ Executed evidence for this packet:
   reaches the main checkout's venv, and child processes then import a sibling
   worktree's package — which is what the `Qualification runtime source
   mismatch` guard exists to catch.
+
+### Closure packet — SEC-AUTH fail-closed, prompt-sink and memory real path (2026-09-23)
+
+Executed evidence: [`m00-evidence/authority-closure-20260923.md`](m00-evidence/authority-closure-20260923.md).
+
+- SEC-AUTH-01/02 **fixed fail-closed** on every retained sink: caller approval,
+  grade and origin are requests; authority needs an attestation from an issuer
+  registry that is empty by construction. Positive approval is the remaining
+  external dependency, now a missing capability rather than a live vulnerability.
+- SB-PROMPT-002/003 integrated proof on the codex, antigravity and Hermes hook
+  CLIs (34 tests, sensitivity shown). Memory/context real-path probe: five
+  verdicts true.
+- Gates: ruff clean, pyright `0 errors`, Python **2154 passed / 1 skipped /
+  0 failed**; no `brainstem/` file changed, so the prior extension evidence
+  stands for unchanged bytes.
+- Remaining, all on the same external issuer: positive SEC-AUTH approval,
+  SEC-SKILL-01 approval-record authority, FSUPD-01 protected approval,
+  SEC-INTEGRITY-01 key custody. Deferred LOW/moderate: SEC-HOOK-02 residual,
+  two dev-only `vitest` moderates. DOC-14 retained.
 
 ## Historical campaign record — superseded, preserved verbatim below
 

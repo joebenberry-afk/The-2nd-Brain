@@ -49,7 +49,7 @@ class TestCascadeShortCircuitAndTiers:
             summary="Exact references bypass all token scanning",
             body="When user queries an exact ref, look up directly in SQLite.",
             project_id="proj-alpha",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, mem_id, status="current")
 
@@ -69,7 +69,7 @@ class TestCascadeShortCircuitAndTiers:
             summary="Use PgBouncer for high concurrency",
             body="PostgreSQL requires connection pooling under multi-threaded workers.",
             project_id="proj-db",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, mem_id, status="current")
 
@@ -93,7 +93,7 @@ class TestCascadeShortCircuitAndTiers:
             summary="Verified telemetry session fact",
             body="telemetry session concept0000 unique-case-0062 canonical",
             project_id="bench",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, target, status="current")
         neighbor = add_memory(
@@ -102,7 +102,7 @@ class TestCascadeShortCircuitAndTiers:
             summary="Common telemetry session note",
             body="telemetry session concept0000 neighboring",
             project_id="bench",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, neighbor, status="current")
 
@@ -180,7 +180,9 @@ class TestCascadeShortCircuitAndTiers:
         assert result.reason == "LOW_CONFIDENCE"
         assert result.matches[0].score is None
 
-    def test_policy_lane_uses_higher_floor(self, brain_home, monkeypatch):
+    def test_policy_lane_rejects_caller_minted_authority(self, brain_home, monkeypatch):
+        """A caller-minted ceiling is not authority: whatever the score, the
+        policy lane never admits it (SEC-AUTH-02 producer guard)."""
         (brain_home / "config" / "retrieval.toml").write_text(
             'schema_version = 2\n[gate]\nrollout = "ACTIVE"\n',
             encoding="utf-8",
@@ -190,7 +192,7 @@ class TestCascadeShortCircuitAndTiers:
         )
         curate(brain_home, memory_id, status="current")
         row = semantic.show_memory(brain_home, memory_id)["row"]
-        row["_score"] = 0.75
+        row["_score"] = 0.99
         monkeypatch.setattr(
             semantic,
             "search_memories",
@@ -198,7 +200,8 @@ class TestCascadeShortCircuitAndTiers:
         )
         result = HybridCascadeRetriever().retrieve(brain_home, "policy query", lane="policy")
         assert result.decision == "NO_INJECTION"
-        assert result.reason == "LOW_CONFIDENCE"
+        assert result.matches == []
+        assert {"memory_id": memory_id, "reason": "AUTHORITY_VIOLATION"} in result.omitted
 
     def test_invalidate_cache_without_home_is_safe(self):
         HybridCascadeRetriever().invalidate_negative_cache()
@@ -217,7 +220,7 @@ class TestCascadeShortCircuitAndTiers:
             "Vector Fallback Memory",
             "Dense semantic match",
             project_id="proj-ai",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, vector_id, status="current")
         row = semantic.show_memory(brain_home, vector_id)["row"]
@@ -261,7 +264,7 @@ class TestPhase6GateBenchmark:
             title="Authentication JWT Expiry Policy",
             summary="Access tokens expire in 15 minutes",
             body="Use refresh tokens stored in HTTP-only cookies.",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, m1, status="current")
 
@@ -270,7 +273,7 @@ class TestPhase6GateBenchmark:
             title="Redis Cache Key Naming Convention",
             summary="Format cache keys as entity:id:field",
             body="Namespaces prevent collision across services.",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, m2, status="current")
 
@@ -363,7 +366,10 @@ def test_vector_projection_requires_current_canonical_identity(brain_home):
 
 @pytest.mark.parametrize("origin", ["USER_AUTHORED", "MODEL_INFERENCE"])
 @pytest.mark.parametrize("path", ["exact", "lexical", "vector"])
-def test_policy_lane_accepts_project_rule_and_rejects_advisory_lexical(brain_home, origin, path):
+def test_policy_lane_rejects_caller_supplied_origin_authority(brain_home, origin, path):
+    """The policy lane admits only authority an independent issuer granted, so a
+    memory that merely reports USER_AUTHORED/LOCAL_REPO/TRUSTED_TEST origin is
+    rejected on every path (SEC-AUTH-02 producer guard)."""
     body = "Policy boundary uses explicit metadata, not prose permission."
     memory_id = add_memory(
         brain_home,
@@ -374,6 +380,8 @@ def test_policy_lane_accepts_project_rule_and_rejects_advisory_lexical(brain_hom
         origin_class=origin,
     )
     curate(brain_home, memory_id, status="current")
+    row = semantic._row(brain_home, memory_id)
+    assert row is not None and row["authority_ceiling"] == "advisory"
     query = memory_id if path == "exact" else "policy boundary"
     if path == "vector":
         query = "quasar spectrometry zygomatic"
@@ -384,13 +392,8 @@ def test_policy_lane_accepts_project_rule_and_rejects_advisory_lexical(brain_hom
     result = HybridCascadeRetriever().retrieve(
         brain_home, query, lane="policy", vector_searcher=vector if path == "vector" else None
     )
-    if origin == "USER_AUTHORED":
-        assert result.decision == "INJECT"
-        assert [match.memory_id for match in result.matches] == [memory_id]
-        assert result.matches[0].body.strip() == body
-    else:
-        assert result.decision == "NO_INJECTION"
-        assert result.matches == []
+    assert result.decision == "NO_INJECTION"
+    assert result.matches == []
     assert result.vector_invoked is (path == "vector")
 
 
@@ -460,7 +463,7 @@ class TestCascadeCLI:
             title="CLI Integration Guide",
             summary="All subcommands require json flags",
             body="Use argparse subparsers for all new phases.",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, mem_id, status="current")
 
@@ -508,7 +511,7 @@ class TestCascadeCLI:
 
 def test_archived_memory_is_explanation_only(brain_home):
     archived = add_memory(
-        brain_home, "Archived migration note", "archive-only retrieval marker", grade="VERIFIED"
+        brain_home, "Archived migration note", "archive-only retrieval marker", grade="TESTED"
     )
     curate(brain_home, archived, status="archived")
 
@@ -584,11 +587,11 @@ def test_selection_explanation_reconstructs_mmr_winners_independently(brain_home
 
 def test_archived_history_does_not_enter_active_explanation(brain_home):
     active = add_memory(
-        brain_home, "Active migration note", "history isolation marker", grade="VERIFIED"
+        brain_home, "Active migration note", "history isolation marker", grade="TESTED"
     )
     curate(brain_home, active, status="current")
     archived = add_memory(
-        brain_home, "Prohibited archived title", "history isolation marker", grade="VERIFIED"
+        brain_home, "Prohibited archived title", "history isolation marker", grade="TESTED"
     )
     curate(brain_home, archived, status="archived")
 
@@ -624,7 +627,7 @@ def test_non_positive_top_k_short_circuits_vectors(brain_home):
     assert called is False
 
 
-def test_mmr_equal_scores_use_authority_then_memory_id():
+def test_mmr_equal_scores_use_memory_id_not_caller_ceiling():
     advisory = RetrievalMatch(
         "mem-a",
         "advisory",
@@ -632,14 +635,16 @@ def test_mmr_equal_scores_use_authority_then_memory_id():
         RetrievalTier.TIER_2_LEXICAL_FTS5,
         raw_row={"authority_ceiling": "advisory"},
     )
-    policy = RetrievalMatch(
+    claimed = RetrievalMatch(
         "mem-z",
         "policy",
         0.8,
         RetrievalTier.TIER_2_LEXICAL_FTS5,
         raw_row={"authority_ceiling": "policy"},
     )
-    assert apply_mmr([advisory, policy], top_k=1)[0].memory_id == "mem-z"
+    # A stored ceiling is a caller claim, not authority, so equal scores fall
+    # through to the deterministic memory_id tie-break (SEC-AUTH-02).
+    assert apply_mmr([advisory, claimed], top_k=1)[0].memory_id == "mem-a"
 
 
 def test_wide_vector_pool_keeps_selection_explanation_replayable(brain_home):

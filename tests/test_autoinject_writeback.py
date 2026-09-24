@@ -3,7 +3,7 @@
 `brainctl autoinject writeback` creates a CANDIDATE memory (never promoted
 to truth): status candidate, grade OBSERVED, provenance pointing at the
 session. T1.3 admits OBSERVED candidates as low-confidence context;
-VERIFIED/TESTED candidates render HIGH confidence; the delivery ledger keeps
+TESTED candidates render HIGH confidence; the delivery ledger keeps
 the same session lineage from re-injecting.
 """
 
@@ -104,13 +104,13 @@ def test_observed_candidate_is_retrievable_with_low_confidence(tmp_path) -> None
     assert d.selected_ids == [out["memory_id"]]
 
 
-def test_verified_candidate_is_retrievable_fresh_session_g10(tmp_path) -> None:
+def test_tested_candidate_is_retrievable_fresh_session_g10(tmp_path) -> None:
     home = tmp_path / "brain"
     _init(home)
     out = _writeback(home, observation="verify external state before retry")
-    # Grade ladder is one-step: OBSERVED -> TESTED -> VERIFIED.
+    # Grade ladder is one-step: OBSERVED -> TESTED (the highest grade a caller
+    # can write; VERIFIED needs an independent attestation and none ships).
     semantic.curate(home, out["memory_id"], grade="TESTED")
-    semantic.curate(home, out["memory_id"], grade="VERIFIED")
     # Fresh session (different session id) retrieves the lesson (G10).
     d = _inject(home, "verify external state before retry", session_id="fresh-s2")
     assert d.decision.value == "INJECT"

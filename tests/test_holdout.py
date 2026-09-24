@@ -3,7 +3,8 @@
 Verifies holdout eligibility rules:
 - Rollout stage >= CANARY (never OFF, SHADOW, ADVISORY).
 - Task class is strictly trivial, navigation, or implementation.
-- All selected candidate items have advisory authority (never policy or project_rule).
+- All selected candidate items hold only effective (issuer-granted) authority:
+  a stored caller-claimed ceiling never exempts an item from holdout.
 - Lane is not policy.
 - Retrieval decisions preserve choices, alternatives, propensity, and inputs.
 - Outcome finalization in finalize_session with reward 1.0/0.0 and tokens_total.
@@ -204,8 +205,9 @@ def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeyp
         finally:
             conn.close()
 
-    # 3. Non-advisory items: project_rule or policy authority ceiling
-    # Create a memory with origin_class="USER_AUTHORED" (ceiling="project_rule")
+    # 3. A caller-minted ceiling is not authority: a row that merely claims
+    # project_rule (written straight into the store here, as a legacy row or an
+    # edited database would) cannot exempt itself from holdout measurement.
     m_rule = _seed_current(
         brain_home,
         "Project Rule Authority",
@@ -221,15 +223,24 @@ def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeyp
     finally:
         conn.close()
 
+    rule_query = "implement strict project rules"
+    delivered_rule = lifecycle.prepare_injection(
+        rule_query,
+        project_id="proj-holdout",
+        session_id="session-rule-no-holdout",
+        random_fn=lambda: 1.0,  # no holdout
+    )
+    assert delivered_rule.decision is InjectionDecision.INJECT
+    assert m_rule in delivered_rule.selected_ids  # it is a candidate for the query
+
     dec_rule = lifecycle.prepare_injection(
-        "implement strict project rules",
+        rule_query,
         project_id="proj-holdout",
         session_id="session-rule-auth",
-        random_fn=lambda: 0.0,
+        random_fn=lambda: 0.0,  # holdout fires
     )
-    assert dec_rule.decision is InjectionDecision.INJECT
-    # Item with authority != 'advisory' must NOT be withheld
-    assert m_rule in dec_rule.selected_ids
+    # The claimed ceiling does not exempt it: it is withheld like any advisory item.
+    assert m_rule not in dec_rule.selected_ids
 
     # 4. Policy lane: NEVER hold out
     dec_policy = lifecycle.prepare_injection(

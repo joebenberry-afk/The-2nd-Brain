@@ -275,7 +275,9 @@ def test_authority_ceiling_is_origin_bound(brain_home) -> None:
     )
 
     assert candidate is not None
-    assert candidate["authority_ceiling"] == "project_rule"
+    # `origin_class` is a caller claim, so it can raise confidence but never
+    # authority: an unattested candidate stays advisory (SEC-AUTH-02 guard).
+    assert candidate["authority_ceiling"] == "advisory"
     assert candidate["confidence"] == "medium"
     assert candidate["rollout_stage"] == "SHADOW"
     assert candidate["lifecycle_state"] == "candidate"

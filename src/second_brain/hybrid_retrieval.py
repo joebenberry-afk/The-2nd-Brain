@@ -127,9 +127,15 @@ class CascadeResult:
 
 
 def _authority_rank(row: dict[str, Any]) -> int:
-    return {"advisory": 0, "project_rule": 1, "policy": 2}.get(
-        str(row.get("authority_ceiling") or "advisory"), -1
-    )
+    """Ordering preference by *effective* authority.
+
+    A stored ceiling is a caller claim, so it cannot buy selection priority:
+    only authority an independent issuer granted ranks, and nothing in this
+    build can grant one, so every row ranks advisory.
+    """
+    return {"advisory": 0, "project_rule": 1, "policy": 2}[
+        semantic.effective_authority_ceiling(row)
+    ]
 
 
 def _match_order_key(match: RetrievalMatch) -> tuple[float, int, str]:
@@ -270,8 +276,8 @@ def _compute_score_components(
     score_val = row.get("_score")
     relevance = float(row.get("_relevance", score_val if score_val is not None else 0.8))
 
-    grade = row.get("evidence_grade") or "OBSERVED"
-    authority_ceiling = row.get("authority_ceiling") or "advisory"
+    grade = semantic.effective_evidence_grade(row) or "OBSERVED"
+    authority_ceiling = semantic.effective_authority_ceiling(row)
     authority = (
         1.0
         if authority_ceiling == "policy"
@@ -681,7 +687,7 @@ class HybridCascadeRetriever:
                 mem_data = semantic.show_memory(home_path, cand_id)
                 if mem_data:
                     row = mem_data.get("row", mem_data)
-                    authority_ceiling = row.get("authority_ceiling") or "advisory"
+                    authority_ceiling = semantic.effective_authority_ceiling(row)
                     if not semantic._lane_authorized(row, lane):
                         lat = (time.perf_counter() - t0) * 1000.0
                         return CascadeResult(

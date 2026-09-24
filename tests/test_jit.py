@@ -194,7 +194,7 @@ def test_ordered_protected_evidence_decision_memory_procedure_context(brain_home
         brain_home,
         "Protected ordering memory",
         "Verified ordering evidence.",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, memory_id, status="current", verify=False)
     decision = brainstem.decide(

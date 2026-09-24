@@ -5,7 +5,8 @@
 This active contract and [`M00-CAMPAIGN-REGISTER.md`](M00-CAMPAIGN-REGISTER.md)
 must travel in the same candidate commit. Historical native/governed language below
 is evidence only; it does not authorize a second runtime.
-**Candidate status:** `M00_ORCHESTRATOR_REMOVAL_IN_PROGRESS`; qualification NOT PROVEN.
+**Candidate status:** `M00_PARTIAL_EXTERNAL_BLOCKER`; qualification NOT PROVEN. The one
+external dependency is a non-agent-controlled approval/attestation issuer.
 **Production:** NOT ACTIVATED. No installed host/extension/config patch, canonical
 state migration, push, tag, or release publication is authorized.
 
@@ -36,17 +37,18 @@ remain untouched; they are not proof of current execution guarantees.
 | Subject | Current disposition | Required evidence or blocker |
 |---|---|---|
 | M00-CORD-01/02, SB-ORCH-001, worker parts of #3/#4/#5 | `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | No reachable coordinator issuance, effective-grant admission, worker completion/settlement or test-only reactivation. Preserve historical negative evidence. |
-| SEC-AUTH-01 | `OPEN — REPRODUCED ON RETAINED PATHS` | Caller-authored verification action/approval must not become protected completion or publication authority. Removal deleted the strongest sink (`stop` is now an inert refusal) but not the finding. Needs a non-agent-controlled approval channel; owner accept/defer decision required (`m00-evidence/high-dispositions-20260923.md` §6). |
-| SEC-AUTH-02 | `OPEN — REPRODUCED ON RETAINED PATHS` | Agent-callable remember/evidence paths must not mint `USER_AUTHORED`, `VERIFIED`, or policy-lane authority without authenticated approval; `tests/test_cli.py` currently pins the caller-minted `project_rule` ceiling as behaviour. Owner accept/defer decision required (§7). |
+| SEC-AUTH-01 | `FIXED — fail-closed`; positive approval `EXTERNAL_BLOCKER` | Caller-authored approval/verification is evidence only: approval-bearing gates cannot complete, CRITICAL always requires approval, no model outcome/profile writes, `models record` refuses (`m00-evidence/authority-closure-20260923.md` §1). Independent approval needs a non-agent issuer. |
+| SEC-AUTH-02 | `FIXED — fail-closed`; positive attestation `EXTERNAL_BLOCKER` | `VERIFIED` writes refused without attestation; origin never raises the ceiling; all trust consumers read effective grade/ceiling, so stored claims cannot rank, bypass holdout or enter the policy lane (§1). |
 | SEC-INTEGRITY-01 | `NARROWED` | Full-envelope chain, genesis recomputation and replay rejection verified; rehydration projection now fails closed on an unverified chain (`FIXED + regression-tested`). Unkeyed, self-anchored chain `DEFERRED` to key custody. Retired worker receipts stay historical (§1). |
 | SEC-SKILL-01 / SB-PROMOTION-004 | `NARROWED` | Consumption-time approved bytes bound on every retained Python and TS route; the approval *record* is still caller-authored, so protected promotion remains `DEFERRED` to the SEC-AUTH-01 channel (§2). |
 | FSUPD-01 / FSPATH-03 | `NARROWED` | Registry approval is never inferred from a candidate manifest. Post-swap installed-tree verification with restore `FIXED + Pester-tested`; path containment `DEFERRED (operator-chosen)`; protected approval `DEFERRED (blocked)` (§3). |
 | SEC-HOOK-02 | `NARROWED` | Managed hook route binds absolute executables and is pinned by Pester; remaining bare search-path resolution lives in non-hook subprocesses with same-user blast radius, `DEFERRED — LOW` (§4). |
-| M00-NATIVE-ORCH-01 | `EXECUTED — spawn surface` | Host differential with matched Brain-on/off arms plus a pre-removal sensitivity control: native single and batch spawns succeeded unchanged, zero interference markers, control refused. `hub`/steering, workpool, cancellation and model selection remain observations, not proven rows (§8). |
-| SB-PROMPT-002 / 003 | Project-ID sinks retained; worker-context renderer retired | Narrow IDs before model-visible text; no retrieved/context data gains instruction authority. Removal is not a general prompt-trust waiver. |
+| M00-NATIVE-ORCH-01 | `EXECUTED — spawn surface and memory/context real path` | Host differential with matched Brain-on/off arms plus a pre-removal sensitivity control; memory-check arm shows the candidate's advisory packet host-recorded and consumed with a native child spawned and zero interference markers (`authority-closure-20260923.md` §3). `hub`/steering, workpool, cancellation and model selection remain observations. |
+| SB-PROMPT-002 / 003 | `INTEGRATED PROOF EXECUTED` | Hostile project IDs through every retained ingress on the codex, antigravity and Hermes hook CLIs never reach model-visible text; retrieved content arrives only inside the framed no-authority packet (§2). |
 | FSLNCH-02 | `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | Patched-host launcher removed; original seal and finding retained as history. |
 | SEC-DEP-01 | `HIGH FIXED; two dev-only moderates DEFERRED` | `js-yaml` 4.3.1 → 4.3.2 by lockfile update (audit `high: 0`, no runtime dependencies); `vitest`/`@vitest/mocker` need a semver-major `vitest@5` toolchain jump with re-frozen test evidence (§5). |
-| #2a/#2b, #6, DOC-14 | `OPEN` where retained | Fresh/reopen/idempotent/backup/recovery; passive billed-request dedupe/unknowns; missing DOC-14 clauses cannot be invented. |
+| #2a/#2b, #6 | `CLOSED / EVIDENCED` | #2a closed as scoped; #2b remaining items evidenced in `tests/test_brain_schema.py`; #6 passive dedupe and unknown-usage honesty fixed and regression-tested. |
+| DOC-14 | `RETAINED — NOT_YET_AUTHORED / SOURCE_UNAVAILABLE` | Missing module clauses cannot be invented or claimed satisfied. |
 
 No applicable HIGH is closed by relabeling its reproduction. The register
 records exact-subject evidence and test-retirement mapping; a reviewer must

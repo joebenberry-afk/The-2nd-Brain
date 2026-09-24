@@ -26,11 +26,11 @@ import subprocess
 import tempfile
 import time
 import tomllib
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import crossmodel, db
 from .contracts import stable_content_hash
 from .errors import BrainError
 from .risk import assess_risk
@@ -319,6 +319,43 @@ def verification_ladder_payload(
     }
 
 
+# ---------------------------------------------------------------------------
+# SEC-AUTH-01 (fail closed): requested approval != effective approval.
+#
+# ``approval_state`` comes from the same caller that wants the verdict, so it is
+# a REQUEST and evidence only. Effective approval additionally needs an
+# attestation from an issuer the requesting caller cannot act as. The issuer
+# registry is empty by construction in this build (no signer, no host-held
+# token) and is deliberately NOT selectable through an environment variable,
+# repo/Brain-home config, model setting or CLI flag, so nothing a caller can
+# reach turns a request into authority: the irreversible path stays "required"
+# and the gate reports the attestation as unavailable instead of faking an
+# allow. Registering an issuer is a security review, not a configuration.
+# ---------------------------------------------------------------------------
+APPROVAL_ATTESTATION_ISSUERS: dict[str, Callable[[dict[str, Any]], bool]] = {}
+APPROVAL_ATTESTATION_NOT_REQUIRED = "not_required"
+APPROVAL_ATTESTATION_ATTESTED = "attested"
+APPROVAL_ATTESTATION_UNAVAILABLE = "unavailable"
+
+
+def approval_attested(attestation: dict[str, Any] | None) -> bool:
+    """True only for an attestation vouched for by a registered independent issuer.
+
+    Any malformed, unregistered or raising attestation is False: the default is
+    always "no authority".
+    """
+    if not isinstance(attestation, dict):
+        return False
+    issuer = attestation.get("issuer")
+    validator = APPROVAL_ATTESTATION_ISSUERS.get(issuer) if isinstance(issuer, str) else None
+    if validator is None:
+        return False
+    try:
+        return bool(validator(attestation))
+    except Exception:
+        return False
+
+
 def evaluate_accuracy_gate(
     home: Path | str,
     session_id: str,
@@ -328,6 +365,7 @@ def evaluate_accuracy_gate(
     action_states: dict[str, str] | None = None,
     user_criticality: str | None = None,
     approval_state: str = "not_required",
+    approval_attestation: dict[str, Any] | None = None,
     task_id: str = "",
     parent_session_id: str = "",
     worker_session_id: str = "",
@@ -338,12 +376,20 @@ def evaluate_accuracy_gate(
     evidence_set_hash: str = "",
     environment_evidence: dict[str, object] | None = None,
     environment_required: bool = False,
-    model_id: str | None = None,
-    skill_name: str | None = None,
-    task_class: str | None = None,
-    task: str = "",
 ) -> dict[str, Any]:
-    """Evaluate completion against the existing risk ladder and evidence ledger."""
+    """Evaluate completion against the existing risk ladder and evidence ledger.
+
+    Authority boundary (SEC-AUTH-01): every other input here — action states,
+    approval state, the independent verification record, environment evidence
+    and the hashes compared against each other — is authored by the caller
+    requesting the verdict. They remain evidence, but they cannot authorize
+    completion of an irreversible/high-impact gate: that needs
+    ``approval_attestation`` from an independent issuer, and no issuer is
+    registered in this build, so such a gate always reports
+    ``approval_state="required"``. No model identity is recorded either
+    (SEC-AUTH-02): a claimed model id is not an authenticated runtime identity,
+    so nothing privileged is written from a claim.
+    """
     started_at = time.perf_counter()
     states = action_states or {}
     invalid = {
@@ -360,6 +406,11 @@ def evaluate_accuracy_gate(
     required_actions = [
         action for action in all_actions if action != "optional_second_independent_verification"
     ]
+    if level == "CRITICAL" and "human_approval_for_irreversible" not in required_actions:
+        # SEC-AUTH-01 fail-closed: a critical gate requires approval even when a
+        # home-config ladder dropped the token, so a caller can only restate the
+        # requirement — nothing it supplies can satisfy it.
+        required_actions.append("human_approval_for_irreversible")
     environment_reason = ""
     if environment_required:
         required_actions.append("environment_steward")
@@ -435,12 +486,19 @@ def evaluate_accuracy_gate(
     requirement_check = check_requirements(Path(home), session_id)
     unresolved_requirements = [str(entry["id"]) for entry in requirement_check["entries"]]
     approval_required = "human_approval_for_irreversible" in required_actions
+    attested = approval_required and approval_attested(approval_attestation)
+    # SEC-AUTH-01: the caller's `approval_state` is a request, never authority.
+    # Only an independent attestation can make the approval effective.
+    requested_approval_state = approval_state if isinstance(approval_state, str) else ""
     effective_approval = (
-        "approved"
-        if approval_required and approval_state == "approved"
-        else "required"
+        "approved" if attested else "required" if approval_required else "not_required"
+    )
+    approval_attestation_state = (
+        APPROVAL_ATTESTATION_ATTESTED
+        if attested
+        else APPROVAL_ATTESTATION_UNAVAILABLE
         if approval_required
-        else "not_required"
+        else APPROVAL_ATTESTATION_NOT_REQUIRED
     )
     if unresolved_requirements:
         completion_allowed = False
@@ -486,65 +544,11 @@ def evaluate_accuracy_gate(
         if independent_reason
         else []
     )
-    effective_model_id = model_id
-    if not effective_model_id and independent_verification:
-        effective_model_id = (
-            independent_verification.get("model_id")
-            or independent_verification.get("model")
-            or independent_verification.get("verifier_model_id")
-        )
-    if effective_model_id and isinstance(effective_model_id, str) and effective_model_id.strip():
-        try:
-            home_path = Path(home)
-            dbfile = db.db_path(home_path)
-            if dbfile.is_file():
-                if db.pending_migrations(dbfile):
-                    db.migrate(dbfile)
-                conn_o = db.connect(dbfile)
-                try:
-                    now_str = datetime.now(UTC).isoformat()
-                    conn_o.execute(
-                        (
-                            "INSERT OR IGNORE INTO model_profiles (model_id, fa"
-                            "mily, capabilities, first_seen_at)\n               "
-                            "            VALUES (?, ?, '', ?)"
-                        ),
-                        (
-                            effective_model_id,
-                            effective_model_id.split("-")[0] if "-" in effective_model_id else "",
-                            now_str,
-                        ),
-                    )
-                    effective_skill = skill_name or task_class or "verification"
-                    effective_task_hash = (
-                        task_hash
-                        or (crossmodel.task_hash(task) if task else "")
-                        or f"gate-{session_id[:11]}"
-                    )
-                    success_int = 1 if completion_allowed else 0
-                    f1_float = 1.0 if completion_allowed else 0.0
-                    conn_o.execute(
-                        (
-                            "INSERT INTO model_skill_outcomes\n                 "
-                            "          (model_id, skill_name, task_hash, succes"
-                            "s, noise, f1, session_id, created_at)\n            "
-                            "               VALUES (?, ?, ?, ?, 0, ?, ?, ?)"
-                        ),
-                        (
-                            effective_model_id,
-                            effective_skill,
-                            effective_task_hash,
-                            success_int,
-                            f1_float,
-                            session_id,
-                            now_str,
-                        ),
-                    )
-                    conn_o.commit()
-                finally:
-                    conn_o.close()
-        except Exception:
-            pass
+    # SEC-AUTH-02: no model identity is recorded here. A caller-supplied
+    # `model_id` (directly or via the verification file) is a claim, not an
+    # authenticated runtime identity, and `model_skill_outcomes` is policy
+    # input (`models report` / `models policy`). With no authenticated identity
+    # available the gate records nothing rather than falling back to the claim.
 
     return {
         "accuracy_gate_id": f"gate-{accuracy_gate_id[:24]}",
@@ -559,7 +563,9 @@ def evaluate_accuracy_gate(
         "failed_actions": failed_actions,
         "unresolved_actions": unresolved_actions,
         "unresolved_material_requirements": unresolved_requirements,
+        "requested_approval_state": requested_approval_state,
         "approval_state": effective_approval,
+        "approval_attestation": approval_attestation_state,
         "completion_allowed": completion_allowed,
         "decision_reason": decision_reason,
         "verification_id": (

@@ -73,13 +73,13 @@ def test_recent_used_memory_outranks_old(brain_home) -> None:
         brain_home,
         "Database timeout connection setting",
         "Set database connection timeout to 30s",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     m_new = semantic.add_memory(
         brain_home,
         "Database timeout connection config",
         "Set database connection timeout to 30s",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, m_old, status="current")
     semantic.curate(brain_home, m_new, status="current")

@@ -9,8 +9,8 @@ from second_brain import ledger as ledger_mod
 from second_brain.contracts import (
     BrainLifecycleEvent,
     BrainSessionIdentity,
-    InjectionDecision,
     LifecycleEventType,
+    MemoryItemStatus,
     SurfaceVisibility,
 )
 from second_brain.errors import BrainError
@@ -95,15 +95,18 @@ def test_invalid_origin_class_and_ceiling_rejected(brain_home: Path) -> None:
         semantic.curate(brain_home, mid, authority_ceiling="NOT_REAL")
 
 
-def test_curate_can_only_lower_authority_ceiling(brain_home: Path) -> None:
+def test_curate_cannot_raise_authority_ceiling(brain_home: Path) -> None:
     mid = semantic.add_memory(
         brain_home, "Fact", "body", scope="global", origin_class="USER_AUTHORED"
     )
     before = semantic._row(brain_home, mid)
     assert before is not None
-    assert before["authority_ceiling"] == "project_rule"
-    with pytest.raises(BrainError):
-        semantic.curate(brain_home, mid, authority_ceiling="policy")
+    # A caller-declared origin mints no authority, so there is nothing to lower:
+    # curation can only keep or lower the ceiling (SEC-AUTH-02 producer guard).
+    assert before["authority_ceiling"] == "advisory"
+    for ceiling in ("project_rule", "policy"):
+        with pytest.raises(BrainError):
+            semantic.curate(brain_home, mid, authority_ceiling=ceiling)
     semantic.curate(brain_home, mid, authority_ceiling="advisory")
     after = semantic._row(brain_home, mid)
     assert after is not None
@@ -237,11 +240,14 @@ def test_extract_durable_binds_tool_observation(tmp_path: Path) -> None:
 def test_policy_lane_renders_lower_authority_contradiction_without_withholding(
     brain_home: Path,
 ) -> None:
-    # The lower-authority memory is created and curated first so the
-    # deterministic dedupe representative (most-recently-updated wins,
-    # `semantic._dedupe_representative_key`) picks the higher-authority one;
-    # dedupe collapses same-title rows to a single representative regardless
-    # of authority, so this ordering is required for the scenario to occur.
+    """In the policy lane, a contradiction from a memory that did not itself
+    clear admission is rendered via ``contradicts`` but never flips the item's
+    status to CONTRADICTED or withholds it.
+
+    The packet builder is exercised directly: the policy lane admits only
+    issuer-granted authority, and no producer in this build can supply one
+    (SEC-AUTH-02), so the admitted-row path itself is unavailable here.
+    """
     low = semantic.add_memory(
         brain_home,
         "Timeout policy",
@@ -260,19 +266,10 @@ def test_policy_lane_renders_lower_authority_contradiction_without_withholding(
     )
     semantic.curate(brain_home, high, grade="TESTED", status="current")
 
-    lifecycle = autoinject.BrainLifecycle(brain_home)
-    decision = lifecycle.prepare_injection(
-        "timeout policy",
-        project_id=None,
-        agent_id="a1",
-        role_profile="worker",
-        session_id="sess-policy-contradiction",
-        lane="policy",
-    )
-    assert decision.decision is InjectionDecision.INJECT
-    assert decision.selected_ids == [high]
-    packet = autoinject.render_packet(decision)
-    assert packet is not None
-    assert f"ITEM {high}@1" in packet
-    assert f"contradicts: {low}" in packet
-    assert f"ITEM {low}@1" not in packet
+    row = semantic.show_memory(brain_home, high)["row"]
+    row["contradiction_with"] = [low]
+    items = autoinject._build_items(brain_home, [row], lane="policy")
+
+    assert len(items) == 1
+    assert items[0].status is MemoryItemStatus.CURRENT
+    assert items[0].contradicts == (low,)

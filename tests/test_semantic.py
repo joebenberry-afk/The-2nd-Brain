@@ -83,34 +83,42 @@ def test_grade_one_step_upgrades(brain_home):
     mid = _add(brain_home, grade="INFERRED")
     semantic.curate(brain_home, mid, grade="OBSERVED")
     semantic.curate(brain_home, mid, grade="TESTED")
-    semantic.curate(brain_home, mid, grade="VERIFIED")
     row = semantic.show_memory(brain_home, mid)["row"]
-    assert row["evidence_grade"] == "VERIFIED"
-    assert row["last_verified_at"]  # verify=True default sets it
+    assert row["evidence_grade"] == "TESTED"
+    # The last step is authority, not a label: an unattested caller claim is
+    # refused and the stored grade is left exactly as it was (SEC-AUTH-02).
+    with pytest.raises(BrainError, match=semantic.VERIFIED_REQUIRES_ATTESTATION):
+        semantic.curate(brain_home, mid, grade="VERIFIED")
+    assert semantic.show_memory(brain_home, mid)["row"]["evidence_grade"] == "TESTED"
 
 
 def test_grade_jump_rejected(brain_home):
     mid = _add(brain_home, grade="INFERRED")
     with pytest.raises(BrainError, match="not allowed"):
-        semantic.curate(brain_home, mid, grade="VERIFIED")  # jump of two steps
-    with pytest.raises(BrainError, match="not allowed"):
         semantic.curate(brain_home, mid, grade="TESTED")  # jump of two steps
+    # A jump straight to VERIFIED is refused by the authority boundary.
+    with pytest.raises(BrainError, match=semantic.VERIFIED_REQUIRES_ATTESTATION):
+        semantic.curate(brain_home, mid, grade="VERIFIED")
 
 
 def test_downgrade_only_reject_or_historical(brain_home):
-    mid = _add(brain_home, grade="VERIFIED")
-    semantic.curate(brain_home, mid, grade="VERIFIED", verify=True)  # same grade ok
+    mid = _add(brain_home, grade="TESTED")
+    semantic.curate(brain_home, mid, grade="TESTED", verify=True)  # same grade ok
     with pytest.raises(BrainError, match="not allowed"):
         semantic.curate(brain_home, mid, grade="OBSERVED")  # plain downgrade
     semantic.curate(brain_home, mid, grade="REJECTED")  # anywhere
-    mid2 = _add(brain_home, title="Another", grade="VERIFIED")
+    mid2 = _add(brain_home, title="Another", grade="TESTED")
     semantic.curate(brain_home, mid2, grade="HISTORICAL")  # downgrade to historical ok
     assert semantic.show_memory(brain_home, mid2)["row"]["evidence_grade"] == "HISTORICAL"
+    # ... and the top grade cannot be created from a caller-supplied claim either.
+    with pytest.raises(BrainError, match=semantic.VERIFIED_REQUIRES_ATTESTATION):
+        _add(brain_home, title="Claimed", grade="VERIFIED")
 
 
-def test_curate_verify_flag(brain_home):
+def test_curate_verify_flag_cannot_bypass_attestation(brain_home):
     mid = _add(brain_home, grade="TESTED")
-    semantic.curate(brain_home, mid, grade="VERIFIED", verify=False)
+    with pytest.raises(BrainError, match=semantic.VERIFIED_REQUIRES_ATTESTATION):
+        semantic.curate(brain_home, mid, grade="VERIFIED", verify=False)
     assert semantic.show_memory(brain_home, mid)["row"]["last_verified_at"] is None
 
 
@@ -271,7 +279,9 @@ def test_show_unknown_and_corrupt(brain_home):
 # Hypothesis
 # ---------------------------------------------------------------------------
 
-_UPGRADES = {"INFERRED": "OBSERVED", "OBSERVED": "TESTED", "TESTED": "VERIFIED"}
+# TESTED -> VERIFIED is deliberately absent: that step needs an independent
+# attestation and no issuer exists, so an unattested claim cannot be generated.
+_UPGRADES = {"INFERRED": "OBSERVED", "OBSERVED": "TESTED"}
 
 
 @settings(

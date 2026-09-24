@@ -25,7 +25,7 @@ def _add_memory(
     *,
     project_id: str | None = "sz",
     scope: str = "project",
-    grade: str = "VERIFIED",
+    grade: str = "TESTED",
     status: str = "current",
 ) -> str:
     mid = semantic.add_memory(
@@ -318,13 +318,13 @@ def test_delta_stricter_than_startup_budget_and_confidence(brain_home: Path) -> 
         grade="OBSERVED",
         status="current",
     )
-    # VERIFIED grade memory (high confidence)
+    # TESTED grade memory (highest unprivileged grade -> high confidence)
     ver_mem = _add_memory(
         brain_home,
-        "Verified database lock timeout",
+        "Tested database lock timeout",
         "Database lock timeout set to 5000ms in production configuration",
         project_id="proj-delta",
-        grade="VERIFIED",
+        grade="TESTED",
         status="current",
     )
 
@@ -341,7 +341,7 @@ def test_delta_stricter_than_startup_budget_and_confidence(brain_home: Path) -> 
     assert startup_dec.decision is InjectionDecision.INJECT
     assert obs_mem in startup_dec.selected_ids
 
-    # Mid-session delta: rejects OBSERVED grade (requires VERIFIED/TESTED)
+    # Mid-session delta: rejects OBSERVED grade (requires TESTED)
     delta_dec_obs = lifecycle.prepare_injection(
         "observed telemetry quirk",
         project_id="proj-delta",
@@ -352,9 +352,9 @@ def test_delta_stricter_than_startup_budget_and_confidence(brain_home: Path) -> 
     assert delta_dec_obs.decision is InjectionDecision.NO_INJECTION
     assert obs_mem not in delta_dec_obs.selected_ids
 
-    # Mid-session delta: accepts VERIFIED grade
+    # Mid-session delta: accepts TESTED grade
     delta_dec_ver = lifecycle.prepare_injection(
-        "verified database lock timeout",
+        "tested database lock timeout",
         project_id="proj-delta",
         agent_id="driver",
         session_id="sess-delta-2",
@@ -429,7 +429,7 @@ def test_materially_updated_memory_delivered_with_supersede_pointer(
         new_body="Worker concurrency limit updated to 4 workers for high-concurrency tasks",
         change_note="Updated concurrency ceiling",
     )
-    semantic.curate(brain_home, mem_id, status="current", grade="VERIFIED")
+    semantic.curate(brain_home, mem_id, status="current", grade="TESTED")
 
     # Turn 2: v2 becomes eligible again as a delta
     turn2 = lifecycle.prepare_injection(
