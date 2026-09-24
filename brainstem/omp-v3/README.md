@@ -19,10 +19,15 @@ the `brain` CLI, usable from any shell or agent (`brain q "<question>"`, `brain 
 ## 1. Install (Windows, in the Brain checkout)
 
 ```powershell
+git status                                      # commit or stash local changes first
+git fetch origin
+git switch claude/new-session-nro2r6            # the V3 branch (or the branch it was merged into)
 $env:PYTHONHOME = $null; $env:PYTHONPATH = $null
 .venv\Scripts\python.exe -m pip install -e .   # provides brain.exe in .venv\Scripts
 [Environment]::SetEnvironmentVariable("SECOND_BRAIN_HOME", (Get-Location).Path, "User")
 $env:SECOND_BRAIN_HOME = (Get-Location).Path
+# memories added on this machine since the V3 snapshot (existing records are skipped):
+.venv\Scripts\brain.exe convert --from-db db\brain.sqlite --legacy-home .
 .venv\Scripts\brain.exe doctor                  # expect: errors (0)
 .venv\Scripts\brain.exe views                   # compile briefs and correction tables
 .\scripts\install-omp-v3.ps1 -DisableLegacy     # parks the legacy extension (reversible)
