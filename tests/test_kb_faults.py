@@ -106,3 +106,23 @@ def test_interrupted_atomic_write_leaves_the_old_record(tmp_path: Path, monkeypa
     monkeypatch.undo()
     assert records.load(tmp_path, rec.id).title == "Stable title"
     assert not list(records.records_dir(tmp_path).glob(".*.tmp"))
+
+
+def test_cli_reports_a_locked_index_with_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from second_brain.kb import cli
+
+    _saved(tmp_path)
+    index.refresh(tmp_path)
+    monkeypatch.setattr(index, "LOCK_TIMEOUT_S", 0.1)
+    _saved(tmp_path, title="Pending widget change")  # forces a write on the next refresh
+    holder = sqlite3.connect(index.index_path(tmp_path))
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        code = cli.main(["q", "widget", "--home", str(tmp_path)])
+    finally:
+        holder.rollback()
+        holder.close()
+    assert code == 2
+    assert "index unavailable" in capsys.readouterr().err
