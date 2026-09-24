@@ -1577,6 +1577,63 @@ class LedgerStore:
             raise
 
 
+# Deterministic, per-event rejection classes. `append_events` raises BrainError
+# for an invalid event, and the UNIQUE/FK/CHECK constraints reject a specific row
+# with sqlite3.IntegrityError. Every OTHER sqlite3 failure (busy/locked, disk
+# I/O, malformed image, interrupt) is OPERATIONAL: it is a statement about the
+# database, not about the event that happened to be in flight, so it must fail
+# the whole batch instead of being re-attributed to one event.
+_EVENT_REJECTIONS = (BrainError, sqlite3.IntegrityError)
+
+
+def append_events_resilient(
+    store: LedgerStore, events: list[BrainLifecycleEvent]
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """Append a batch as ONE transaction; a rejected event never drops the rest.
+
+    The preferred path is a single `LedgerStore.append_events` call: one
+    BEGIN IMMEDIATE, one contiguous seq run, the envelope hash chain extended
+    inside that same transaction — identical semantics to N single appends,
+    minus N-1 transactions/connections.
+
+    `append_events` rejects its WHOLE batch deterministically (duplicate
+    event_id, invalid parent ref, seq contiguity, FK drift). That is right for
+    a caller that wants all-or-nothing, and wrong for a mirror that must not
+    lose nine good events because the tenth was delivered twice. So on those
+    rejection classes this falls back to ORDERED single-event appends: each
+    event commits through its own `append_events` call, so the chain still
+    advances one event at a time, in input order, and only the events that
+    actually fail are reported.
+
+    Batching is not allowed to weaken the chain: both paths go through
+    `append_events`, so every committed event is hash-linked to its
+    predecessor and seq stays contiguous — the only difference is how many
+    transactions it took.
+
+    Returns ``(appended_seqs, errors)`` with one error per rejected event:
+    ``{"event_id": str, "error": str}`` (the caller adds its own line/kind
+    context). Only the DETERMINISTIC rejection classes are isolated per event
+    (``_EVENT_REJECTIONS``); everything else propagates, so the caller's batch
+    FAILS and the host mirror retries/requeues it: an operational SQLite
+    failure (busy/locked, disk I/O, malformed image) or a bug is not evidence
+    that the events were defective, and settling every event against a
+    rejections list would strand them as "delivered".
+    """
+    if not events:
+        return [], []
+    try:
+        return store.append_events(events), []
+    except _EVENT_REJECTIONS:
+        seqs: list[int] = []
+        errors: list[dict[str, Any]] = []
+        for event in events:
+            try:
+                seqs.extend(store.append_events([event]))
+            except _EVENT_REJECTIONS as exc:
+                errors.append({"event_id": event.event_id, "error": str(exc)})
+        return seqs, errors
+
+
 def replay_session(home: Path | str, host_session_id: str, lineage: list[str]) -> ProjectedContext:
     """Open fresh + replay.
 
