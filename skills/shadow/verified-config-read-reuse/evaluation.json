@@ -1,0 +1,127 @@
+{
+  "baseline": {
+    "total_tokens": 394966
+  },
+  "candidate": {
+    "total_tokens": 228113
+  },
+  "candidate_content_sha256": "8b27449d351977e99ffa6f0f8db083092df5857d9f0ba9b6c1865df01b54e712",
+  "candidate_id": "skill-candidate-e58acc22ff3a775b6e85b6f5",
+  "created_at": "2026-09-09T08:32:19.903251+00:00",
+  "evaluation_id": "verified-read-reuse-v2-ec2a360",
+  "evidence_refs": [
+    "outputs\\reports\\v1-v2-closure-20260908T011250Z\\bounded-evidence-closure-20260909T051253Z\\native-read-reuse-v2\\collected\\native-read-reuse-observations.json",
+    "outputs\\reports\\v1-v2-closure-20260908T011250Z\\bounded-evidence-closure-20260909T051253Z\\final-current-python.xml",
+    "outputs\\reports\\v1-v2-closure-20260908T011250Z\\bounded-evidence-closure-20260909T051253Z\\current-skill-gates-observation.json"
+  ],
+  "gates": {
+    "regression": {
+      "failed": 0,
+      "regression": false,
+      "results": [
+        {
+          "expect": "trigger",
+          "ok": true,
+          "predicted": "trigger",
+          "text": "repeated policy configuration reads"
+        },
+        {
+          "expect": "trigger",
+          "ok": true,
+          "predicted": "trigger",
+          "text": "unchanged canonical policy settings requested again"
+        },
+        {
+          "expect": "no_trigger",
+          "ok": true,
+          "predicted": "no_trigger",
+          "text": "repeated policy configuration reads with changed configuration input hashes"
+        },
+        {
+          "expect": "no_trigger",
+          "ok": true,
+          "predicted": "no_trigger",
+          "text": "policy mutation requested"
+        }
+      ],
+      "total": 4
+    },
+    "security": {
+      "findings": [],
+      "passed": true
+    },
+    "trigger": {
+      "failed": 0,
+      "passed": 4,
+      "results": [
+        {
+          "expect": "trigger",
+          "ok": true,
+          "predicted": "trigger",
+          "text": "repeated policy configuration reads"
+        },
+        {
+          "expect": "trigger",
+          "ok": true,
+          "predicted": "trigger",
+          "text": "unchanged canonical policy settings requested again"
+        },
+        {
+          "expect": "no_trigger",
+          "ok": true,
+          "predicted": "no_trigger",
+          "text": "repeated policy configuration reads with changed configuration input hashes"
+        },
+        {
+          "expect": "no_trigger",
+          "ok": true,
+          "predicted": "no_trigger",
+          "text": "policy mutation requested"
+        }
+      ],
+      "total": 4
+    },
+    "workflow": {
+      "failed": 0,
+      "note": "structural workflow eval only; procedure execution is the caller's job",
+      "passed": 2,
+      "procedure_steps": 4,
+      "results": [
+        {
+          "expect": "pass",
+          "name": "owned-macro-and-read-only-result-consumers",
+          "ok": true,
+          "predicted": "pass"
+        },
+        {
+          "expect": "fail",
+          "name": "missing-workflow-negative-control",
+          "ok": true,
+          "predicted": "fail"
+        }
+      ],
+      "structural": true,
+      "total": 2
+    }
+  },
+  "promotion_recommendation": "authority_review",
+  "quality": {
+    "correctness": true,
+    "protected_values": true,
+    "regressions": false,
+    "requirements": true,
+    "verification": true
+  },
+  "quality_gate": "passed",
+  "repository_state_hash": "6c5e26ff9fa1a946d5aefdd218fe6bc963885254a69c2c639ea2203bb4f15af5",
+  "roi": {
+    "baseline_total_tokens": 394966,
+    "candidate_better": true,
+    "candidate_total_tokens": 228113,
+    "net_tokens_saved": 166853
+  },
+  "schema_version": 1,
+  "status": "passed",
+  "task_hash": "e2d9b73c438e52d8347c271bc64a27856f29a5638b255e6e38ec23a6a98f0c1a",
+  "task_id": "bounded-version-two-qualification"
+}

@@ -1,0 +1,21 @@
+{
+  "candidate_content_sha256": "8b27449d351977e99ffa6f0f8db083092df5857d9f0ba9b6c1865df01b54e712",
+  "candidate_id": "skill-candidate-e58acc22ff3a775b6e85b6f5",
+  "candidate_type": "bounded-read-reuse",
+  "evaluation_state": "passed",
+  "evidence_refs": [
+    "outputs/reports/v1-v2-closure-20260908T011250Z/bounded-evidence-closure-20260909T051253Z/version-two-trial-authorization.json",
+    "outputs/reports/v1-v2-closure-20260908T011250Z/bounded-evidence-closure-20260909T051253Z/preserved-skill-version-1/candidate-binding.json"
+  ],
+  "install_state": "inactive",
+  "lifecycle_state": "candidate",
+  "owner": "Main",
+  "project_id": "second-brain",
+  "promotion_state": "authority_review",
+  "reason_codes": [
+    "CURRENT_CANDIDATE_REQUALIFICATION",
+    "VERSION_ADVANCE_REQUIRED"
+  ],
+  "source_ref": "outputs/reports/v1-v2-closure-20260908T011250Z/bounded-evidence-closure-20260909T051253Z/version-two-trial-authorization.json",
+  "source_type": "qualification-version-update"
+}

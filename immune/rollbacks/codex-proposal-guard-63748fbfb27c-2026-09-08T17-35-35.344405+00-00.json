@@ -1,0 +1,7 @@
+{
+  "policy_id": "codex-proposal-guard-63748fbfb27c",
+  "trigger": "codex-proposal-guard-63748fbfb27c-failure",
+  "reason": "Actual TOML validation failed for the unapproved policy proposal",
+  "ts": "2026-09-08T17:35:35.344902+00:00",
+  "restored_from_sha": "63748fbfb27c76208450d28921d8e82fba4531eff3a7c3d0e8b316c27bb831c4"
+}
