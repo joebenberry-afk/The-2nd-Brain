@@ -700,12 +700,16 @@ def _validate_plan_parameters(action: str, params: dict, states: dict[str, dict]
 def _derived_memory(
     home: Path, title: str, body: str, states: dict[str, dict], sources: list[dict]
 ) -> str:
-    # Mixed-origin merges inherit the weakest input, never the most trusted.
+    # Mixed-origin merges inherit the weakest input, never the most trusted, and
+    # judge inputs by *effective* authority: a stored ceiling or VERIFIED grade no
+    # issuer attested is a claim the derived memory must not carry forward.
     origin = min(
-        states.values(), key=lambda state: semantic._AUTHORITY_RANK[state["authority_ceiling"]]
+        states.values(),
+        key=lambda state: semantic._AUTHORITY_RANK[semantic.effective_authority_ceiling(state)],
     )
     grade = min(
-        (state["evidence_grade"] for state in states.values()), key=semantic._GRADE_RANK.__getitem__
+        (semantic.effective_evidence_grade(state) for state in states.values()),
+        key=semantic._GRADE_RANK.__getitem__,
     )
     inherited = [source for state in states.values() for source in state["sources"]]
     lineage = [
@@ -723,7 +727,8 @@ def _derived_memory(
         origin_class=origin["origin_class"],
         origin_root_sha=origin["origin_root_sha"],
     )
-    semantic.curate(home, memory_id, authority_ceiling=origin["authority_ceiling"], verify=False)
+    # add_memory writes `advisory` (the floor) without an attestation, so no
+    # curate step can or needs to lower it further.
     return memory_id
 
 

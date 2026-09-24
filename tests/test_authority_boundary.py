@@ -268,6 +268,24 @@ def test_refused_verified_claim_reaches_no_privileged_treatment(brain_home, repo
     assert reconsolidation._protected(row) is False
 
 
+def test_memory_search_shows_effective_grade_for_a_stored_claim(brain_home):
+    """`memory search` text is what the Prime recall brief renders to the model,
+    so a stored VERIFIED that no issuer attested must read as its effective grade."""
+    memory_id = semantic.add_memory(brain_home, "Legacy sqlite rule", "wal frame", grade="TESTED")
+    conn = sqlite3.connect(brain_home / "db" / "brain.sqlite")
+    try:
+        conn.execute("UPDATE memories SET evidence_grade = 'VERIFIED'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    searched = _run_cli(brain_home, "memory", "search", "sqlite rule")
+
+    assert searched.returncode == 0, searched.stderr
+    assert f"{memory_id}  [candidate/TESTED]" in searched.stdout
+    assert "VERIFIED" not in searched.stdout
+
+
 def test_caller_supplied_model_identity_records_no_policy_input(brain_home, repo):
     """SEC-AUTH-02: the `models` CLI cannot record outcome/policy input from a
     caller-supplied model identity."""

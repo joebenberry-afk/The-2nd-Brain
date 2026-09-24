@@ -2315,7 +2315,10 @@ def cmd_memory(args) -> int:
         if not rows:
             print("No matching memories.")
         for row in rows:
-            print(f"{row['memory_id']}  [{row['status']}/{row['evidence_grade']}] {row['title']}")
+            # Model-visible via the recall brief: print the grade that carries
+            # trust, not a stored claim no issuer attested (SEC-AUTH-02).
+            grade = semantic.effective_evidence_grade(row)
+            print(f"{row['memory_id']}  [{row['status']}/{grade}] {row['title']}")
         conflicts = [r for r in rows if r.get("contradiction_with")]
         if conflicts:
             print()

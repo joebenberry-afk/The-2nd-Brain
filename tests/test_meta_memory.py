@@ -418,6 +418,36 @@ def test_split_preserves_lineage_and_archives_outputs_on_rollback(brain_home: Pa
         assert Path(semantic.show_memory(brain_home, out)["path"]).is_file()
 
 
+def test_merge_of_legacy_elevated_rows_carries_no_claimed_authority(brain_home: Path) -> None:
+    """Rows that merely store VERIFIED/project_rule (legacy data, an edited
+    database, an import) merge into one advisory, TESTED memory instead of
+    failing half-way and leaving an extra derived row behind."""
+    first = semantic.add_memory(brain_home, "Legacy rule A", "Rule A.", grade="TESTED")
+    second = semantic.add_memory(brain_home, "Legacy rule B", "Rule B.", grade="TESTED")
+    conn = db.connect(db.db_path(brain_home))
+    try:
+        conn.execute(
+            "UPDATE memories SET evidence_grade = 'VERIFIED', authority_ceiling = 'project_rule'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    plan = reconsolidation.propose_plan(
+        brain_home,
+        "merge",
+        first,
+        merge_memory_ids=[second],
+        new_title="Legacy rules",
+        new_body="Rule A. Rule B.",
+    )
+    applied = reconsolidation.apply_plan(brain_home, plan)
+    created = applied["applied_result"]["created_memory_ids"]
+    assert len(created) == 1
+    row = semantic.show_memory(brain_home, created[0])["row"]
+    assert (row["evidence_grade"], row["authority_ceiling"]) == ("TESTED", "advisory")
+    assert len(semantic.list_memories(brain_home)) == 3
+
+
 def test_merge_inherits_weakest_authority_and_guards_every_output(brain_home: Path) -> None:
     trusted = semantic.add_memory(
         brain_home,
