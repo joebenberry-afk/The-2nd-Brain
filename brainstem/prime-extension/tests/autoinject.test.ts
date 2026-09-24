@@ -557,7 +557,7 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
   });
 
 
-  it("advisory context survives composition with the host's base prompt", async () => {
+  it("advisory context reaches the recipient without patching the host's base prompt", async () => {
     process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-d-"));
     process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
     const handlers = loadFactory();
@@ -576,8 +576,10 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out" }, driverCtx);
     expect(result).toBeDefined();
     const r = result as Record<string, unknown>;
-    expect(String(r.systemPrompt)).toContain("base prompt");
-    expect(String(r.systemPrompt)).not.toContain("second-brain-driver-orchestration-contract");
+    // PERF-01: nothing to inject -> no systemPrompt patch; the host's own
+    // "base prompt" reaches the model untouched.
+    expect(r).not.toHaveProperty("systemPrompt");
+    expect(JSON.stringify(r)).not.toContain("second-brain-driver-orchestration-contract");
     expect((r.message as Record<string, unknown>).content).toBe("packet-text");
   });
 });

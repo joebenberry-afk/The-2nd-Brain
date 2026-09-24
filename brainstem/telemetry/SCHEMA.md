@@ -130,13 +130,13 @@ model-visible delivery.
 ## Phase R3 addition — VMem compaction-boundary bookkeeping (2026-08-19)
 
 `vmem_compact_prep` (emitted from `session_before_compact`, after the ledger
-checkpoint durability barrier succeeds) and `vmem_hot_context` (emitted from
+checkpoint succeeds) and `vmem_hot_context` (emitted from
 `session_compact`, fire-and-forget) are advisory bookkeeping records for
 Context Virtual Memory's own documented compaction-boundary integration
 point (`src/second_brain/vmem.py` §6.7). Both are gated behind
-`[vmem] enabled` in `config/context.toml` (default `false`) and never
-cancel compaction or alter model-visible context on failure — only the
-ledger checkpoint in `session_before_compact` may return `{cancel: true}`.
+`[vmem] enabled` in `config/context.toml` (default `false`). Nothing in
+`session_before_compact` cancels compaction: a failed ledger checkpoint is
+recorded as `ledger_degraded` and the host proceeds (V3 CTX-03).
 See `outputs/reports/rc4/04-prime-vmem.md` for why this is bookkeeping only
 and not yet a `context`-event message replacement.
 

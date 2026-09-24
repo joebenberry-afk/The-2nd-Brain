@@ -190,13 +190,32 @@ export async function renderActiveState(options: {
   };
 }
 
+const HOT_CONTEXT_HEADER = "[SECOND_BRAIN_HOT_CONTEXT]";
+
+/**
+ * Build the model-visible active-state message. When `currentPrompt` is
+ * supplied, an `Objective:` line that merely echoes that prompt is dropped
+ * (the model already has the prompt), and a render with nothing left
+ * returns undefined so a no-benefit turn adds no Brain message (PERF-01).
+ */
 export function activeStateMessage(
   result: ActiveStateRenderResult,
+  currentPrompt?: string,
 ): { customType: string; content: string; display: boolean; details: JsonRecord } | undefined {
   if (!result.ok || !result.sessionId || !result.renderedText) return undefined;
+  let text = result.renderedText;
+  if (currentPrompt !== undefined) {
+    // The capsule stores the bounded text stripped again (Python `strip()`), so a
+    // cut that ends on whitespace loses it; compare against that stored form.
+    const echo = `${HOT_CONTEXT_HEADER}\nObjective: ${boundedText(currentPrompt).trim()}`;
+    if (text === echo || text.startsWith(`${echo}\n`)) {
+      text = HOT_CONTEXT_HEADER + text.slice(echo.length);
+    }
+    if (text.trim() === HOT_CONTEXT_HEADER) return undefined;
+  }
   return {
     customType: ACTIVE_STATE_CUSTOM_TYPE,
-    content: `[SECOND_BRAIN_ACTIVE_STATE]\n${result.renderedText}`,
+    content: `[SECOND_BRAIN_ACTIVE_STATE]\n${text}`,
     display: false,
     details: { session_id: result.sessionId, source: "vmem.hot-context" },
   };

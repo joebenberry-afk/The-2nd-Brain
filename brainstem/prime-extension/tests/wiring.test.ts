@@ -56,8 +56,10 @@ vi.mock("../src/autoinject", async (importOriginal) => {
   return { ...actual, runAdvisoryAutoInject: runAdvisoryAutoInjectMock };
 });
 const runEnvironmentAssessmentMock = vi.hoisted(() => vi.fn());
+const runEnvironmentAssessmentAsyncMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/environment-mirror", () => ({
   runEnvironmentAssessmentSync: runEnvironmentAssessmentMock,
+  runEnvironmentAssessment: runEnvironmentAssessmentAsyncMock,
 }));
 
 const runP4PulseMock = vi.hoisted(() => vi.fn());
@@ -141,6 +143,12 @@ beforeEach(async () => {
     mutationClassification: "none",
     completionEligible: true,
   });
+  // Background (session_start / task_boundary) assessments share the sync mock's
+  // configured result and call log unless a test overrides the async mock.
+  runEnvironmentAssessmentAsyncMock.mockReset();
+  runEnvironmentAssessmentAsyncMock.mockImplementation(async (options: unknown) =>
+    runEnvironmentAssessmentMock(options),
+  );
   runP4PulseMock.mockReset();
   runP4PulseMock.mockResolvedValue({ ok: true, sessionId: "wiring-test" });
   runP4PulseSyncMock.mockReset();
@@ -477,10 +485,18 @@ describe("factory wiring (src/index.ts)", () => {
     const started = mirrorFireAndForgetMock.mock.calls.find(
       (call) => call[0]?.record?.kind === "session_started",
     );
-    expect(started?.[0]?.record?.fields?.environment_steward_id).toBe("envsteward-test");
+    expect(started).toBeDefined();
     expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "session_start", hostSessionId: "wiring-test" }),
     );
+    await vi.waitFor(() => {
+      const assessed = mirrorFireAndForgetMock.mock.calls.find(
+        (call) =>
+          call[0]?.record?.kind === "environment_assessment" &&
+          call[0]?.record?.fields?.phase === "session_start",
+      );
+      expect(assessed?.[0]?.record?.fields?.environment_steward_id).toBe("envsteward-test");
+    });
 
     await handlers.get("before_agent_start")!({ prompt: "task boundary" }, ctx);
     expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
@@ -513,6 +529,25 @@ describe("factory wiring (src/index.ts)", () => {
         repo: "C:/work",
       }),
     );
+    await settle();
+  });
+
+  it("never waits for the environment assessment before the host turn (PERF-02)", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    runEnvironmentAssessmentAsyncMock.mockImplementation(() => new Promise(() => undefined));
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
+
+    expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "task_boundary" }),
+    );
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    const kinds = mirrorFireAndForgetMock.mock.calls.map((call) => call[0]?.record?.kind);
+    expect(kinds).toContain("session_started");
+    expect(kinds).toContain("user_task");
+    expect(kinds).not.toContain("environment_assessment");
     await settle();
   });
 
@@ -954,14 +989,6 @@ describe("factory wiring (src/index.ts)", () => {
     const shadow = records.find((r) => r.kind === "rtd_shadow");
     expect(shadow).toMatchObject({ threshold: 100, would_trigger: true, reason: "ok" });
     expect(shadow!.size).toBe(502); // 500 chars + 2 JSON quotes
-  });
-  it("before_agent_start delivers project identity without requiring an unavailable command", async () => {
-    const handlers = loadFactory();
-    const result = await handlers.get("before_agent_start")!({ prompt: "inspect retained context" }, makeCtx());
-    const patch = result as { systemPrompt?: string } | undefined;
-    expect(patch?.systemPrompt).toContain("BASE SYSTEM PROMPT");
-    expect(patch?.systemPrompt).toContain("Project: default");
-    expect(patch?.systemPrompt).not.toContain("brainctl");
   });
 });
 
@@ -1606,14 +1633,13 @@ const RECALL_PROMPT =
   "the sqlite migration failed on the second run with a schema version mismatch and now the upgrade is blocked";
 
 describe("Phase 14 recall gate (src/index.ts)", () => {
-  it("default OFF: before_agent_start performs ZERO spawns; PREFIX extras still delivered", async () => {
+  it("default OFF: before_agent_start performs ZERO spawns and patches no systemPrompt", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek, non-Sol
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined(); // PERF-01: host prompt untouched
     expect(recallRunMock).not.toHaveBeenCalled();
     // measurement records still appended (P3-D lean fail-open on missing skill)
     const records = await waitForLines(4);
@@ -1648,27 +1674,25 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     }
     expect(options.cfg.maxRows).toBe(3);
     expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default"); // PREFIX still delivered
-    expect(result!.systemPrompt).not.toContain("## Brain Brief (retrieved)"); // dynamic recall content never touches PREFIX
+    expect(result!.systemPrompt).toBeUndefined(); // dynamic recall content never touches the system prompt
     expect(result!.message?.content).toContain("## Brain Brief (retrieved)");
     expect(result!.message?.content).toContain("**sqlite migration failure recovery**");
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
-  it("enabled + trivial prompt: no recall spawn; PREFIX extras still delivered", async () => {
+  it("enabled + trivial prompt: no recall spawn and no systemPrompt patch", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     const handlers = loadFactory();
     const ctx = makeCtx();
     const result = (await handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined();
     expect(recallRunMock).not.toHaveBeenCalled();
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
-  it("enabled + recall spawn fails: silent, no recall injection, no throw; PREFIX extras still delivered", async () => {
+  it("enabled + recall spawn fails: silent, no recall injection, no throw", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockRejectedValue(new Error("spawn boom"));
@@ -1677,8 +1701,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined();
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     await settle(); // drain fire-and-forget telemetry writes before teardown
   });
@@ -1692,12 +1715,12 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx) as
       | { systemPrompt?: string; message?: { content?: string } }
       | undefined;
-    expect(result?.systemPrompt).not.toContain("MUST delegate");
+    expect(result?.systemPrompt).toBeUndefined(); // dynamic recall never patches the system prompt
     expect(result?.message?.content).toContain("## Brain Brief (retrieved)");
     expect(recallRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("enabled + brief builder yields nothing (no valid rows): no recall injection; PREFIX extras still delivered", async () => {
+  it("enabled + brief builder yields nothing (no valid rows): no recall injection and no systemPrompt patch", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockResolvedValue([{ summary: "no title" }, "garbage"]);
@@ -1706,8 +1729,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined();
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });

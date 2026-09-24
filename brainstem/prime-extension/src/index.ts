@@ -59,7 +59,7 @@ import {
   runShadowAutoInject,
   type AdvisoryAutoInjectCall,
 } from "./autoinject";
-import { appendPrefixExtras, assemblePrefix, checkPrefixDrift } from "./injection-slots";
+import { assemblePrefix, checkPrefixDrift } from "./injection-slots";
 import {
   activeStateMessage,
   renderActiveState,
@@ -68,8 +68,9 @@ import {
   runActiveStateUpdateSync,
 } from "./active-state-mirror";
 import {
+  runEnvironmentAssessment,
   runEnvironmentAssessmentSync,
-  type EnvironmentAssessmentResult,
+  type EnvironmentAssessmentOptions,
 } from "./environment-mirror";
 import { runP4Pulse, runP4PulseSync } from "./p4-mirror";
 import {
@@ -926,6 +927,39 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return session;
   };
 
+  // Session-start and task-boundary assessments run in the background: the
+  // Python side writes the durable evidence file itself, and the ledger gets
+  // an environment_assessment record when it finishes. The host turn never
+  // waits for it (it measured ~1.4 s on a large repo).
+  const assessEnvironmentInBackground = (
+    session: string,
+    ctx: ExtensionContext,
+    options: EnvironmentAssessmentOptions,
+  ): void => {
+    void runEnvironmentAssessment(options).then((environment) => {
+      if (!environment.ok) {
+        getStore(session)?.append(
+          mirrorExtensionError(session, environment.error ?? `${options.phase} environment assessment failed`),
+        );
+        return;
+      }
+      mirror(
+        session,
+        "environment_assessment",
+        {
+          phase: options.phase,
+          task_id: options.taskId ?? null,
+          environment_steward_id: environment.environmentStewardId ?? null,
+          environment_hash: environment.environmentHash ?? null,
+          mutation_detected: environment.mutationDetected ?? false,
+          mutation_classification: environment.mutationClassification ?? "none",
+          completion_eligible: environment.completionEligible ?? true,
+        },
+        { ignorable: true, cwd: ctxCwd(ctx) },
+      );
+    });
+  };
+
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
     recordNativeRootSession(session, ctx);
     // Phase 0C SHADOW: decide + record only; session_start carries no task
@@ -939,31 +973,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       cfg: loadAutoInjectHostConfig(config.home),
       append: (record) => getStore(session)?.append(record),
     });
-    const environment = runEnvironmentAssessmentSync({
-      home: config.home ?? "",
-      hostSessionId: session,
-      repo: ctxCwd(ctx) ?? config.home ?? "",
-      phase: "session_start",
-    });
-    if (environment.ok) {
-      mirror(
-        session,
-        "environment_assessment",
-        {
-          phase: "session_start",
-          environment_steward_id: environment.environmentStewardId ?? null,
-          environment_hash: environment.environmentHash ?? null,
-          mutation_detected: environment.mutationDetected ?? false,
-          mutation_classification: environment.mutationClassification ?? "none",
-          completion_eligible: environment.completionEligible ?? true,
-        },
-        { ignorable: true, cwd: ctxCwd(ctx) },
-      );
-    } else {
-      getStore(session)?.append(
-        mirrorExtensionError(session, environment.error ?? "environment assessment failed"),
-      );
-    }
     mirror(
       session,
       "session_started",
@@ -975,17 +984,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         agent_id: session,
         provider: typeof ctx.model?.provider === "string" ? ctx.model.provider : null,
         host_agent_id: session,
-        environment_steward_id: environment.ok ? environment.environmentStewardId ?? null : null,
-        environment_hash: environment.ok ? environment.environmentHash ?? null : null,
-        environment_mutation_detected: environment.ok ? environment.mutationDetected ?? false : null,
-        environment_mutation_classification: environment.ok ? environment.mutationClassification ?? "none" : "assessment_failed",
-        environment_completion_eligible: environment.ok ? environment.completionEligible ?? true : false,
       },
       // Project attribution: session_started is the first mirrored event, so
       // the auto-init of the session ledger receives the host cwd (when known)
       // and `ledger init --cwd` resolves project_id via the AutoInject ladder.
       { agentId: session, cwd: ctxCwd(ctx) },
     );
+    assessEnvironmentInBackground(session, ctx, {
+      home: config.home ?? "",
+      hostSessionId: session,
+      repo: ctxCwd(ctx) ?? config.home ?? "",
+      phase: "session_start",
+    });
     // Prime-owned artifact REFERENCES (never copied): transcript + telemetry.
     try {
       const transcript = ctx.sessionManager?.getSessionFile?.();
@@ -1177,7 +1187,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let aiCfg = loadAutoInjectHostConfig(config.home);
     let aiMessage: unknown = undefined;
     let activeMessage: unknown = undefined;
-    let environmentTask: EnvironmentAssessmentResult | undefined;
     try {
       session = resolveAndJournalSessionId(ctx);
       recordNativeRootSession(session, ctx);
@@ -1185,18 +1194,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const taskHash = taskSha256(environmentPrompt);
       if (taskHash && environmentTaskHashes.get(session) !== taskHash) {
         environmentTaskHashes.set(session, taskHash);
-        environmentTask = runEnvironmentAssessmentSync({
+        assessEnvironmentInBackground(session, ctx, {
           home: config.home ?? "",
           hostSessionId: session,
           repo: ctxCwd(ctx) ?? config.home ?? "",
           taskId: taskHash,
           phase: "task_boundary",
         });
-        if (!environmentTask.ok) {
-          getStore(session)?.append(
-            mirrorExtensionError(session, environmentTask.error ?? "task environment assessment failed"),
-          );
-        }
       }
       // AutoInject contributes low-authority context for any native recipient;
       // the host appends the returned message after this turn's user text.
@@ -1205,6 +1209,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // [autoinject] mode is honored (env-only cfg made the live flip
       // switch inert and silently ran the shadow branch).
       const taskText = typeof event.prompt === "string" ? event.prompt : "";
+      // Visibility planning is independent of the active-state and AutoInject
+      // spawns, so it runs concurrently with them instead of after them.
+      const visibilityPending =
+        config.home && taskText.trim().length > 0
+          ? ensureVisibilityPlan(session, taskText, ctx).catch(() => undefined)
+          : undefined;
       if (
         config.home &&
         taskText.trim().length > 0 &&
@@ -1231,7 +1241,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
               sensors.extensionError(session, new Error(rendered.error ?? "active-state render failed")),
             );
           } else {
-            activeMessage = activeStateMessage(rendered);
+            activeMessage = activeStateMessage(rendered, taskText);
             if (activeMessage !== undefined) {
               getStore(session)?.append(
                 sensors.activeStateDelivery(
@@ -1302,11 +1312,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       } else {
         void runShadowAutoInject(autoinjectCall(session, event, ctx));
       }
-      if (config.home && taskText.trim().length > 0) {
+      if (visibilityPending !== undefined) {
         try {
-          const visibilityResult = await ensureVisibilityPlan(session, taskText, ctx);
+          const visibilityResult = await visibilityPending;
           if (
-            visibilityResult.visibility_plan?.mode === "enforced" &&
+            visibilityResult?.visibility_plan?.mode === "enforced" &&
             Object.keys(visibilityResult.hydrated_instructions).length > 0
           ) {
             // validateOmpVisibilityResult already rejects the whole plan if
@@ -1335,11 +1345,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         {
           task_sha256: taskSha256(typeof event.prompt === "string" ? event.prompt : ""),
           prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
-          environment_steward_id: environmentTask?.environmentStewardId ?? null,
-          environment_hash: environmentTask?.environmentHash ?? null,
-          environment_mutation_detected: environmentTask?.mutationDetected ?? false,
-          environment_mutation_classification: environmentTask?.mutationClassification ?? "none",
-          environment_completion_eligible: environmentTask?.completionEligible ?? true,
         },
         // ledger-cwd-ordering-fix: user_task is the FIRST mirror to reach the
         // ledger in real runs (its init spawn wins the per-process race), so
@@ -1397,17 +1402,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           patched = merged;
         }
       }
-      // Append memory commands and project identity once to the stable prefix.
-      // Dynamic recall stays in the turn message below.
-      const withExtras = appendPrefixExtras(
-        patched,
-        resolvedProjectIdForSession(session) ?? resolveProject(),
-      );
-      if (withExtras !== undefined) {
-        patched = withExtras;
-      }
       // Recall is dynamic per-turn context, never a change to the stable prefix.
-      // A miss must not discard approved Lean or memory-command context.
+      // A miss must not discard an approved Lean kernel.
       const recallCfg = loadRecallGateConfig();
       let turnMessage: unknown = mergeActiveStateMessage(aiMessage, activeMessage);
       // The CLI needs keywords, not the prompt: it keeps up to eight query
@@ -2040,10 +2036,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return sensors.agentEnd(session, event.messages);
   });
 
-  // session_before_compact: pre-compaction DURABILITY BARRIER (plan §10.2).
-  // The checkpoint is AWAITED (5s timeout). On flush/integrity failure the
-  // handler returns { cancel: true } — the host throws "Compaction cancelled"
-  // (SDK agent-session.ts:7199 reads result.cancel) and no context is lost.
+  // session_before_compact: best-effort pre-compaction checkpoint (plan §10.2).
+  // The checkpoint is awaited (5s timeout) so it usually lands before the host
+  // compacts, but Brain never vetoes compaction (V3 CTX-03): a failed
+  // checkpoint is recorded as ledger_degraded and the host proceeds.
   // The event is registered directly (not via wire) so the handler can await.
   pi.on("session_before_compact", async (event, ctx) => {
     const compactEvent = event as SessionBeforeCompactEvent;
@@ -2062,7 +2058,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         { cwd: ctxCwd(ctx) },
       );
       // measurement record first (every lifecycle event writes one record),
-      // then the durability barrier decides whether compaction may proceed.
+      // then the best-effort checkpoint.
       getStore(session)?.append(
         sensors.sessionBeforeCompact(session, compactEvent.branchEntries),
       );
@@ -2077,9 +2073,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           getStore(session)?.append(
             sensors.extensionError(session, new Error(activeState.error ?? "active-state checkpoint failed")),
           );
-          return { cancel: true };
+        } else {
+          activeStateTouchedSessions.add(session);
         }
-        activeStateTouchedSessions.add(session);
       }
       const checkpoint = await runLedgerCheckpoint({
         home: config.home ?? "",
@@ -2098,7 +2094,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         getStore(session)?.append(
           mirrorExtensionError(session, `pre-compaction checkpoint failed: ${checkpoint.error ?? "integrity bad"}`),
         );
-        return { cancel: true };
+        return undefined;
       }
       // Phase B admission ref #3: compaction-boundary checkpoint. Content is
       // exactly the checkpoint outcome + branch_entries count already
@@ -2112,9 +2108,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       });
       // Phase R3: VMem compaction-boundary bookkeeping (vmem.py §6.7 "Compaction
       // barrier interaction" — its own documented integration point). Advisory
-      // only: never cancels compaction (the ledger checkpoint above is the sole
-      // durability barrier). Disabled by default ([vmem] enabled=false) until a
-      // live pilot proves this sound; see outputs/reports/rc4/02-prime-live-callgraph.md.
+      // only. Disabled by default ([vmem] enabled=false) until a live pilot
+      // proves this sound; see outputs/reports/rc4/02-prime-live-callgraph.md.
       const vmemCfg = loadVmemConfig(config.home);
       if (vmemCfg.enabled) {
         const prep = await runVmemCompactPrep({ home: config.home ?? "", hostSessionId: session });
@@ -2134,7 +2129,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       } catch {
         // storage failed too — stay silent
       }
-      return { cancel: true }; // never compact on an unproven barrier
+      return undefined; // Brain failure never blocks host compaction (CTX-03)
     }
     return undefined;
   });

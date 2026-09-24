@@ -113,4 +113,56 @@ describe("active-state lifecycle bridge", () => {
     expect(message?.content).toContain("Objective: Resume task");
     expect(message?.display).toBe(false);
   });
+
+  it("adds no message when the render only echoes the current prompt (PERF-01)", () => {
+    const prompt = "  Explain the migration order\nfor schema 28  ";
+    const message = activeStateMessage(
+      {
+        ok: true,
+        sessionId: "omp-1",
+        renderedText: "[SECOND_BRAIN_HOT_CONTEXT]\nObjective: Explain the migration order\nfor schema 28",
+      },
+      prompt,
+    );
+    expect(message).toBeUndefined();
+  });
+
+  it("recognizes the echo when the 512-char cut ends on whitespace", () => {
+    const prompt = `${"a".repeat(511)} tail words beyond the bound`;
+    const stored = "a".repeat(511);
+    const message = activeStateMessage(
+      {
+        ok: true,
+        sessionId: "omp-1",
+        renderedText: `[SECOND_BRAIN_HOT_CONTEXT]\nObjective: ${stored}`,
+      },
+      prompt,
+    );
+    expect(message).toBeUndefined();
+  });
+
+  it("drops only the prompt echo and keeps real session state", () => {
+    const message = activeStateMessage(
+      {
+        ok: true,
+        sessionId: "omp-1",
+        renderedText:
+          "[SECOND_BRAIN_HOT_CONTEXT]\nObjective: Fix the parser\nActive Decisions: keep FTS5",
+      },
+      "Fix the parser",
+    );
+    expect(message?.content).toBe("[SECOND_BRAIN_ACTIVE_STATE]\n[SECOND_BRAIN_HOT_CONTEXT]\nActive Decisions: keep FTS5");
+  });
+
+  it("keeps an objective that differs from the current prompt", () => {
+    const message = activeStateMessage(
+      {
+        ok: true,
+        sessionId: "omp-1",
+        renderedText: "[SECOND_BRAIN_HOT_CONTEXT]\nObjective: Fix the parser everywhere",
+      },
+      "Fix the parser",
+    );
+    expect(message?.content).toContain("Objective: Fix the parser everywhere");
+  });
 });

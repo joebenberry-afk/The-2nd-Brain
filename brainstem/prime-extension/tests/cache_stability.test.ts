@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { appendLeanKernel, LEAN_KERNEL_MARKER } from "../src/lean-code";
-import { appendPrefixExtras } from "../src/injection-slots";
 import { sha256Hex, providerRequestMeta } from "../src/sensors";
 
 describe("cache regression recovery: deterministic prefix stability", () => {
   const BASE_PROMPT = "You are Prime, an advanced AI coding assistant.";
 
-  it("approved Lean and memory prefix remains byte-identical across turns", () => {
+  it("approved Lean prefix remains byte-identical across turns", () => {
     let currentSystemPrompt = BASE_PROMPT;
     const prompts: string[] = [];
 
@@ -14,9 +13,8 @@ describe("cache regression recovery: deterministic prefix stability", () => {
       // The host may supply either its original base or the prior patched
       // prompt. Dedup must produce identical bytes in both cases.
       const kernel = "# Runtime Kernel\nPrefer minimal, targeted code edits.";
-      const patched = appendPrefixExtras(appendLeanKernel(currentSystemPrompt, kernel), "proj-test");
+      const patched = appendLeanKernel(currentSystemPrompt, kernel);
       expect(patched).toContain(LEAN_KERNEL_MARKER);
-      expect(patched).toContain("Project: proj-test");
 
       prompts.push(patched!);
       // In Prime, currentSystemPrompt for subsequent turns might be base or patched
@@ -35,10 +33,7 @@ describe("cache regression recovery: deterministic prefix stability", () => {
   });
 
   it("provider request prefix sha is deterministic and invariant across consecutive turns", () => {
-    const systemPrompt = appendPrefixExtras(
-      appendLeanKernel(BASE_PROMPT, "# Runtime Kernel\nPrefer minimal edits."),
-      "proj-test",
-    )!;
+    const systemPrompt = appendLeanKernel(BASE_PROMPT, "# Runtime Kernel\nPrefer minimal edits.")!;
 
     const messages: Array<{ role: string; content: string }> = [
       { role: "system", content: systemPrompt },
