@@ -94,7 +94,6 @@ import {
   taskSha256,
 } from "./ledger-mirror";
 import { measureContent } from "./sensors";
-import { v3Brief, v3BriefMessage, v3Correction, v3Enabled, v3Telemetry } from "./v3-memory";
 import * as sensors from "./sensors";
 import { e01SpanAsync, e01SpanEnd, e01Trace } from "./e01-trace";
 import {
@@ -745,8 +744,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const lastModel = new Map<string, string | null>();
   const lastCacheReadTokens = new Map<string, number | null>();
   const sessionBeforeCompactOccurred = new Set<string>();
-  /** V3: sessions that already received the brief (cleared again by compaction). */
-  const v3Briefed = new Set<string>();
   const getStore = (session: string): TelemetryStore | null => {
     if (!store || store.sessionId !== session) {
       store = new TelemetryStore(telemetryDir, session, ensureTelemetryDir);
@@ -1375,21 +1372,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   }
 
   pi.on("before_agent_start", async (event, ctx) => {
-    // V3 (SECOND_BRAIN_V3=on): the brief once per session and after compaction; no
-    // per-prompt pipeline, no process spawn. Reads precompiled views; fails open to nothing.
-    if (v3Enabled()) {
-      const started = performance.now();
-      try {
-        const v3Session = resolveAndJournalSessionId(ctx);
-        if (!config.home || v3Briefed.has(v3Session)) return undefined;
-        v3Briefed.add(v3Session);
-        const brief = v3Brief(config.home, ctxCwd(ctx));
-        v3Telemetry(config.home, "brief", brief, performance.now() - started);
-        return brief ? { message: v3BriefMessage(brief) } : undefined;
-      } catch {
-        return undefined;
-      }
-    }
     const hookStart = performance.now();
     let session = "unknown";
     let aiCfg = loadAutoInjectHostConfig(config.home);
@@ -2273,28 +2255,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // serialization. The precomputed eligibility is passed through so RTD
   // never re-measures.
   pi.on("tool_result", async (event, ctx) => {
-    // V3: one tested correction appended to a failed tool result; nothing otherwise.
-    if (v3Enabled()) {
-      if (event.isError !== true || !config.home) return undefined;
-      const started = performance.now();
-      try {
-        const content = Array.isArray(event.content) ? event.content : [];
-        const errorText = content
-          .map((part) =>
-            part && typeof part === "object" && "text" in part && typeof part.text === "string"
-              ? part.text
-              : "",
-          )
-          .join("\n");
-        const correction = v3Correction(config.home, ctxCwd(ctx), errorText);
-        v3Telemetry(config.home, "correction", correction, performance.now() - started);
-        return correction
-          ? { content: [...content, { type: "text" as const, text: correction }] }
-          : undefined;
-      } catch {
-        return undefined;
-      }
-    }
     let session = "unknown";
     try {
       session = resolveAndJournalSessionId(ctx);
@@ -2466,7 +2426,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     try {
       session = resolveAndJournalSessionId(ctx);
       sessionBeforeCompactOccurred.add(session);
-      v3Briefed.delete(session); // V3: the next turn gets the brief again
       mirror(
         session,
         "compaction_started",
