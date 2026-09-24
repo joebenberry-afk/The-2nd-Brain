@@ -2,15 +2,46 @@
 
 ## Active candidate: orchestrator removal (2026-09-23)
 
-**Status:** `M00_PARTIAL_EXTERNAL_BLOCKER` — every applicable HIGH is fixed,
-refuted or deferred to one external dependency (a non-agent-controlled
-approval/attestation issuer); NOT QUALIFIED; production NOT ACTIVATED. This register and
+**Status:** `M00_CODE_QUALIFIED / EXTERNAL_TRUST_ROOT_PENDING` (owner decision
+2026-09-24, below). It does **not** mean every authority capability exists.
+Production NOT ACTIVATED. This register and
 [`Second_Brain_M00_OneShot_Closure_Mandate.md`](Second_Brain_M00_OneShot_Closure_Mandate.md)
 form one acceptance contract under the
 [`Orchestrator Removal Mandate`](Second_Brain_Orchestrator_Removal_Mandate_2026-09-23.md).
 The orchestration-free v3 roadmap is
 [`Second_Brain_V3_Orchestration_Free_Roadmap_2026-09-23.md`](Second_Brain_V3_Orchestration_Free_Roadmap_2026-09-23.md).
 All older native/governed directions below are dated historical evidence.
+
+### M00 boundary decision (owner, 2026-09-24)
+
+The owner accepted the issuer-dependent items at the M00 boundary. The final
+record keeps four axes separate:
+
+| Axis | Status |
+|---|---|
+| Repository / code qualification | **QUALIFIED** — final code subject `80f3c54`: gates author-executed and independently executed (2156 passed / 1 skipped / 0 failed), and the independent security review found no blocking HIGH/MEDIUM authorization sink ([`m00-evidence/authority-closure-20260923.md`](m00-evidence/authority-closure-20260923.md) §6–§7) |
+| Independent issuer | **NOT AVAILABLE — EXTERNAL PRECONDITION**; tracked as [`EXTERNAL-TRUST-ROOT-WORK-ITEM.md`](EXTERNAL-TRUST-ROOT-WORK-ITEM.md), not as further M00 work |
+| Authority-dependent features | **FAIL-CLOSED / UNAVAILABLE**, per the capability table below |
+| Production activation | **Separate owner decision**; NOT PERFORMED. Prepared as [`m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md`](m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md): release worktree `.worktrees/qualified-m00` detached at `749e9cd`; install, migration, backup/restore and rollback rehearsed on disposable copies of production bytes (R1–R9 PASS) |
+
+SEC-AUTH-01 and SEC-AUTH-02 are **closed as vulnerabilities**: when no
+independent authority exists, the candidate refuses rather than trusting a
+caller's claim. They are not closed as capabilities. Do not weaken those
+refusals to restore functionality. Only a reviewed issuer that meets the
+work item's acceptance criteria may re-enable them.
+
+| Capability held unavailable until an independent issuer exists | Current code behavior |
+|---|---|
+| VERIFIED memory issuance | `add_memory`/`curate` refuse with `VERIFIED_REQUIRES_ATTESTATION`; existing VERIFIED rows carry **at most TESTED** authority (`semantic.effective_evidence_grade`, used by every trust consumer and every grade display) |
+| Approval-bearing / CRITICAL completion | refused: `approval_state` stays `required`, `approval_attestation="unavailable"`, `completion_allowed=false` |
+| Authoritative model-success records | none exist: the gate writes none and `models record` refuses. The direct library API `crossmodel.record_skill_outcome` can still write **unauthenticated, non-authoritative** rows read only by informational `models` reports (recorded LOW caveat) |
+| Policy-authority promotion | effective ceiling is always `advisory`; the policy lane admits nothing; `curate` can only lower a ceiling |
+| Protected skill approval | **not available.** Skill delivery still works from an **unprotected** same-user review record, bound to the exact approved bytes (SEC-SKILL-01 residual, accepted at this boundary). No review record is protected approval |
+| Protected extension-install approval | **not available.** The installer is operator-invoked and byte-verified; a manifest is a byte comparison, never an approval |
+| Ledger signing | **not available.** The chain is unkeyed tamper-*evidence* (full envelope, genesis recomputation, replay/rehydrate refuse a broken chain), not a signature |
+
+Not demonstrated, so not claimed: independent approval, protected custody,
+and cryptographic signing.
 
 ### Boundary and legacy behavior
 

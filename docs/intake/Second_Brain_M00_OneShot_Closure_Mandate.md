@@ -5,8 +5,11 @@
 This active contract and [`M00-CAMPAIGN-REGISTER.md`](M00-CAMPAIGN-REGISTER.md)
 must travel in the same candidate commit. Historical native/governed language below
 is evidence only; it does not authorize a second runtime.
-**Candidate status:** `M00_PARTIAL_EXTERNAL_BLOCKER`; qualification NOT PROVEN. The one
-external dependency is a non-agent-controlled approval/attestation issuer.
+**Candidate status:** `M00_CODE_QUALIFIED / EXTERNAL_TRUST_ROOT_PENDING` (owner decision
+2026-09-24). Code: QUALIFIED at `80f3c54`. Independent issuer: NOT AVAILABLE, an external
+precondition ([`EXTERNAL-TRUST-ROOT-WORK-ITEM.md`](EXTERNAL-TRUST-ROOT-WORK-ITEM.md)).
+Authority-dependent features: FAIL-CLOSED. Production activation: a separate decision.
+Independent approval, protected custody and cryptographic signing are **not** demonstrated.
 **Production:** NOT ACTIVATED. No installed host/extension/config patch, canonical
 state migration, push, tag, or release publication is authorized.
 
