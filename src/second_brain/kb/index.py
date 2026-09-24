@@ -460,8 +460,10 @@ def add(
     return record
 
 
-def promote(home: Path, record_id: str, *, reason: str) -> Record:
+def promote(home: Path, record_id: str, *, reason: str, actor: str | None = None) -> Record:
     """Promote a candidate record to current."""
+    import os
+
     record = records.load(home, record_id)
 
     if record.status != "candidate":
@@ -471,6 +473,14 @@ def promote(home: Path, record_id: str, *, reason: str) -> Record:
     if not reason.strip():
         raise RecordError("promotion reason required")
 
+    # Determine actor
+    if actor is None:
+        actor = os.environ.get("BRAIN_ACTOR")
+    if actor is None:
+        actor = os.environ.get("USER") or os.environ.get("USERNAME")
+    if actor is None:
+        actor = "unknown"
+
     # Update the record
     updated = records.replace(
         record,
@@ -479,6 +489,7 @@ def promote(home: Path, record_id: str, *, reason: str) -> Record:
             **record.extra,
             "promoted_at": records.now_iso(),
             "promotion_reason": reason,
+            "promoted_by": actor,
         },
     )
 

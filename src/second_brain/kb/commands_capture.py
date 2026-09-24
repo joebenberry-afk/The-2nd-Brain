@@ -47,6 +47,8 @@ def handle_capture(args: argparse.Namespace) -> int:
 
 def handle_review(args: argparse.Namespace) -> int:
     """Review inbox, stale evidence, and candidate queue."""
+    from datetime import UTC, datetime, timedelta
+
     home = cli.home_from(args)
     do_capture = not args.no_capture
 
@@ -65,9 +67,23 @@ def handle_review(args: argparse.Namespace) -> int:
         # Check stale evidence
         stale = capture.stale_evidence(home)
 
-        # Load all records to count candidates
+        # Load all records to count candidates and find recently promoted
         all_records, _ = capture.records.load_all(home)
         candidate_count = sum(1 for r in all_records if r.status == "candidate")
+
+        # Find recently promoted records (within last 7 days)
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=7)
+        recently_promoted = []
+        for r in all_records:
+            if "promoted_at" in r.extra:
+                try:
+                    promoted_at = capture.records.parse_time(r.extra["promoted_at"])
+                    if promoted_at >= cutoff:
+                        promoted_by = r.extra.get("promoted_by", "unknown")
+                        recently_promoted.append((r.id, promoted_by, r.title))
+                except Exception:
+                    pass
 
         # Print inbox
         print(f"inbox ({len(inbox_records)})")
@@ -78,6 +94,11 @@ def handle_review(args: argparse.Namespace) -> int:
         print(f"\nstale evidence ({len(stale)})")
         for rec_id, evidence, reason in stale:
             print(f"  {rec_id} {evidence} {reason}")
+
+        # Print recently promoted
+        print(f"\nrecently promoted ({len(recently_promoted)})")
+        for rec_id, promoted_by, title in recently_promoted:
+            print(f"  {rec_id} {promoted_by} {title}")
 
         # Print candidates awaiting promote
         print(f"\ncandidates awaiting promote ({candidate_count})")
