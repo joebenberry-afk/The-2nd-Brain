@@ -1,6 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export const ENVIRONMENT_DEFAULT_TIMEOUT_MS = 5000;
 
@@ -69,11 +72,7 @@ function parseResult(stdout: string, sessionId: string): EnvironmentAssessmentRe
   }
 }
 
-export function runEnvironmentAssessmentSync(
-  options: EnvironmentAssessmentOptions,
-): EnvironmentAssessmentResult {
-  const python = pythonExe(options.home, options.python);
-  if (!existsSync(python)) return { ok: true, sessionId: options.hostSessionId };
+function assessmentArgs(options: EnvironmentAssessmentOptions): string[] {
   const args = [
     "-m", "second_brain", "env", "assess", options.repo,
     "--session", options.hostSessionId,
@@ -82,8 +81,41 @@ export function runEnvironmentAssessmentSync(
   ];
   for (const field of options.expectedFields ?? []) args.push("--expected-field", field);
   args.push("--json");
+  return args;
+}
+
+/** Blocking variant: only for shutdown, where the process may exit before a callback runs. */
+export function runEnvironmentAssessmentSync(
+  options: EnvironmentAssessmentOptions,
+): EnvironmentAssessmentResult {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) return { ok: true, sessionId: options.hostSessionId };
   try {
-    const stdout = execFileSync(python, args, {
+    const stdout = execFileSync(python, assessmentArgs(options), {
+      cwd: options.home,
+      env: runEnv(options.home),
+      timeout: options.timeoutMs ?? ENVIRONMENT_DEFAULT_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    });
+    return parseResult(String(stdout), options.hostSessionId);
+  } catch (error) {
+    return { ok: false, sessionId: options.hostSessionId, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Non-blocking variant for session start and task boundaries: the assessment
+ * (~1.4 s measured on a large repo) writes its own evidence file, so the host
+ * turn never waits for it (PERF-02).
+ */
+export async function runEnvironmentAssessment(
+  options: EnvironmentAssessmentOptions,
+): Promise<EnvironmentAssessmentResult> {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) return { ok: true, sessionId: options.hostSessionId };
+  try {
+    const { stdout } = await execFileAsync(python, assessmentArgs(options), {
       cwd: options.home,
       env: runEnv(options.home),
       timeout: options.timeoutMs ?? ENVIRONMENT_DEFAULT_TIMEOUT_MS,

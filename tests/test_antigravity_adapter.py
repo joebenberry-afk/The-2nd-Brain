@@ -17,8 +17,7 @@ Result contracts asserted:
   PreInvocation no injection  -> {}
   PostInvocation              -> {}
   PostToolUse                 -> {}
-  Stop incomplete material    -> {"decision": "continue", "reason": ...}
-  Stop complete               -> {"decision": "stop", "reason": ...}
+  Stop (any state)            -> {} (no stop/continue decision; ARCH-01)
   No Brain-internal debug fields ever leak into the hook response.
 
 AutoInject visibility follows the canonical mode resolution
@@ -276,8 +275,16 @@ def test_post_tool_use_nested_tool_call_empty_object(brain: Path) -> None:
     assert tool_records and tool_records[-1]["tool"] == "run_command"
 
 
-def test_stop_incomplete_material_requirement_continues(brain: Path) -> None:
-    session = "agy-req-sess-1"
+@pytest.mark.parametrize(
+    ("termination_reason", "fully_idle"),
+    [("", True), ("max-steps", False), ("", False)],
+)
+def test_stop_never_returns_lifecycle_decision(
+    brain: Path, termination_reason: str, fully_idle: bool
+) -> None:
+    """ARCH-01: an unresolved critical requirement must not make Brain force
+    continuation, and Brain never answers stop/continue for the host."""
+    session = f"agy-req-sess-{termination_reason or 'normal'}-{fully_idle}"
     working_set.add_requirement(
         brain, session, "All database queries must use prepared statements", importance="critical"
     )
@@ -287,55 +294,15 @@ def test_stop_incomplete_material_requirement_continues(brain: Path) -> None:
         "modelName": "gemini-3.7-flash",
         "stopHookArgs": {
             "executionNum": 1,
-            "terminationReason": "",
+            "terminationReason": termination_reason,
             "error": "",
-            "fullyIdle": True,
+            "fullyIdle": fully_idle,
         },
     }
-    out = _hook(brain, payload)
-    assert out["decision"] == "continue"
-    assert "prepared statements" in out["reason"]
+    assert _hook(brain, payload) == {}
 
 
-def test_stop_complete_allows_termination(brain: Path) -> None:
-    session = "agy-req-sess-2"
-    req = working_set.add_requirement(brain, session, "fix title config", importance="critical")
-    working_set.add_evidence(brain, session, req["id"], "verify.js passed")
-    working_set.set_requirement_status(brain, session, req["id"], "verified")
-    payload = {
-        "conversationId": session,
-        "workspacePaths": [str(WORKSPACE)],
-        "modelName": "gemini-3.7-flash",
-        "stopHookArgs": {
-            "executionNum": 1,
-            "terminationReason": "",
-            "error": "",
-            "fullyIdle": True,
-        },
-    }
-    out = _hook(brain, payload)
-    assert out["decision"] == "stop"
-
-
-def test_stop_non_normal_termination_no_forced_loop(brain: Path) -> None:
-    session = "agy-req-sess-3"
-    working_set.add_requirement(brain, session, "fix crash", importance="critical")
-    payload = {
-        "conversationId": session,
-        "workspacePaths": [str(WORKSPACE)],
-        "modelName": "gemini-3.7-flash",
-        "stopHookArgs": {
-            "executionNum": 1,
-            "terminationReason": "max-steps",
-            "error": "",
-            "fullyIdle": False,
-        },
-    }
-    out = _hook(brain, payload)
-    assert out["decision"] == "stop"
-
-
-def test_stop_records_activation_before_unresolved_continue(
+def test_stop_records_activation_with_unresolved_requirement(
     brain: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     mid = semantic.list_memories(brain, scope="project")[0]["memory_id"]
@@ -379,7 +346,7 @@ def test_stop_records_activation_before_unresolved_continue(
             },
         }
     )
-    assert stopped["decision"] == "continue"
+    assert stopped == {}
     import sqlite3
 
     with sqlite3.connect(brain / "db" / "brain.sqlite") as conn:
@@ -440,7 +407,7 @@ def test_stop_records_activation_from_nested_transcript_tool_use(
             },
         },
     )
-    assert stopped["decision"] == "continue"
+    assert stopped == {}
     import sqlite3
 
     with sqlite3.connect(brain / "db" / "brain.sqlite") as conn:

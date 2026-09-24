@@ -352,7 +352,7 @@ describe("T-G4 compaction barrier + segment rollover wiring", () => {
     },
   } as unknown as ExtensionContext;
 
-  it("session_before_compact awaits the checkpoint and returns {cancel:true} on failure", async () => {
+  it("session_before_compact attempts the checkpoint but never vetoes compaction on failure (CTX-03)", async () => {
     const { home } = await fakeHome();
     process.env.SECOND_BRAIN_HOME = home;
     process.env.SECOND_BRAIN_AUTOINJECT_MODE = "off";
@@ -369,7 +369,8 @@ describe("T-G4 compaction barrier + segment rollover wiring", () => {
       { preparation: {}, branchEntries: [] },
       ctx,
     );
-    expect(result).toEqual({ cancel: true }); // never compact on an unproven barrier
+    expect(result).toBeUndefined();
+    expect(execFileMock.mock.calls.some((c) => (c[1] as string[]).includes("checkpoint"))).toBe(true);
   });
 
   it("session_before_compact returns undefined when the checkpoint proves durability", async () => {
@@ -455,8 +456,7 @@ describe("T-G4 compaction barrier + segment rollover wiring", () => {
       { preparation: {}, branchEntries: [] },
       ctx,
     );
-    // Advisory only: a failing vmem call must never cancel compaction (only
-    // the ledger checkpoint durability barrier may return {cancel:true}).
+    // Advisory only: a failing vmem call must never cancel compaction.
     expect(result).toBeUndefined();
     const prepCall = execFileMock.mock.calls.find((c) => (c[1] as string[]).includes("compact-prep"));
     expect(prepCall).toBeDefined();
