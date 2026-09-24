@@ -10,11 +10,14 @@ import hashlib
 import json
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import projects, records
 from .records import Record, RecordError, now_iso
+
+EVENT_RETENTION_DAYS = 14
 
 
 def inbox_dir(home: Path) -> Path:
@@ -129,6 +132,66 @@ def error_signature(error: str) -> str:
             return sig[:120]
 
     return ""
+
+
+def prune_events(home: Path, *, now: float | None = None) -> list[str]:
+    """Delete event files and cursor entries when mtime is older than EVENT_RETENTION_DAYS.
+
+    Returns list of deleted file names (stems).
+    """
+    if now is None:
+        now = time.time()
+
+    deleted: list[str] = []
+    events_dir_path = events_dir(home)
+    cursor_file = events_dir_path / ".cursor.json"
+
+    if not events_dir_path.is_dir():
+        return deleted
+
+    # Load cursor
+    cursor: dict[str, int] = {}
+    if cursor_file.is_file():
+        try:
+            cursor = json.loads(cursor_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cursor = {}
+
+    # Calculate cutoff time
+    cutoff = now - (EVENT_RETENTION_DAYS * 24 * 60 * 60)
+
+    # Check each event file
+    for event_file in events_dir_path.glob("*.jsonl"):
+        file_stem = event_file.stem
+
+        # Only delete files whose every byte has been processed
+        try:
+            stat = event_file.stat()
+        except OSError:
+            continue
+        if cursor.get(file_stem, -1) < stat.st_size:
+            continue
+        mtime = stat.st_mtime
+
+        # Delete if old enough
+        if mtime < cutoff:
+            try:
+                event_file.unlink()
+                deleted.append(file_stem)
+                # Remove from cursor
+                del cursor[file_stem]
+            except OSError:
+                pass
+
+    # Write updated cursor if anything was deleted
+    if deleted:
+        try:
+            cursor_file.parent.mkdir(parents=True, exist_ok=True)
+            cursor_file.write_text(json.dumps(cursor, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    return deleted
 
 
 @dataclass
@@ -356,6 +419,10 @@ def capture_events(home: Path, *, dry_run: bool = False) -> CaptureReport:
             cursor[file_stem] = len(content)
             cursor_file.parent.mkdir(parents=True, exist_ok=True)
             cursor_file.write_text(json.dumps(cursor, indent=2), encoding="utf-8")
+
+    # Prune old event files (only when not in dry run)
+    if not dry_run:
+        prune_events(home)
 
     return CaptureReport(proposals, sessions, skipped)
 
