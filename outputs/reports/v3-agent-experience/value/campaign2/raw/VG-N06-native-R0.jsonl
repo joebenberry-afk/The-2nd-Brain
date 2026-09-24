@@ -1,0 +1,56 @@
+{"type":"session","version":3,"id":"01a0d463-a4b4-7503-a702-c6603a0aeb55","timestamp":"2026-09-24T17:08:15.156Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-wxoffgrn\\run0030\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"In one sentence, what is a Python dict? Reply with one sentence."}],"attribution":"user","timestamp":1790269697112}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"In one sentence, what is a Python dict? Reply with one sentence."}],"attribution":"user","timestamp":1790269697112}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Just","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790269697169,"responseId":"64d0e197-6a1a-4ad2-a58e-9740cc11ce7b"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Just"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" answer"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" in"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" one"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" sentence"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" No"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" tools"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" needed"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"Just answer in one sentence. No tools needed."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"A"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" Python"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" dict"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" is"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" a"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" mutable"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" hash"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"-table"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" mapping"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" of"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" unique"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" hash"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"able"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" keys"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" to"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" arbitrary"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" values"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" offering"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" average"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" O"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"("}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"1"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":")"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" lookup"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" insertion"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" and"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" deletion"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"A Python dict is a mutable hash-table mapping of unique, hashable keys to arbitrary values, offering average O(1) lookup, insertion, and deletion."}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Just answer in one sentence. No tools needed.","thinkingSignature":"reasoning_content"},{"type":"text","text":"A Python dict is a mutable hash-table mapping of unique, hashable keys to arbitrary values, offering average O(1) lookup, insertion, and deletion."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1410,"output":43,"cacheRead":9216,"cacheWrite":0,"totalTokens":10669,"reasoningTokens":10,"cost":{"input":0.0002115,"output":0.0000258,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000264948}},"stopReason":"stop","timestamp":1790269697169,"responseId":"64d0e197-6a1a-4ad2-a58e-9740cc11ce7b","duration":2172.509,"ttft":1864.8809999999994,"completedAt":1790269699357}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Just answer in one sentence. No tools needed.","thinkingSignature":"reasoning_content"},{"type":"text","text":"A Python dict is a mutable hash-table mapping of unique, hashable keys to arbitrary values, offering average O(1) lookup, insertion, and deletion."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1410,"output":43,"cacheRead":9216,"cacheWrite":0,"totalTokens":10669,"reasoningTokens":10,"cost":{"input":0.0002115,"output":0.0000258,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000264948}},"stopReason":"stop","timestamp":1790269697169,"responseId":"64d0e197-6a1a-4ad2-a58e-9740cc11ce7b","duration":2172.509,"ttft":1864.8809999999994},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"In one sentence, what is a Python dict? Reply with one sentence."}],"attribution":"user","timestamp":1790269697112},{"role":"assistant","content":[{"type":"thinking","thinking":"Just answer in one sentence. No tools needed.","thinkingSignature":"reasoning_content"},{"type":"text","text":"A Python dict is a mutable hash-table mapping of unique, hashable keys to arbitrary values, offering average O(1) lookup, insertion, and deletion."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1410,"output":43,"cacheRead":9216,"cacheWrite":0,"totalTokens":10669,"reasoningTokens":10,"cost":{"input":0.0002115,"output":0.0000258,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000264948}},"stopReason":"stop","timestamp":1790269697169,"responseId":"64d0e197-6a1a-4ad2-a58e-9740cc11ce7b","duration":2172.509,"ttft":1864.8809999999994}],"isTerminal":true}

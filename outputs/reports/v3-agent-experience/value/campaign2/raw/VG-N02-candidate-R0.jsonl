@@ -1,0 +1,32 @@
+{"type":"session","version":3,"id":"01a0d460-9321-72c9-ae15-48e0032d1bbc","timestamp":"2026-09-24T17:04:54.049Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-wxoffgrn\\run0020\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"What is 17 times 23? Reply with just the number."}],"attribution":"user","timestamp":1790269495833}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"What is 17 times 23? Reply with just the number."}],"attribution":"user","timestamp":1790269495833}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790269495927,"responseId":"0237be4a-075c-4ff1-8f9c-d7096a620640"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Simple"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" arithmetic"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"17"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"*"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"23"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" ="}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"391"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":".\n\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Just"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" reply"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" with"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" the"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" number"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"Simple arithmetic. 17*23 = 391.\n\nJust reply with the number."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"391"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"391"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple arithmetic. 17*23 = 391.\n\nJust reply with the number.","thinkingSignature":"reasoning_content"},{"type":"text","text":"391"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1409,"output":19,"cacheRead":9216,"cacheWrite":0,"totalTokens":10644,"reasoningTokens":17,"cost":{"input":0.00021135,"output":0.0000114,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000250398}},"stopReason":"stop","timestamp":1790269495927,"responseId":"0237be4a-075c-4ff1-8f9c-d7096a620640","duration":1424.2666,"ttft":1149.9012000000002,"completedAt":1790269497373}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple arithmetic. 17*23 = 391.\n\nJust reply with the number.","thinkingSignature":"reasoning_content"},{"type":"text","text":"391"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1409,"output":19,"cacheRead":9216,"cacheWrite":0,"totalTokens":10644,"reasoningTokens":17,"cost":{"input":0.00021135,"output":0.0000114,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000250398}},"stopReason":"stop","timestamp":1790269495927,"responseId":"0237be4a-075c-4ff1-8f9c-d7096a620640","duration":1424.2666,"ttft":1149.9012000000002},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"What is 17 times 23? Reply with just the number."}],"attribution":"user","timestamp":1790269495833},{"role":"assistant","content":[{"type":"thinking","thinking":"Simple arithmetic. 17*23 = 391.\n\nJust reply with the number.","thinkingSignature":"reasoning_content"},{"type":"text","text":"391"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1409,"output":19,"cacheRead":9216,"cacheWrite":0,"totalTokens":10644,"reasoningTokens":17,"cost":{"input":0.00021135,"output":0.0000114,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000250398}},"stopReason":"stop","timestamp":1790269495927,"responseId":"0237be4a-075c-4ff1-8f9c-d7096a620640","duration":1424.2666,"ttft":1149.9012000000002}],"isTerminal":true}
