@@ -17,6 +17,9 @@ Agent execution and orchestration belong to the host, not Second Brain.
   runtime or silently extend its qualification to every host.
 - Fix source-distribution-to-wheel builds by removing a redundant defaults
   inclusion rule; bundled configuration and migrations remain in the package.
+- Keep Python source distributions focused on the core package and its bundled
+  data, excluding local test caches and historical campaign captures. Full
+  repository source and adapter installers remain available through GitHub.
 - Independent issuer, protected custody and ledger signing remain unavailable.
   They are an external track, not a prerequisite for V3 development.
 

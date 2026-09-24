@@ -63,10 +63,13 @@ completion-control exception is documented under [Trust and security](#trust-and
 The Brain home is a directory holding canonical knowledge plus its SQLite index. Clone
 into a **dedicated checkout used as its own home**, and set `SECOND_BRAIN_HOME` first so
 no existing home is touched.
+This Windows quick start uses the complete repository, including host installers.
+The wheel and source distribution contain the Python core; host adapters are
+available in the repository and GitHub's full source archive.
 
 ```powershell
 $dev = Join-Path $HOME "second-brain-dev"
-git clone https://github.com/joebenberry-afk/The-2nd-Brain $dev
+git clone --branch v2.0.0 https://github.com/joebenberry-afk/The-2nd-Brain $dev
 Set-Location $dev
 $env:SECOND_BRAIN_HOME = $dev
 
