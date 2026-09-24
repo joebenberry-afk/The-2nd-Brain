@@ -266,6 +266,9 @@ def rebuild(home: Path) -> RefreshReport:
     return refresh(home)
 
 
+RELATIVE_FLOOR = 0.5
+
+
 @dataclass
 class Hit:
     """Search result with the matched record, rank, and which tokens matched."""
@@ -373,7 +376,13 @@ def search(
 
             results.append(Hit(record=record, score=bm25_score, matched=tuple(matched_list)))
 
-        # Return first limit results
+        # Relevance floor: BM25 is relative to the corpus, so a hit that scores less than
+        # half as well as the best one is incidental overlap on a common word, not a second
+        # answer. Pull stays short (fewer lines for the agent to read) and never empty when
+        # anything matched.
+        if results and results[0].score < 0:
+            top = results[0].score
+            results = [hit for hit in results if hit.score / top >= RELATIVE_FLOOR]
         return results[:limit]
     finally:
         conn.close()
