@@ -140,6 +140,64 @@ def test_ubiquitous_plan_falls_back_to_headline_confirmation() -> None:
     assert semantic.match_evidence(row, plan).contributing is True
 
 
+def test_single_matched_term_needs_rarity_or_full_request_coverage() -> None:
+    """VG-N06: one mid-frequency headline word is not evidence for a wider request.
+
+    'In one sentence, what is a Python dict? Reply with one sentence.' reached the
+    PYTHONHOME memory on 'python' alone (df 9 of 116) while 'dict' and 'sentence'
+    are not in the corpus at all, so the row explains neither of them either.
+    """
+    plan = _plan(
+        ("python", "one"),
+        {"python": 9, "one": 45},
+        116,
+        text="In one sentence, what is a Python dict? Reply with one sentence.",
+    )
+    row = {
+        "title": "Brain machine: PYTHONHOME pollution breaks bare python launches",
+        "_body": "shims strip PYTHONHOME before launching python",
+    }
+    evidence = semantic.match_evidence(row, plan)
+    # The request's content terms are the request's own tokens, not the plan's
+    # vocabulary-filtered subset: 'dict' and 'sentence' are not in the corpus.
+    assert plan.content_terms() == ("one", "sentence", "python", "dict", "reply")
+    assert evidence.matched == ("python",)
+    assert evidence.headline_matched == ("python",)
+    assert evidence.unexplained_terms == ("one", "sentence", "dict", "reply")
+    assert evidence.contributing is False
+
+    # A row that explains every other content term needs no rare term: the request
+    # asked for this row's own subject and nothing else.
+    covered = _plan(("python",), {"python": 9}, 116, text="python launches")
+    covered_evidence = semantic.match_evidence(row, covered)
+    assert covered_evidence.unexplained_terms == ()
+    assert covered_evidence.contributing is True
+
+    # A near-unique matched term names one memory's own subject matter: still evidence.
+    rare = _plan(("pythonhome",), {"pythonhome": 1}, 116, text="How do I clear PYTHONHOME?")
+    rare_evidence = semantic.match_evidence(row, rare)
+    assert rare_evidence.unexplained_terms == ("clear",)
+    assert rare_evidence.contributing is True
+
+
+def test_two_matched_terms_keep_the_weaker_headline_evidence() -> None:
+    """The single-term guard judges single-term rows only; a second match is enough."""
+    plan = _plan(
+        ("python", "launch"),
+        {"python": 9, "launch": 4},
+        116,
+        text="In one sentence, what is a Python launcher? Reply with one sentence.",
+    )
+    row = {
+        "title": "Python launcher hygiene",
+        "_body": "shims strip malformed variables before launching anything",
+    }
+    evidence = semantic.match_evidence(row, plan)
+    assert evidence.matched == ("python", "launch")
+    assert evidence.unexplained_terms == ()
+    assert evidence.contributing is True
+
+
 def test_plan_without_terms_passes_rows_through() -> None:
     plan = semantic.QueryMatchPlan(text="!!")
     rows = [{"title": "x", "_body": "y"}]
@@ -195,6 +253,29 @@ def _overlap_corpus(home: Path) -> dict[str, str]:
     }
 
 
+def _single_term_corpus(home: Path) -> dict[str, str]:
+    """VG-N06 at fixture scale: one matched term that is specific but not near-unique.
+
+    The request's vocabulary has to sort into exactly what the live case had: 30
+    memories ('python' then names 3 of them, the specificity bar at 10%), one row
+    with 'python' in its headline and two with it only in the body, and a rare
+    identifier ('lantern', one memory) for the other direction.
+    """
+    corpus = {
+        "launcher": _add(
+            home,
+            "Python launcher hygiene",
+            "shims strip malformed environment variables before launching python",
+        ),
+        "venv": _add(home, "Venv layout", "the venv holds a python interpreter copy"),
+        "pin": _add(home, "Version pin", "the pinned python version is recorded"),
+        "lantern": _add(home, "Lantern cache identifier", "the Lantern cache id is lantern-7719"),
+    }
+    for index in range(26):
+        _add(home, f"Unrelated note {index}", f"filler text {index}")
+    return corpus
+
+
 def _attempt_records(home: Path) -> list[dict]:
     """brain_retrieval_attempt records for this brain's telemetry dir."""
     directory = home / "telemetry" / "agent-performance"
@@ -231,6 +312,32 @@ def test_instruction_overlap_prompt_does_not_inject(brain_home) -> None:
     assert attempt["candidate_count"] >= 1
     assert attempt["contributing_count"] == 0
     assert attempt["noncontributing_count"] >= 1
+
+
+def test_single_term_guard_abstains_on_a_generic_question_and_keeps_a_rare_one(
+    brain_home,
+) -> None:
+    """Both directions end to end: the generic question drops, the rare-term one stays."""
+    corpus = _single_term_corpus(brain_home)
+    generic = _inject(
+        brain_home,
+        "In one sentence, what is a Python dict? Reply with one sentence.",
+        session_id="s-single-generic",
+    )
+    assert generic.decision is InjectionDecision.NO_INJECTION
+    # Candidates were retrieved and judged: the abstention is the contribution rule.
+    assert generic.reason is NoInjectionReason.LOW_CONFIDENCE
+    assert corpus["launcher"] in generic.candidate_ids
+    attempt = [
+        r
+        for r in _attempt_records(brain_home)
+        if r.get("kind") == "brain_retrieval_attempt" and r.get("session") == "s-single-generic"
+    ][-1]
+    assert attempt["candidate_count"] >= 1 and attempt["contributing_count"] == 0
+
+    rare = _inject(brain_home, "Remind me of the lantern id.", session_id="s-single-rare")
+    assert rare.decision is InjectionDecision.INJECT
+    assert rare.selected_ids == [corpus["lantern"]]
 
 
 def test_contribution_abstention_is_recorded_as_a_decision(brain_home) -> None:

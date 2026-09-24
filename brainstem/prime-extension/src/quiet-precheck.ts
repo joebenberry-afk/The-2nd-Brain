@@ -37,7 +37,12 @@
  *  - `semantic.match_evidence`'s three contribution rules: a specific plan term
  *    confirmed by the row's headline, two near-unique plan terms coinciding
  *    anywhere in the row, or a headline confirmation when no plan term can
- *    discriminate. Matching is `str.casefold()` token prefixes, which JS cannot
+ *    discriminate. Python additionally strengthens a row whose whole match is ONE
+ *    plan term (`MatchEvidence.unexplained_terms`: the term must be near-unique or
+ *    the request must carry no other content term the row cannot confirm). That
+ *    rule is NOT mirrored here — a single-term hit still answers `run` — so this
+ *    precheck stays a sound superset and only loses the saving it would gain.
+ *    Matching is `str.casefold()` token prefixes, which JS cannot
  *    reproduce for non-ASCII text (`"ß"` folds to `"ss"`), so a RETRIEVED row
  *    whose text is not ASCII answers `run` instead of being judged;
  *  - `capsule_runtime.ensure_capsule` + `vmem.VMemStore.render_hot_context` plus the

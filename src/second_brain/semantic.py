@@ -1120,6 +1120,9 @@ _SPECIFIC_TERM_DF_RATIO = 0.10
 _SPECIFIC_TERM_MIN_DF = 2
 # A term appearing in at most two memories names one memory's own subject matter
 # (an identifier, a symbol, a named fact) rather than a topic the corpus shares.
+# A row whose evidence rests on a single matched plan term is held to this bar (see
+# `match_evidence`): one mid-frequency word is weak evidence when the request also
+# carries content terms the row cannot explain, unless that word names one memory.
 _UNIQUE_TERM_MAX_DF = 2
 # Body-only evidence needs two such coincidences; a single rare word in a body is
 # how instruction vocabulary ("rewrite", "passive", "nothing") overlaps memories.
@@ -1191,6 +1194,25 @@ class QueryMatchPlan:
         """Whether any plan term can tell memories apart at all."""
         return any(self.is_specific(term) for term in self.terms)
 
+    def content_terms(self) -> tuple[str, ...]:
+        """The request's content tokens after the stopword filter, out-of-vocabulary included.
+
+        ``terms`` is what the corpus could match: vocabulary-filtered, IDF-ranked and
+        capped. This is what the request actually said, so a row can be judged on how
+        much of the request it explains instead of on the plan's surviving subset. A
+        non-ASCII request yields none (the tokenizer declines it), which only widens
+        what counts as unexplained.
+        """
+        return tuple(_query_candidates(self.text))
+
+    def unexplained_content_terms(self, row_tokens: Sequence[str]) -> tuple[str, ...]:
+        """Content terms no token of `row_tokens` confirms, under the matching prefix rule."""
+        return tuple(
+            term
+            for term in self.content_terms()
+            if not any(token.startswith(term) for token in row_tokens)
+        )
+
 
 @dataclass(frozen=True)
 class MatchEvidence:
@@ -1202,6 +1224,9 @@ class MatchEvidence:
     specific_matched: tuple[str, ...] = ()
     unique_matched: tuple[str, ...] = ()
     quoted_headline: tuple[str, ...] = ()
+    #: Request content terms the row does not confirm; populated only when the row
+    #: matched exactly one plan term (the case the single-term guard judges).
+    unexplained_terms: tuple[str, ...] = ()
 
 
 def _prefix_bounds(
@@ -1455,10 +1480,24 @@ def match_evidence(row: dict, plan: QueryMatchPlan) -> MatchEvidence:
     body: the live corpus produced the NB-OK-17 false injection that way, where 81
     of 116 memories satisfied 2 of the 3 surviving plan terms ('tools', 'use',
     'exactly') and none of them matched a headline.
+
+    A headline confirmation is at its weakest when it rests on **one matched plan
+    term**: a single mid-frequency word can be shared by a memory and a request that
+    are about different things. Such a row must clear one of two bars:
+
+    * the term is near-unique (``df <= 2``) — the word itself names one memory's own
+      subject matter, so only that memory can be the one the request means (a short
+      question such as "What does PYTHONHOME stand for?" lives here); or
+    * the row confirms every other content term the request carries, including terms
+      the corpus does not contain at all — the request asked for the row's own
+      subject and nothing else (VG-N06: "In one sentence, what is a Python dict?
+      Reply with one sentence." reached the PYTHONHOME memory on 'python' alone
+      while 'dict' and 'sentence' appear nowhere in the corpus).
     """
     if not plan.terms:
         return MatchEvidence(contributing=True)
-    matched = _term_hit_tokens(plan.terms, _row_haystack_tokens(row))
+    row_tokens = _row_haystack_tokens(row)
+    matched = _term_hit_tokens(plan.terms, row_tokens)
     headline_matched = _term_hit_tokens(matched, _row_headline_tokens(row))
     specific_matched = tuple(term for term in matched if plan.is_specific(term))
     unique_matched = tuple(term for term in matched if plan.is_unique(term))
@@ -1474,13 +1513,19 @@ def match_evidence(row: dict, plan: QueryMatchPlan) -> MatchEvidence:
         and all(plan.is_ubiquitous(term) for term in plan.terms)
     ):
         headline_evidence = any(term not in quoted_headline for term in headline_matched)
+    contributing = headline_evidence or len(unique_matched) >= _UNIQUE_TERM_MIN_HITS
+    single_term = matched[0] if len(matched) == 1 else None
+    unexplained = plan.unexplained_content_terms(row_tokens) if single_term else ()
+    if contributing and single_term is not None and unexplained and not plan.is_unique(single_term):
+        contributing = False
     return MatchEvidence(
-        contributing=headline_evidence or len(unique_matched) >= _UNIQUE_TERM_MIN_HITS,
+        contributing=contributing,
         matched=matched,
         headline_matched=headline_matched,
         specific_matched=specific_matched,
         unique_matched=unique_matched,
         quoted_headline=quoted_headline,
+        unexplained_terms=unexplained,
     )
 
 
