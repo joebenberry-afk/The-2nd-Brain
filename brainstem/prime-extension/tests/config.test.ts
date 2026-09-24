@@ -309,11 +309,11 @@ describe("loadContextPagingConfig (file read, never throws)", () => {
   });
 });
 
-describe("repository P3.3 runtime gates", () => {
-  it("enables the existing RTD, VMem admission, and context-paging path", async () => {
+describe("repository shipping context gates", () => {
+  it("ships tool-output rewriting and context paging off", async () => {
     const text = await readFile(join(process.cwd(), "..", "..", "config", "context.toml"), "utf8");
-    expect(rtdConfigFromContextToml(text).enabled).toBe(true);
-    expect(vmemAdmissionConfigFromContextToml(text).enabled).toBe(true);
-    expect(contextPagingConfigFromContextToml(text).enabled).toBe(true);
+    expect(rtdConfigFromContextToml(text).enabled).toBe(false);
+    expect(vmemAdmissionConfigFromContextToml(text).enabled).toBe(false);
+    expect(contextPagingConfigFromContextToml(text).enabled).toBe(false);
   });
 });
