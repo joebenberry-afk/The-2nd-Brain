@@ -1291,8 +1291,15 @@ def _production_v2_definitions() -> list[dict[str, str | int]]:
     return definitions
 
 
+# The V3 memory CLI (owner decision O1) is a separate command surface, not a competitor for
+# the v2 command group: exactly this entry point and this package are reported under ``v3_cli``.
+_V3_CLI_ENTRYPOINT = ("brain", "second_brain.kb.cli:main")
+_V3_CLI_PACKAGE = ("src", "second_brain", "kb")
+
+
 def _cli_ownership() -> dict[str, Any]:
     cli_path = REPO_ROOT / "src" / "second_brain" / "cli.py"
+    v3_package = REPO_ROOT.joinpath(*_V3_CLI_PACKAGE)
     metadata_path = REPO_ROOT / "pyproject.toml"
     findings: dict[str, Any] = {
         "path": cli_path.relative_to(REPO_ROOT).as_posix(),
@@ -1302,6 +1309,7 @@ def _cli_ownership() -> dict[str, Any]:
         "v2_parser_owned": False,
         "v2_dispatch_owned": False,
         "competing_modules": [],
+        "v3_cli": {"entrypoint": None, "modules": []},
     }
     try:
         tree = ast.parse(cli_path.read_text(encoding="utf-8"), filename=str(cli_path))
@@ -1336,10 +1344,13 @@ def _cli_ownership() -> dict[str, Any]:
                 str(name): str(target) for name, target in entrypoints.items()
             }
             findings["entrypoint"] = findings["entrypoints"].get("brainctl")
+            v3_name, v3_target = _V3_CLI_ENTRYPOINT
+            if findings["entrypoints"].get(v3_name) == v3_target:
+                findings["v3_cli"]["entrypoint"] = f"{v3_name}={v3_target}"
             findings["competing_modules"] = sorted(
                 f"{name}={target}"
                 for name, target in findings["entrypoints"].items()
-                if name != "brainctl" or target != "second_brain.cli:main"
+                if (name, target) not in {("brainctl", "second_brain.cli:main"), _V3_CLI_ENTRYPOINT}
             )
     except (OSError, tomllib.TOMLDecodeError) as exc:
         findings["metadata_error"] = f"{type(exc).__name__}: {exc}"
@@ -1362,7 +1373,11 @@ def _cli_ownership() -> dict[str, Any]:
             )
             for node in ast.walk(tree)
         ):
-            ast_competing.append(path.relative_to(REPO_ROOT).as_posix())
+            relative = path.relative_to(REPO_ROOT).as_posix()
+            if path.is_relative_to(v3_package):
+                findings["v3_cli"]["modules"].append(relative)
+            else:
+                ast_competing.append(relative)
     findings["competing_modules"] = sorted(set(findings["competing_modules"]) | set(ast_competing))
     return findings
 
