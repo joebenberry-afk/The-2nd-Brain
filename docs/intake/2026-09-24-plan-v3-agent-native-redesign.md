@@ -156,6 +156,47 @@ evaluation shows it pays.
 - **Hosts:** OMP and Claude Code read and write the same store, so a lesson learned in one is
   available in the other.
 
+### 3.7 Technology choices (measured, not assumed)
+
+Measured on the cloud Linux container, warm OS cache, 5 runs each (ms, wall clock per process):
+
+| Runtime | Empty process | 2,000-row in-memory FTS5 build + BM25 query | Artifact |
+|---|---|---|---|
+| Python 3 (`sqlite3`, stdlib only) | 12–18 | 27–28 | needs a venv |
+| Go (`modernc.org/sqlite`, pure Go) | 3–7 | 22–29 | 6.3 MB static binary |
+| Bun (`bun build --compile`, `bun:sqlite`) | 12–13 | 54–60 | 99 MB binary |
+| Node 22 (`node:sqlite`) | 30–35 | — | needs Node |
+| Rust | 3–5 | not built | static binary |
+| **Today's Brain hook** (Python, full package) | **148–165** | — | 88 ms is importing `second_brain.cli` |
+
+FTS5 is available in Python `sqlite3`, `node:sqlite`, `bun:sqlite` and `modernc.org/sqlite`.
+
+**Language: keep Python for the core.** The 155 ms hook cost is the Brain's import graph, not the
+language — plain Python runs the same index workload in 28 ms, within 5 ms of Go. A lean entry
+point that imports only `sqlite3` and the record/view modules reaches that range without a
+rewrite. A Go rewrite would buy ~5 ms and a single-binary install (no venv, no `PYTHONHOME` trap)
+at the cost of re-implementing and re-qualifying the core; revisit only if Windows Python
+distribution keeps breaking. Bun's compiled binary is slower and 99 MB. Rust is overkill for
+thousands of records.
+
+**Hot paths do no retrieval at all.** Push moments read precompiled views: the session hook reads
+`views/<project>/brief.md`; the error hook looks up `corrections.json`. The OMP extension reads the
+same files in-process (≈100 lines of TypeScript, zero spawn), so the TypeScript mirror of the
+retrieval rules (`quiet-precheck.ts` and its parity machinery) is no longer needed. Only
+`brain q` queries the index.
+
+**Database: SQLite FTS5 as a derived index over Markdown files in git.** At thousands of records
+a BM25 query is a few milliseconds; column weights boost `title` and `triggers`. Rejected for the
+product: Postgres/pgvector and Neo4j/FalkorDB (servers, ARCH-04), LanceDB (vector-first, not
+needed), Tantivy (Rust-only, no gain at this scale). If a paraphrase class ever fails lexical
+(E02 trigger), add `sqlite-vec` with a static embedding model (model2vec, ~30 MB, CPU) in the same
+file, one versioned vector space per encoder (RET-04). DuckDB is fine for evaluation analysis
+over telemetry JSONL, not in the product.
+
+**Sync: git, one file per record, sortable unique ids.** Merge conflicts are rare because records
+are small and mostly append-only; the index and views are never synced, only rebuilt. CRDT sync
+(Automerge etc.) is unnecessary for one user across a few machines.
+
 ## 4. Mapping to the V3 requirements
 
 | Area | How the redesign meets it | Contract change |
@@ -240,6 +281,7 @@ matching, scope isolation, poisoning fixtures, index rebuild from files.
 | O4 | A private git-synced Brain home replaces the cloud seed |
 | O5 | Archive, then delete, the modules in §5 after parity |
 | O6 | CLI name `brain` (keep `brainctl` as an alias) |
+| O7 | Keep Python for the core with a lean entry point; no language rewrite now (§3.7) |
 
 ## Sources
 
