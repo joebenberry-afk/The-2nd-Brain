@@ -306,17 +306,35 @@ def records_dir(home: Path) -> Path:
     return Path(home) / "records"
 
 
+def private_dir(home: Path) -> Path:
+    """Where ``private: true`` records live: inside records/, but gitignored, so they are
+    searchable locally and never leave the machine through ``brain sync``."""
+    return records_dir(home) / "private"
+
+
+def _placed(home: Path, record_id: str, private: bool) -> Path:
+    return (private_dir(home) if private else records_dir(home)) / f"{record_id}.md"
+
+
 def record_path(home: Path, record_id: str) -> Path:
-    return records_dir(home) / f"{record_id}.md"
+    """The file holding a record: the private copy when one exists, else the shared one."""
+    private = _placed(home, record_id, True)
+    return private if private.is_file() else _placed(home, record_id, False)
 
 
 def save(home: Path, record: Record) -> Path:
-    """Validate and write one record; returns its path."""
+    """Validate and write one record where its privacy says; returns its path.
+
+    Changing ``private`` moves the file: the new copy is written first, then the old one is
+    removed, so a crash in between leaves a duplicate (reported by ``load_all``), never a loss.
+    """
     errors = validate(record)
     if errors:
         raise RecordError(f"{record.id}: " + "; ".join(errors))
-    path = record_path(home, record.id)
+    path = _placed(home, record.id, record.private)
     write_atomic(path, dumps(record))
+    other = _placed(home, record.id, not record.private)
+    other.unlink(missing_ok=True)
     return path
 
 
@@ -328,25 +346,38 @@ def load(home: Path, record_id: str) -> Record:
 
 
 def load_all(home: Path) -> tuple[list[Record], list[str]]:
-    """Every parseable, valid record plus one error line per rejected file."""
+    """Every parseable, valid record (shared and private) plus one error line per rejected
+    file. A record file in the wrong place for its ``private`` flag, or one id present in both
+    places, is rejected: a private fact must never sit where sync would publish it."""
     records: list[Record] = []
     errors: list[str] = []
-    directory = records_dir(home)
-    if not directory.is_dir():
-        return records, errors
-    for path in sorted(directory.glob("*.md")):
-        try:
-            record = read(path)
-        except (OSError, UnicodeDecodeError, RecordError) as exc:
-            errors.append(f"{path.name}: {exc}")
+    seen: dict[str, Path] = {}
+    for directory, private in ((records_dir(home), False), (private_dir(home), True)):
+        if not directory.is_dir():
             continue
-        problems = validate(record)
-        if record.id != path.stem:
-            problems.append(f"id {record.id!r} does not match file name")
-        if problems:
-            errors.append(f"{path.name}: " + "; ".join(problems))
-            continue
-        records.append(record)
+        for path in sorted(directory.glob("*.md")):
+            label = f"private/{path.name}" if private else path.name
+            try:
+                record = read(path)
+            except (OSError, UnicodeDecodeError, RecordError) as exc:
+                errors.append(f"{label}: {exc}")
+                continue
+            problems = validate(record)
+            if record.id != path.stem:
+                problems.append(f"id {record.id!r} does not match file name")
+            if record.private != private:
+                problems.append(
+                    "private record outside records/private"
+                    if record.private
+                    else "shared record inside records/private"
+                )
+            if record.id in seen:
+                problems.append(f"duplicate of {seen[record.id]}")
+            if problems:
+                errors.append(f"{label}: " + "; ".join(problems))
+                continue
+            seen[record.id] = path
+            records.append(record)
     return records, errors
 
 

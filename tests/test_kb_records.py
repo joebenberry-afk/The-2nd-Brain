@@ -134,3 +134,22 @@ def test_core_import_stays_lean() -> None:
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == ""
+
+
+def test_private_records_live_in_the_ignored_folder_and_move_with_the_flag(tmp_path: Path) -> None:
+    rec = _record(private=True)
+    path = records.save(tmp_path, rec)
+    assert path == records.private_dir(tmp_path) / f"{rec.id}.md"
+    assert records.load(tmp_path, rec.id) == rec
+    assert records.load_all(tmp_path) == ([rec], [])
+    shared = records.replace(rec, private=False)
+    assert records.save(tmp_path, shared) == records.records_dir(tmp_path) / f"{rec.id}.md"
+    assert not path.exists()
+    assert records.load_all(tmp_path) == ([shared], [])
+
+
+def test_misplaced_private_record_is_rejected(tmp_path: Path) -> None:
+    rec = _record(private=True)
+    records.write_atomic(records.records_dir(tmp_path) / f"{rec.id}.md", records.dumps(rec))
+    loaded, errors = records.load_all(tmp_path)
+    assert loaded == [] and "private record outside records/private" in errors[0]
