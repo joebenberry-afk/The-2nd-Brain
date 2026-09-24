@@ -2,7 +2,7 @@
 date: 2026-09-24
 type: report
 authority: proposed
-status: awaiting owner approval (decision D8)
+status: applied 2026-09-24 (owner approved D8; non-OMP harnesses out of focus, so both Antigravity checkpoints retired as history)
 scope: v3-currentness-sweep
 supersedes: none-additive
 superseded-by: none

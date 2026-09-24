@@ -172,7 +172,8 @@ def correction_table(recs: list[records.Record]) -> list[dict]:
         # Build text: title, and if room, first sentence of body
         text = r.title
         if r.body:
-            first_sentence = r.body.split(".")[0].strip()
+            first_sentence = re.split(r"(?<=[.!?])\s", " ".join(r.body.split()), maxsplit=1)[0]
+            first_sentence = first_sentence.rstrip(".").strip()
             if first_sentence:
                 text_candidate = f"{r.title}: {first_sentence}"
                 if len(text_candidate) <= CORRECTION_TOKEN_BUDGET * 4:

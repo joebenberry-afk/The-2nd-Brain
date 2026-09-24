@@ -399,9 +399,11 @@ def render_hit(hit: Hit) -> str:
 
     # Add supersession info if applicable
     if record.status == "superseded":
-        superseded_by = record.superseded_by or "nothing"
-        superseded_at = record.superseded_at[:10] if record.superseded_at else ""
-        line += f" (superseded by {superseded_by} on {superseded_at})"
+        when = record.superseded_at[:10] if record.superseded_at else "?"
+        if record.superseded_by:
+            line += f" (superseded by {record.superseded_by} on {when})"
+        else:
+            line += f" (invalidated on {when})"
 
     # Truncate if needed
     if len(line) > 240:
@@ -608,6 +610,54 @@ def retire(home: Path, record_id: str, *, reason: str, effective_at: str | None 
         superseded_at=effective_at,
     )
 
+    records.save(home, updated)
+    refresh(home)
+    from . import views
+
+    views.compile_views(home)
+    return updated
+
+
+def edit(
+    home: Path,
+    record_id: str,
+    *,
+    type: str | None = None,
+    title: str | None = None,
+    valid_from: str | None = None,
+    add_evidence: tuple[str, ...] = (),
+    add_trigger_errors: tuple[str, ...] = (),
+    add_trigger_paths: tuple[str, ...] = (),
+    add_terms: tuple[str, ...] = (),
+) -> Record:
+    """Change a record's description, never its standing.
+
+    Type, title, valid time, evidence, triggers and terms may change. Status, grade, scope and
+    supersession have their own guarded commands (promote, supersede, retire), so an edit can
+    neither raise trust nor widen who sees a record.
+    """
+    record = records.load(home, record_id)
+    if not record.active:
+        raise RecordError(f"{record_id}: only active records can be edited")
+
+    def extend(current: tuple[str, ...], extra: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys([*current, *(item.strip() for item in extra if item.strip())]))
+
+    changes: dict[str, object] = {
+        "evidence": extend(record.evidence, add_evidence),
+        "trigger_errors": extend(record.trigger_errors, add_trigger_errors),
+        "trigger_paths": extend(record.trigger_paths, add_trigger_paths),
+        "terms": extend(record.terms, add_terms),
+        "extra": {**record.extra, "edited_at": records.now_iso()},
+    }
+    if type is not None:
+        changes["type"] = type
+    if title is not None:
+        changes["title"] = title
+    if valid_from is not None:
+        records.parse_time(valid_from)
+        changes["valid_from"] = valid_from
+    updated = records.replace(record, **changes)
     records.save(home, updated)
     refresh(home)
     from . import views

@@ -1,4 +1,4 @@
-"""`brain` index commands (q, show, add, supersede, retire, promote, index)."""
+"""`brain` index commands (q, show, add, edit, supersede, retire, promote, index)."""
 
 from __future__ import annotations
 
@@ -261,6 +261,32 @@ def handle_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_edit(args: argparse.Namespace) -> int:
+    """Change a record's type, title, valid time, evidence or triggers."""
+    from .cli import home_from
+
+    home = home_from(args)
+    try:
+        record = index.edit(
+            home,
+            args.id,
+            type=args.type,
+            title=args.title,
+            valid_from=args.valid_from,
+            add_evidence=tuple(args.evidence),
+            add_trigger_errors=tuple(args.trigger_error),
+            add_trigger_paths=tuple(args.trigger_path),
+            add_terms=tuple(args.term),
+        )
+    except RecordError as e:
+        print(f"brain: {e}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps({"id": record.id, "type": record.type}) if args.json else f"{record.id} edited"
+    )
+    return 0
+
+
 def register(sub: argparse._SubParsersAction, common: argparse.ArgumentParser) -> None:
     """Register all index commands."""
 
@@ -318,6 +344,21 @@ def register(sub: argparse._SubParsersAction, common: argparse.ArgumentParser) -
     retire_parser.add_argument("--reason", required=True, help="Retirement reason")
     retire_parser.add_argument("--effective-at", default=None, help="Effective time (ISO-8601)")
     retire_parser.set_defaults(func=handle_retire)
+
+    edit_parser = sub.add_parser(
+        "edit", parents=[common], help="Change type/title/evidence/triggers (never standing)"
+    )
+    edit_parser.add_argument("id", help="Record id")
+    edit_parser.add_argument("--type", default=None, choices=records.RECORD_TYPES)
+    edit_parser.add_argument("--title", default=None)
+    edit_parser.add_argument("--valid-from", default=None, help="When it became true (ISO-8601)")
+    edit_parser.add_argument("--evidence", action="append", default=[], help="Add evidence")
+    edit_parser.add_argument(
+        "--trigger-error", action="append", default=[], help="Add an error pattern (re: for regex)"
+    )
+    edit_parser.add_argument("--trigger-path", action="append", default=[], help="Add a path glob")
+    edit_parser.add_argument("--term", action="append", default=[], help="Add a search term")
+    edit_parser.set_defaults(func=handle_edit)
 
     # index command
     index_parser = sub.add_parser("index", parents=[common], help="Manage the index")
