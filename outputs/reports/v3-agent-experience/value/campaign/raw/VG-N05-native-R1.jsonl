@@ -1,0 +1,39 @@
+{"type":"session","version":3,"id":"01a0d41c-20bb-7512-9059-d4cb94df1ddd","timestamp":"2026-09-24T15:50:08.315Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-_rontbhs\\run0052\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Write a Python one-liner that prints the sum of squares of the integers 1 through 10. Reply with only the code."}],"attribution":"user","timestamp":1790265011216}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Write a Python one-liner that prints the sum of squares of the integers 1 through 10. Reply with only the code."}],"attribution":"user","timestamp":1790265011216}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790265011276,"responseId":"97d642d1-30bf-49b7-8ae7-ea474ed600d6"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Simple"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" Reply"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" only"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" code"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":".\n\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"`"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"print"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"(sum"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"(i"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"*i"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" for"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" i"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" in"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" range"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"("}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"1"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"11"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":")))"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"`"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"Simple. Reply only code.\n\n`print(sum(i*i for i in range(1,11)))`"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"```"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"python\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"print(sum(i*i for i in range(1, 11)))\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"```"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"```python\nprint(sum(i*i for i in range(1, 11)))\n```"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple. Reply only code.\n\n`print(sum(i*i for i in range(1,11)))`","thinkingSignature":"reasoning_content"},{"type":"text","text":"```python\nprint(sum(i*i for i in range(1, 11)))\n```"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1420,"output":40,"cacheRead":9216,"cacheWrite":0,"totalTokens":10676,"reasoningTokens":21,"cost":{"input":0.000213,"output":0.000024,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00026464800000000003}},"stopReason":"stop","timestamp":1790265011276,"responseId":"97d642d1-30bf-49b7-8ae7-ea474ed600d6","duration":1880.1086000000005,"ttft":1306.4955,"completedAt":1790265013160}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple. Reply only code.\n\n`print(sum(i*i for i in range(1,11)))`","thinkingSignature":"reasoning_content"},{"type":"text","text":"```python\nprint(sum(i*i for i in range(1, 11)))\n```"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1420,"output":40,"cacheRead":9216,"cacheWrite":0,"totalTokens":10676,"reasoningTokens":21,"cost":{"input":0.000213,"output":0.000024,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00026464800000000003}},"stopReason":"stop","timestamp":1790265011276,"responseId":"97d642d1-30bf-49b7-8ae7-ea474ed600d6","duration":1880.1086000000005,"ttft":1306.4955},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Write a Python one-liner that prints the sum of squares of the integers 1 through 10. Reply with only the code."}],"attribution":"user","timestamp":1790265011216},{"role":"assistant","content":[{"type":"thinking","thinking":"Simple. Reply only code.\n\n`print(sum(i*i for i in range(1,11)))`","thinkingSignature":"reasoning_content"},{"type":"text","text":"```python\nprint(sum(i*i for i in range(1, 11)))\n```"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1420,"output":40,"cacheRead":9216,"cacheWrite":0,"totalTokens":10676,"reasoningTokens":21,"cost":{"input":0.000213,"output":0.000024,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00026464800000000003}},"stopReason":"stop","timestamp":1790265011276,"responseId":"97d642d1-30bf-49b7-8ae7-ea474ed600d6","duration":1880.1086000000005,"ttft":1306.4955}],"isTerminal":true}

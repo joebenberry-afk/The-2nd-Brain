@@ -1,0 +1,54 @@
+{"type":"session","version":3,"id":"01a0d413-06bb-7107-b177-1eec87d305de","timestamp":"2026-09-24T15:40:11.835Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-_rontbhs\\run0029\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Format these numbers as a markdown table with a single column header `n`: 1, 2, 3. Reply with only the table."}],"attribution":"user","timestamp":1790264414264}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Format these numbers as a markdown table with a single column header `n`: 1, 2, 3. Reply with only the table."}],"attribution":"user","timestamp":1790264414264}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790264414563,"responseId":"f924f4b9-0014-4ac1-9390-160003c4c354"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Simple"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" task"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":":"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" output"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" mark"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"down"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" table"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" with"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" header"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" `"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"`"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" and"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" rows"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"1"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"2"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"3"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"Simple task: output markdown table with header `n` and rows 1, 2, 3."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|---"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"1"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"2"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"3"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple task: output markdown table with header `n` and rows 1, 2, 3.","thinkingSignature":"reasoning_content"},{"type":"text","text":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1424,"output":41,"cacheRead":9216,"cacheWrite":0,"totalTokens":10681,"reasoningTokens":23,"cost":{"input":0.0002136,"output":0.000024599999999999998,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000265848}},"stopReason":"stop","timestamp":1790264414563,"responseId":"f924f4b9-0014-4ac1-9390-160003c4c354","duration":2042.8388999999997,"ttft":1845.3791,"completedAt":1790264416626}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple task: output markdown table with header `n` and rows 1, 2, 3.","thinkingSignature":"reasoning_content"},{"type":"text","text":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1424,"output":41,"cacheRead":9216,"cacheWrite":0,"totalTokens":10681,"reasoningTokens":23,"cost":{"input":0.0002136,"output":0.000024599999999999998,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000265848}},"stopReason":"stop","timestamp":1790264414563,"responseId":"f924f4b9-0014-4ac1-9390-160003c4c354","duration":2042.8388999999997,"ttft":1845.3791},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Format these numbers as a markdown table with a single column header `n`: 1, 2, 3. Reply with only the table."}],"attribution":"user","timestamp":1790264414264},{"role":"assistant","content":[{"type":"thinking","thinking":"Simple task: output markdown table with header `n` and rows 1, 2, 3.","thinkingSignature":"reasoning_content"},{"type":"text","text":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1424,"output":41,"cacheRead":9216,"cacheWrite":0,"totalTokens":10681,"reasoningTokens":23,"cost":{"input":0.0002136,"output":0.000024599999999999998,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000265848}},"stopReason":"stop","timestamp":1790264414563,"responseId":"f924f4b9-0014-4ac1-9390-160003c4c354","duration":2042.8388999999997,"ttft":1845.3791}],"isTerminal":true}

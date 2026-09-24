@@ -1,0 +1,719 @@
+{
+ "python": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\.venv\\Scripts\\python.exe",
+ "tasks": 20,
+ "memory_tasks_injecting": 10,
+ "memory_tasks_with_expected_memory_in_packet": 10,
+ "no_benefit_tasks_delivering": 2,
+ "results": [
+  {
+   "task": "VG-M01",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 375.1,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-b67de5057f76"
+   ],
+   "selected_ids": [
+    "mem-b67de5057f76"
+   ],
+   "packet_tokens": 201,
+   "packet_memory_ids": [
+    "mem-b67de5057f76"
+   ],
+   "expected_present": {
+    "mem-b67de5057f76": true
+   },
+   "delivered_expected": {
+    "mem-b67de5057f76": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 145.213,
+    "capsule": 15.016,
+    "render": 23.398,
+    "total": 183.728
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M02",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 444.7,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-a8d221e64549"
+   ],
+   "selected_ids": [
+    "mem-a8d221e64549"
+   ],
+   "packet_tokens": 123,
+   "packet_memory_ids": [
+    "mem-a8d221e64549"
+   ],
+   "expected_present": {
+    "mem-a8d221e64549": true
+   },
+   "delivered_expected": {
+    "mem-a8d221e64549": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 214.857,
+    "capsule": 15.238,
+    "render": 20.02,
+    "total": 250.203
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M03",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 369.7,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-29557f93448f"
+   ],
+   "selected_ids": [
+    "mem-29557f93448f"
+   ],
+   "packet_tokens": 189,
+   "packet_memory_ids": [
+    "mem-29557f93448f"
+   ],
+   "expected_present": {
+    "mem-29557f93448f": true
+   },
+   "delivered_expected": {
+    "mem-29557f93448f": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 141.546,
+    "capsule": 14.924,
+    "render": 20.1,
+    "total": 176.688
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M04",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 385.1,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-3848b16778bd"
+   ],
+   "selected_ids": [
+    "mem-3848b16778bd"
+   ],
+   "packet_tokens": 279,
+   "packet_memory_ids": [
+    "mem-3848b16778bd"
+   ],
+   "expected_present": {
+    "mem-3848b16778bd": true
+   },
+   "delivered_expected": {
+    "mem-3848b16778bd": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 143.798,
+    "capsule": 15.961,
+    "render": 23.387,
+    "total": 183.242
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M05",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 467.9,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "selected_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "packet_tokens": 384,
+   "packet_memory_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "expected_present": {
+    "mem-79d7c4fd9876": true
+   },
+   "delivered_expected": {
+    "mem-79d7c4fd9876": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 216.296,
+    "capsule": 16.105,
+    "render": 23.54,
+    "total": 256.038
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M06",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 553.7,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-f745bcb2eff2"
+   ],
+   "selected_ids": [
+    "mem-f745bcb2eff2"
+   ],
+   "packet_tokens": 223,
+   "packet_memory_ids": [
+    "mem-f745bcb2eff2"
+   ],
+   "expected_present": {
+    "mem-f745bcb2eff2": true
+   },
+   "delivered_expected": {
+    "mem-f745bcb2eff2": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 318.427,
+    "capsule": 14.095,
+    "render": 20.289,
+    "total": 352.897
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M07",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 364.9,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-b0d6cc3de0ab"
+   ],
+   "selected_ids": [
+    "mem-b0d6cc3de0ab"
+   ],
+   "packet_tokens": 183,
+   "packet_memory_ids": [
+    "mem-b0d6cc3de0ab"
+   ],
+   "expected_present": {
+    "mem-b0d6cc3de0ab": true
+   },
+   "delivered_expected": {
+    "mem-b0d6cc3de0ab": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 126.477,
+    "capsule": 14.177,
+    "render": 21.865,
+    "total": 162.617
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M08",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 466.6,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-79d7c4fd9876",
+    "mem-99df66e3c8f6"
+   ],
+   "selected_ids": [
+    "mem-79d7c4fd9876",
+    "mem-99df66e3c8f6"
+   ],
+   "packet_tokens": 667,
+   "packet_memory_ids": [
+    "mem-79d7c4fd9876",
+    "mem-99df66e3c8f6"
+   ],
+   "expected_present": {
+    "mem-79d7c4fd9876": true
+   },
+   "delivered_expected": {
+    "mem-79d7c4fd9876": 1
+   },
+   "delivered_rows": 2,
+   "timings_ms": {
+    "autoinject": 237.275,
+    "capsule": 14.862,
+    "render": 20.448,
+    "total": 272.676
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M09",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 400.0,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-174b3f5abbba"
+   ],
+   "selected_ids": [
+    "mem-174b3f5abbba"
+   ],
+   "packet_tokens": 222,
+   "packet_memory_ids": [
+    "mem-174b3f5abbba"
+   ],
+   "expected_present": {
+    "mem-174b3f5abbba": true
+   },
+   "delivered_expected": {
+    "mem-174b3f5abbba": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 159.349,
+    "capsule": 15.108,
+    "render": 19.525,
+    "total": 194.066
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-M10",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 491.3,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "selected_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "packet_tokens": 384,
+   "packet_memory_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "expected_present": {
+    "mem-79d7c4fd9876": true
+   },
+   "delivered_expected": {
+    "mem-79d7c4fd9876": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 237.413,
+    "capsule": 16.393,
+    "render": 23.315,
+    "total": 277.225
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N01",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 437.5,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "LOW_CONFIDENCE",
+   "candidate_ids": [
+    "mem-d7311da506a7",
+    "mem-494903a96872",
+    "mem-f1ea8ffa41a8",
+    "mem-28e9391580bf",
+    "mem-cbbb82904ce5",
+    "mem-95e7a7389cfb",
+    "mem-7f11e32b5e6e",
+    "mem-b582fe51e0ad",
+    "mem-5ec9b9283907",
+    "mem-7667f0b43eec"
+   ],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 177.987,
+    "capsule": 15.426,
+    "render": 19.969,
+    "total": 213.474
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N02",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 314.5,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "NO_RELEVANT_MEMORY",
+   "candidate_ids": [],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 71.842,
+    "capsule": 16.114,
+    "render": 21.935,
+    "total": 109.995
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N03",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 288.3,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "NO_RELEVANT_MEMORY",
+   "candidate_ids": [],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 56.602,
+    "capsule": 13.965,
+    "render": 20.514,
+    "total": 91.169
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N04",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 336.2,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "LOW_CONFIDENCE",
+   "candidate_ids": [
+    "mem-69e44c5b85a5",
+    "mem-5ec9b9283907",
+    "mem-58f449274500",
+    "mem-b582fe51e0ad",
+    "mem-494903a96872"
+   ],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 61.349,
+    "capsule": 15.123,
+    "render": 22.955,
+    "total": 99.523
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N05",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 321.4,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "LOW_CONFIDENCE",
+   "candidate_ids": [
+    "mem-fd5c6f1dc8b1",
+    "mem-46205483dd56",
+    "mem-53393f42418c"
+   ],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 88.508,
+    "capsule": 13.391,
+    "render": 23.622,
+    "total": 125.627
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N06",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 373.6,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-b67de5057f76",
+    "mem-5ee4c7712fa3",
+    "mem-d7311da506a7",
+    "mem-fd5c6f1dc8b1",
+    "mem-99df66e3c8f6",
+    "mem-f5ad9ae46d7c",
+    "mem-174b3f5abbba",
+    "mem-5bc2da33777a",
+    "mem-f745bcb2eff2",
+    "mem-e6a79159acd1"
+   ],
+   "selected_ids": [
+    "mem-b67de5057f76"
+   ],
+   "packet_tokens": 201,
+   "packet_memory_ids": [
+    "mem-b67de5057f76"
+   ],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 151.848,
+    "capsule": 13.909,
+    "render": 20.636,
+    "total": 186.48
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N07",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 273.0,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "NO_RELEVANT_MEMORY",
+   "candidate_ids": [],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 46.167,
+    "capsule": 15.402,
+    "render": 21.449,
+    "total": 83.1
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N08",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 293.0,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "NO_RELEVANT_MEMORY",
+   "candidate_ids": [],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 66.076,
+    "capsule": 14.066,
+    "render": 20.729,
+    "total": 100.956
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N09",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 412.8,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "LOW_CONFIDENCE",
+   "candidate_ids": [
+    "mem-79d7c4fd9876",
+    "mem-494903a96872",
+    "mem-7dda00fb6cdc"
+   ],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 172.973,
+    "capsule": 15.518,
+    "render": 20.473,
+    "total": 209.047
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N10",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 429.5,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-29557f93448f",
+    "mem-c070eabfb367"
+   ],
+   "selected_ids": [
+    "mem-29557f93448f"
+   ],
+   "packet_tokens": 189,
+   "packet_memory_ids": [
+    "mem-29557f93448f"
+   ],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 205.0,
+    "capsule": 15.378,
+    "render": 19.596,
+    "total": 240.066
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  }
+ ]
+}

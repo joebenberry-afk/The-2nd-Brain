@@ -1,0 +1,92 @@
+{"type":"session","version":3,"id":"01a0d411-396d-7659-a29d-b5c2c19ea04d","timestamp":"2026-09-24T15:38:13.741Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-_rontbhs\\run0023\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Format these numbers as a markdown table with a single column header `n`: 1, 2, 3. Reply with only the table."}],"attribution":"user","timestamp":1790264295922}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Format these numbers as a markdown table with a single column header `n`: 1, 2, 3. Reply with only the table."}],"attribution":"user","timestamp":1790264295922}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","name":"write","arguments":{},"partialArgs":"{\"i\": \"Rep","streamIndex":0}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790264295978,"responseId":"84edb0c0-f14c-42b4-8602-91bca6244fd6"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"{"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"i"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":": "}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"Rep"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"lying"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":" with"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":" table"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":", "}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"path"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":": "}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"xd"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"://"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"none"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"x"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"istent"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"_"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"placeholder"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":", "}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"content"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":": "}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"{\\\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"x"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\\\":"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"1"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"}"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"}"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","name":"write","arguments":{"i":"Replying with table","path":"xd://nonexistent_placeholder","content":"{\"x\":1}"},"partialArgs":"{\"i\": \"Replying with table\", \"path\": \"xd://nonexistent_placeholder\", \"content\": \"{\\\"x\\\":1}\"}","streamIndex":0}}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","name":"write","arguments":{"i":"Replying with table","path":"xd://nonexistent_placeholder","content":"{\"x\":1}"},"partialArgs":"{\"i\": \"Replying with table\", \"path\": \"xd://nonexistent_placeholder\", \"content\": \"{\\\"x\\\":1}\"}","streamIndex":0,"intent":"Replying with table"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1424,"output":81,"cacheRead":9216,"cacheWrite":0,"totalTokens":10721,"cost":{"input":0.0002136,"output":0.000048599999999999995,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000289848}},"stopReason":"toolUse","timestamp":1790264295978,"responseId":"84edb0c0-f14c-42b4-8602-91bca6244fd6","duration":2112.0137,"ttft":1955.6754000000005,"completedAt":1790264298093}}
+{"type":"tool_execution_start","toolCallId":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","toolName":"write","args":{"path":"xd://nonexistent_placeholder","content":"{\"x\":1}"},"intent":"Replying with table"}
+{"type":"tool_execution_end","toolCallId":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","toolName":"write","result":{"content":[{"type":"text","text":"No such tool: xd://nonexistent_placeholder. Mounted devices: security_scan, ast_grep, ast_edit, debug, lsp, mcp__jev_classify, mcp__jev_compare, mcp__jev_decide, mcp__jev_extract, mcp__jev_find, mcp__jev_gate, mcp__jev_rerank, mcp__jev_review, mcp__jev_screen, mcp__jev_verify. Active top-level tools are also dispatchable via xd://<tool>."}],"details":{"xdev":{"tool":"nonexistent_placeholder","mode":"execute"}},"isError":true},"isError":true}
+{"type":"message_start","message":{"role":"toolResult","toolCallId":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","toolName":"write","content":[{"type":"text","text":"No such tool: xd://nonexistent_placeholder. Mounted devices: security_scan, ast_grep, ast_edit, debug, lsp, mcp__jev_classify, mcp__jev_compare, mcp__jev_decide, mcp__jev_extract, mcp__jev_find, mcp__jev_gate, mcp__jev_rerank, mcp__jev_review, mcp__jev_screen, mcp__jev_verify. Active top-level tools are also dispatchable via xd://<tool>."}],"details":{"xdev":{"tool":"nonexistent_placeholder","mode":"execute"}},"isError":true,"timestamp":1790264298114}}
+{"type":"message_end","message":{"role":"toolResult","toolCallId":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","toolName":"write","content":[{"type":"text","text":"No such tool: xd://nonexistent_placeholder. Mounted devices: security_scan, ast_grep, ast_edit, debug, lsp, mcp__jev_classify, mcp__jev_compare, mcp__jev_decide, mcp__jev_extract, mcp__jev_find, mcp__jev_gate, mcp__jev_rerank, mcp__jev_review, mcp__jev_screen, mcp__jev_verify. Active top-level tools are also dispatchable via xd://<tool>."}],"details":{"xdev":{"tool":"nonexistent_placeholder","mode":"execute"}},"isError":true,"timestamp":1790264298114}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","name":"write","arguments":{"i":"Replying with table","path":"xd://nonexistent_placeholder","content":"{\"x\":1}"},"partialArgs":"{\"i\": \"Replying with table\", \"path\": \"xd://nonexistent_placeholder\", \"content\": \"{\\\"x\\\":1}\"}","streamIndex":0,"intent":"Replying with table"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1424,"output":81,"cacheRead":9216,"cacheWrite":0,"totalTokens":10721,"cost":{"input":0.0002136,"output":0.000048599999999999995,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000289848}},"stopReason":"toolUse","timestamp":1790264295978,"responseId":"84edb0c0-f14c-42b4-8602-91bca6244fd6","duration":2112.0137,"ttft":1955.6754000000005},"toolResults":[{"role":"toolResult","toolCallId":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","toolName":"write","content":[{"type":"text","text":"No such tool: xd://nonexistent_placeholder. Mounted devices: security_scan, ast_grep, ast_edit, debug, lsp, mcp__jev_classify, mcp__jev_compare, mcp__jev_decide, mcp__jev_extract, mcp__jev_find, mcp__jev_gate, mcp__jev_rerank, mcp__jev_review, mcp__jev_screen, mcp__jev_verify. Active top-level tools are also dispatchable via xd://<tool>."}],"details":{"xdev":{"tool":"nonexistent_placeholder","mode":"execute"}},"isError":true,"timestamp":1790264298114}]}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"That was","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790264298152,"responseId":"4c93dda3-9d48-4d71-a335-ad403f2d22f8"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"That"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" was"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" an"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" accidental"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" call"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" Just"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" reply"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" with"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" the"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" table"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"That was an accidental call. Just reply with the table."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|---"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"1"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"2"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"|"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"3"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" |"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"That was an accidental call. Just reply with the table.","thinkingSignature":"reasoning_content"},{"type":"text","text":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":229,"output":30,"cacheRead":10624,"cacheWrite":0,"totalTokens":10883,"reasoningTokens":12,"cost":{"input":0.00003435,"output":0.000018,"cacheRead":0.000031872,"cacheWrite":0,"total":0.00008422200000000001}},"stopReason":"stop","timestamp":1790264298152,"responseId":"4c93dda3-9d48-4d71-a335-ad403f2d22f8","duration":1125.2804000000006,"ttft":1020.2207000000008,"completedAt":1790264299288}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"That was an accidental call. Just reply with the table.","thinkingSignature":"reasoning_content"},{"type":"text","text":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":229,"output":30,"cacheRead":10624,"cacheWrite":0,"totalTokens":10883,"reasoningTokens":12,"cost":{"input":0.00003435,"output":0.000018,"cacheRead":0.000031872,"cacheWrite":0,"total":0.00008422200000000001}},"stopReason":"stop","timestamp":1790264298152,"responseId":"4c93dda3-9d48-4d71-a335-ad403f2d22f8","duration":1125.2804000000006,"ttft":1020.2207000000008},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Format these numbers as a markdown table with a single column header `n`: 1, 2, 3. Reply with only the table."}],"attribution":"user","timestamp":1790264295922},{"role":"assistant","content":[{"type":"toolCall","id":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","name":"write","arguments":{"i":"Replying with table","path":"xd://nonexistent_placeholder","content":"{\"x\":1}"},"partialArgs":"{\"i\": \"Replying with table\", \"path\": \"xd://nonexistent_placeholder\", \"content\": \"{\\\"x\\\":1}\"}","streamIndex":0,"intent":"Replying with table"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1424,"output":81,"cacheRead":9216,"cacheWrite":0,"totalTokens":10721,"cost":{"input":0.0002136,"output":0.000048599999999999995,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000289848}},"stopReason":"toolUse","timestamp":1790264295978,"responseId":"84edb0c0-f14c-42b4-8602-91bca6244fd6","duration":2112.0137,"ttft":1955.6754000000005},{"role":"toolResult","toolCallId":"call_00_ET_1kpfP2KcYMHOxZjD02Y58354","toolName":"write","content":[{"type":"text","text":"No such tool: xd://nonexistent_placeholder. Mounted devices: security_scan, ast_grep, ast_edit, debug, lsp, mcp__jev_classify, mcp__jev_compare, mcp__jev_decide, mcp__jev_extract, mcp__jev_find, mcp__jev_gate, mcp__jev_rerank, mcp__jev_review, mcp__jev_screen, mcp__jev_verify. Active top-level tools are also dispatchable via xd://<tool>."}],"details":{"xdev":{"tool":"nonexistent_placeholder","mode":"execute"}},"isError":true,"timestamp":1790264298114},{"role":"assistant","content":[{"type":"thinking","thinking":"That was an accidental call. Just reply with the table.","thinkingSignature":"reasoning_content"},{"type":"text","text":"| n |\n|---|\n| 1 |\n| 2 |\n| 3 |"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":229,"output":30,"cacheRead":10624,"cacheWrite":0,"totalTokens":10883,"reasoningTokens":12,"cost":{"input":0.00003435,"output":0.000018,"cacheRead":0.000031872,"cacheWrite":0,"total":0.00008422200000000001}},"stopReason":"stop","timestamp":1790264298152,"responseId":"4c93dda3-9d48-4d71-a335-ad403f2d22f8","duration":1125.2804000000006,"ttft":1020.2207000000008}],"isTerminal":true}

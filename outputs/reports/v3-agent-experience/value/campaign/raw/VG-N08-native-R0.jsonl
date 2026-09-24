@@ -1,0 +1,82 @@
+{"type":"session","version":3,"id":"01a0d415-7ed7-75ea-b9f6-2aa024e4bd35","timestamp":"2026-09-24T15:42:53.655Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-_rontbhs\\run0038\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Rewrite in the passive voice: 'the cat sat on the mat'. Reply with one sentence."}],"attribution":"user","timestamp":1790264576469}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Rewrite in the passive voice: 'the cat sat on the mat'. Reply with one sentence."}],"attribution":"user","timestamp":1790264576469}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790264576540,"responseId":"b2074ab9-8fcd-4cda-9cd0-46a57adec2f7"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"The"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" request"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" is"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" a"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" simple"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" writing"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" task"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":":"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" rewrite"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" in"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" passive"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" voice"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" one"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" sentence"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" Passive"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":":"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" \""}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"The"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" mat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" was"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" sat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" on"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" by"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" the"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" cat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":".\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" Output"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" one"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" sentence"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":".\n\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"But"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" the"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" meta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"-inst"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"ructions"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":":"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" repo"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" rules"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" but"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" task"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" is"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" trivial"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" No"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" tools"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" needed"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" Must"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" advance"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" task"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":";"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" completion"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" is"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" stopping"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" condition"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"The request is a simple writing task: rewrite in passive voice, one sentence. Passive: \"The mat was sat on by the cat.\" Output one sentence.\n\nBut the meta-instructions: repo rules, but task is trivial. No tools needed. Must advance task; completion is stopping condition."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"The"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" mat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" was"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" sat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" on"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" by"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" the"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" cat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"The mat was sat on by the cat."}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The request is a simple writing task: rewrite in passive voice, one sentence. Passive: \"The mat was sat on by the cat.\" Output one sentence.\n\nBut the meta-instructions: repo rules, but task is trivial. No tools needed. Must advance task; completion is stopping condition.","thinkingSignature":"reasoning_content"},{"type":"text","text":"The mat was sat on by the cat."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1412,"output":69,"cacheRead":9216,"cacheWrite":0,"totalTokens":10697,"reasoningTokens":59,"cost":{"input":0.0002118,"output":0.0000414,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000280848}},"stopReason":"stop","timestamp":1790264576540,"responseId":"b2074ab9-8fcd-4cda-9cd0-46a57adec2f7","duration":3207.9311,"ttft":2504.2901999999995,"completedAt":1790264579767}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The request is a simple writing task: rewrite in passive voice, one sentence. Passive: \"The mat was sat on by the cat.\" Output one sentence.\n\nBut the meta-instructions: repo rules, but task is trivial. No tools needed. Must advance task; completion is stopping condition.","thinkingSignature":"reasoning_content"},{"type":"text","text":"The mat was sat on by the cat."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1412,"output":69,"cacheRead":9216,"cacheWrite":0,"totalTokens":10697,"reasoningTokens":59,"cost":{"input":0.0002118,"output":0.0000414,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000280848}},"stopReason":"stop","timestamp":1790264576540,"responseId":"b2074ab9-8fcd-4cda-9cd0-46a57adec2f7","duration":3207.9311,"ttft":2504.2901999999995},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Rewrite in the passive voice: 'the cat sat on the mat'. Reply with one sentence."}],"attribution":"user","timestamp":1790264576469},{"role":"assistant","content":[{"type":"thinking","thinking":"The request is a simple writing task: rewrite in passive voice, one sentence. Passive: \"The mat was sat on by the cat.\" Output one sentence.\n\nBut the meta-instructions: repo rules, but task is trivial. No tools needed. Must advance task; completion is stopping condition.","thinkingSignature":"reasoning_content"},{"type":"text","text":"The mat was sat on by the cat."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1412,"output":69,"cacheRead":9216,"cacheWrite":0,"totalTokens":10697,"reasoningTokens":59,"cost":{"input":0.0002118,"output":0.0000414,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000280848}},"stopReason":"stop","timestamp":1790264576540,"responseId":"b2074ab9-8fcd-4cda-9cd0-46a57adec2f7","duration":3207.9311,"ttft":2504.2901999999995}],"isTerminal":true}
