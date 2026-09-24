@@ -69,6 +69,18 @@ def check(home: Path) -> DoctorReport:
             except records.RecordError as e:
                 report.errors.append(f"{record.id}: {e}")
 
+    # 2b. Conflict links (MEM-04) must name existing records on both sides.
+    by_id = {r.id: r for r in loaded_records}
+    for record in loaded_records:
+        for other_id in record.conflicts:
+            other = by_id.get(other_id)
+            if other is None:
+                report.warnings.append(f"{record.id}: conflicts with missing record {other_id}")
+            elif record.id not in other.conflicts:
+                report.warnings.append(
+                    f"{record.id}: conflict with {other_id} is not recorded on {other_id}"
+                )
+
     # 3. Index
     refresh_report = index.refresh(home)
     report.errors.extend(e for e in refresh_report.errors if e not in report.errors)

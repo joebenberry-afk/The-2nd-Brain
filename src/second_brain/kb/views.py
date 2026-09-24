@@ -111,6 +111,8 @@ def render_brief(
                 if native_norm and r_norm in native_norm:
                     continue
                 marker = " (observed)" if r.effective_grade in ("OBSERVED", "INFERRED") else ""
+                if r.conflicts:
+                    marker += f" (disputed by {', '.join(r.conflicts)})"
                 section_lines.append(f"- {r.title} [{r.id}]{marker}")
         if section_lines:
             blocks.append((f"## {section_header}", section_lines))
@@ -164,8 +166,8 @@ def correction_table(recs: list[records.Record]) -> list[dict]:
             continue
         if r.type not in ("correction", "gotcha"):
             continue
-        if not r.trigger_errors:
-            continue
+        if not r.trigger_errors or r.conflicts:
+            continue  # no pattern, or contested advice: never pushed at error time
         if records.GRADE_RANK.get(r.effective_grade, -1) < 2:
             continue
 

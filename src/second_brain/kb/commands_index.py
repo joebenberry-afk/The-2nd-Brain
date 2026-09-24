@@ -287,6 +287,20 @@ def handle_edit(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_conflict(args: argparse.Namespace) -> int:
+    """Record that two records disagree."""
+    from .cli import home_from
+
+    home = home_from(args)
+    try:
+        index.conflict(home, args.a, args.b, reason=args.reason)
+    except RecordError as e:
+        print(f"brain: {e}", file=sys.stderr)
+        return 2
+    print(f"{args.a} and {args.b} marked as conflicting")
+    return 0
+
+
 def register(sub: argparse._SubParsersAction, common: argparse.ArgumentParser) -> None:
     """Register all index commands."""
 
@@ -359,6 +373,14 @@ def register(sub: argparse._SubParsersAction, common: argparse.ArgumentParser) -
     edit_parser.add_argument("--trigger-path", action="append", default=[], help="Add a path glob")
     edit_parser.add_argument("--term", action="append", default=[], help="Add a search term")
     edit_parser.set_defaults(func=handle_edit)
+
+    conflict_parser = sub.add_parser(
+        "conflict", parents=[common], help="Mark two records as disagreeing (both stay visible)"
+    )
+    conflict_parser.add_argument("a", help="Record id")
+    conflict_parser.add_argument("b", help="Record id")
+    conflict_parser.add_argument("--reason", required=True, help="What they disagree about")
+    conflict_parser.set_defaults(func=handle_conflict)
 
     # index command
     index_parser = sub.add_parser("index", parents=[common], help="Manage the index")
