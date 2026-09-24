@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Claude Code cloud-session bootstrap (SessionStart hook, .claude/settings.json).
-#
 # Builds the Python venv, the Prime extension's node_modules, and a Brain home
-# rooted at this checkout whose derived SQLite index is rebuilt from the
-# canonical memory files. Local sessions exit immediately: the Windows machine
-# keeps its own venv and live Brain home.
+# rooted at this checkout whose memory corpus comes from the committed seed
+# (scripts/cloud_corpus.py). Local sessions exit immediately: the Windows
+# machine keeps its own venv and live Brain home.
 set -euo pipefail
 
 [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || exit 0
@@ -24,6 +23,7 @@ fi
 
 export SECOND_BRAIN_HOME="$home"
 .venv/bin/python -m second_brain init >/dev/null
+.venv/bin/python scripts/cloud_corpus.py load
 .venv/bin/python -m second_brain memory reindex
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
