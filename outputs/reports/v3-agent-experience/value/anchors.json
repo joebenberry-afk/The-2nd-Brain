@@ -1,0 +1,209 @@
+{
+ "repo_root": "C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-x9sseasi\\probe-repo",
+ "memory_root": "C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-x9sseasi\\snapshot\\memory",
+ "per_task": {
+  "VG-M01": {
+   "class": "memory",
+   "groups": 3,
+   "repo_groups_matched": 3,
+   "repo_all": true,
+   "memory_groups_matched": 3,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M02": {
+   "class": "memory",
+   "groups": 1,
+   "repo_groups_matched": 1,
+   "repo_all": true,
+   "memory_groups_matched": 1,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M03": {
+   "class": "memory",
+   "groups": 4,
+   "repo_groups_matched": 4,
+   "repo_all": true,
+   "memory_groups_matched": 4,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M04": {
+   "class": "memory",
+   "groups": 3,
+   "repo_groups_matched": 3,
+   "repo_all": true,
+   "memory_groups_matched": 3,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M05": {
+   "class": "memory",
+   "groups": 4,
+   "repo_groups_matched": 4,
+   "repo_all": true,
+   "memory_groups_matched": 4,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M06": {
+   "class": "memory",
+   "groups": 4,
+   "repo_groups_matched": 4,
+   "repo_all": true,
+   "memory_groups_matched": 4,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M07": {
+   "class": "memory",
+   "groups": 4,
+   "repo_groups_matched": 4,
+   "repo_all": true,
+   "memory_groups_matched": 4,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M08": {
+   "class": "memory",
+   "groups": 6,
+   "repo_groups_matched": 6,
+   "repo_all": true,
+   "memory_groups_matched": 6,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M09": {
+   "class": "memory",
+   "groups": 3,
+   "repo_groups_matched": 3,
+   "repo_all": true,
+   "memory_groups_matched": 3,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-M10": {
+   "class": "memory",
+   "groups": 6,
+   "repo_groups_matched": 6,
+   "repo_all": true,
+   "memory_groups_matched": 6,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N01": {
+   "class": "no_benefit",
+   "groups": 1,
+   "repo_groups_matched": 1,
+   "repo_all": true,
+   "memory_groups_matched": 0,
+   "memory_all": false,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N02": {
+   "class": "no_benefit",
+   "groups": 1,
+   "repo_groups_matched": 1,
+   "repo_all": true,
+   "memory_groups_matched": 1,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N03": {
+   "class": "no_benefit",
+   "groups": 2,
+   "repo_groups_matched": 0,
+   "repo_all": false,
+   "memory_groups_matched": 0,
+   "memory_all": false,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N04": {
+   "class": "no_benefit",
+   "groups": 1,
+   "repo_groups_matched": 1,
+   "repo_all": true,
+   "memory_groups_matched": 0,
+   "memory_all": false,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N05": {
+   "class": "no_benefit",
+   "groups": 3,
+   "repo_groups_matched": 2,
+   "repo_all": false,
+   "memory_groups_matched": 0,
+   "memory_all": false,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N06": {
+   "class": "no_benefit",
+   "groups": 2,
+   "repo_groups_matched": 2,
+   "repo_all": true,
+   "memory_groups_matched": 2,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N07": {
+   "class": "no_benefit",
+   "groups": 4,
+   "repo_groups_matched": 4,
+   "repo_all": true,
+   "memory_groups_matched": 0,
+   "memory_all": false,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N08": {
+   "class": "no_benefit",
+   "groups": 3,
+   "repo_groups_matched": 3,
+   "repo_all": true,
+   "memory_groups_matched": 3,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N09": {
+   "class": "no_benefit",
+   "groups": 1,
+   "repo_groups_matched": 1,
+   "repo_all": true,
+   "memory_groups_matched": 1,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  },
+  "VG-N10": {
+   "class": "no_benefit",
+   "groups": 1,
+   "repo_groups_matched": 1,
+   "repo_all": true,
+   "memory_groups_matched": 1,
+   "memory_all": true,
+   "repo_chars": 60476567,
+   "memory_chars": 158530
+  }
+ },
+ "memory_tasks_answerable_in_repo": 10,
+ "memory_tasks_covered_by_memory": 10,
+ "memory_task_count": 10
+}
