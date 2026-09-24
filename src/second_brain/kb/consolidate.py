@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import re
+
 from . import index
 from .records import Record
+
+
+def _title_tokens(title: str) -> set[str]:
+    """Title words (3+ letters, minus stopwords) plus every number, however short: numbers
+    are what tell "trial 1" from "trial 2", so they must count toward similarity."""
+    found = re.findall(r"[a-z]{3,}|[0-9]+", title.casefold())
+    return {token for token in found if token not in index.STOPWORDS}
 
 
 def near_duplicates(recs: list[Record], *, threshold: float = 0.8) -> list[tuple[str, str, float]]:
@@ -27,7 +36,7 @@ def near_duplicates(recs: list[Record], *, threshold: float = 0.8) -> list[tuple
             continue
 
         # Extract tokens from title
-        tokens = index.tokens(record.title)
+        tokens = sorted(_title_tokens(record.title))
 
         # Skip records with <2 title tokens
         if len(tokens) < 2:
@@ -63,8 +72,8 @@ def near_duplicates(recs: list[Record], *, threshold: float = 0.8) -> list[tuple
             continue
 
         # Compute Jaccard similarity
-        tokens_a = set(index.tokens(rec_a.title))
-        tokens_b = set(index.tokens(rec_b.title))
+        tokens_a = _title_tokens(rec_a.title)
+        tokens_b = _title_tokens(rec_b.title)
         score = _jaccard_similarity(tokens_a, tokens_b)
 
         if score >= threshold:

@@ -746,3 +746,30 @@ def test_description_with_colons_and_quotes_stays_parseable(tmp_path: Path) -> N
     )
     value = json.loads(line.removeprefix("description: "))
     assert value.startswith('OMP: run "brain views" after pulling')
+
+
+def test_numbered_siblings_are_not_duplicates() -> None:
+    from second_brain.kb import consolidate, records
+
+    def rec(rid: str, title: str) -> records.Record:
+        return records.Record(
+            id=rid,
+            title=title,
+            scope="global",
+            status="current",
+            grade="TESTED",
+            recorded_at="2026-09-01T00:00:00+00:00",
+        )
+
+    siblings = [
+        rec("mem-aaaaaaaaaaa1", "Signature trial 1 baseline"),
+        rec("mem-aaaaaaaaaaa2", "Signature trial 2 baseline"),
+    ]
+    assert consolidate.near_duplicates(siblings) == []
+    same = [
+        rec("mem-bbbbbbbbbbb1", "Signature trial 1 baseline"),
+        rec("mem-bbbbbbbbbbb2", "Signature trial 1 baseline."),
+    ]
+    assert [p[:2] for p in consolidate.near_duplicates(same)] == [
+        ("mem-bbbbbbbbbbb1", "mem-bbbbbbbbbbb2")
+    ]
