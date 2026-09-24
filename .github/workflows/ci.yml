@@ -31,7 +31,7 @@ jobs:
       - name: V3 core and memory tests
         run: >
           pytest -q -o addopts="" -p no:cacheprovider
-          tests/test_kb_records.py tests/test_kb_index.py tests/test_kb_views.py
+          tests/test_kb_records.py tests/test_kb_index.py tests/test_kb_views.py tests/test_kb_capture.py tests/test_kb_hooks.py
           tests/test_memory_supersession.py tests/test_injection_decision.py
           tests/test_autoinject.py tests/test_semantic_query.py tests/test_retrieval_isolation.py
           tests/test_migration_chain.py
