@@ -21,7 +21,8 @@ the `brain` CLI, usable from any shell or agent (`brain q "<question>"`, `brain 
 ```powershell
 git status                                      # commit or stash local changes first
 git fetch origin
-git switch claude/new-session-nro2r6            # the V3 branch (or the branch it was merged into)
+git switch main
+git pull
 $env:PYTHONHOME = $null; $env:PYTHONPATH = $null
 .venv\Scripts\python.exe -m pip install -e .   # provides brain.exe in .venv\Scripts
 [Environment]::SetEnvironmentVariable("SECOND_BRAIN_HOME", (Get-Location).Path, "User")
