@@ -527,3 +527,13 @@ def test_prune_keeps_old_files_that_were_not_fully_processed(tmp_path: Path) -> 
     assert capture.prune_events(tmp_path) == []
     (events / ".cursor.json").write_text(json.dumps({"old": old.stat().st_size}), encoding="utf-8")
     assert capture.prune_events(tmp_path) == ["old"]
+
+
+def test_doctor_reports_runtime_identity(tmp_path: Path) -> None:
+    import sys
+
+    from second_brain.kb import doctor
+
+    runtime = doctor.check(tmp_path).runtime
+    assert runtime["python"] == sys.executable
+    assert runtime["kb_source"].endswith("kb") and runtime["source_in_home"] == "no"

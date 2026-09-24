@@ -18,6 +18,8 @@ class DoctorReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     sizes: dict[str, int] = field(default_factory=dict)
+    #: Which interpreter and source tree answered (PORT-02: a stale install is visible).
+    runtime: dict[str, str] = field(default_factory=dict)
 
 
 def check(home: Path) -> DoctorReport:
@@ -182,6 +184,9 @@ def check(home: Path) -> DoctorReport:
     # 7. Sizes
     report.sizes = _compute_sizes(home)
 
+    # 8. Runtime identity
+    report.runtime = _runtime(home)
+
     return report
 
 
@@ -239,3 +244,19 @@ def _compute_sizes(home: Path) -> dict[str, int]:
     sizes["telemetry/kb-hooks.jsonl"] = file_size(telemetry_file)
 
     return sizes
+
+
+def _runtime(home: Path) -> dict[str, str]:
+    import platform
+    import sys
+
+    package = Path(__file__).resolve().parent
+    identity = {
+        "python": sys.executable,
+        "python_version": platform.python_version(),
+        "kb_source": str(package),
+        "home": str(Path(home).resolve()),
+    }
+    inside = package.is_relative_to(Path(home).resolve())
+    identity["source_in_home"] = "yes" if inside else "no"
+    return identity
