@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from . import (
     commands_capture,
     commands_doctor,
     commands_index,
+    commands_skills,
     commands_sync,
     commands_views,
     hooks,
@@ -43,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands_capture.register(sub, common)
     commands_doctor.register(sub, common)
     commands_sync.register(sub, common)
+    commands_skills.register(sub, common)
     hooks.register(sub, common)
     return parser
 
@@ -50,7 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except sqlite3.Error as exc:
+        # The derived index is unavailable (locked elsewhere, disk error): say so, never answer
+        # as if nothing matched. Record files are untouched.
+        print(f"brain: index unavailable: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

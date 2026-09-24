@@ -103,6 +103,14 @@ def handle_review(args: argparse.Namespace) -> int:
         # Print candidates awaiting promote
         print(f"\ncandidates awaiting promote ({candidate_count})")
 
+        # Print possible duplicates
+        from . import consolidate
+
+        duplicates = consolidate.near_duplicates(all_records)
+        print(f"\npossible duplicates ({len(duplicates)})")
+        for a_id, b_id, score in duplicates:
+            print(f"  {a_id} {b_id} {score:.2f}")
+
         return 0
     except RecordError as e:
         print(f"brain: {e}", file=sys.stderr)
