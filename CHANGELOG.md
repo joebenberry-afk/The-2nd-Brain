@@ -15,6 +15,8 @@ Agent execution and orchestration belong to the host, not Second Brain.
 - This release packages that baseline with stable version metadata, repository
   housekeeping and revised documentation. It does not update the installed
   runtime or silently extend its qualification to every host.
+- Fix source-distribution-to-wheel builds by removing a redundant defaults
+  inclusion rule; bundled configuration and migrations remain in the package.
 - Independent issuer, protected custody and ledger signing remain unavailable.
   They are an external track, not a prerequisite for V3 development.
 
