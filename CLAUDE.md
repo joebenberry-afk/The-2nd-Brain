@@ -22,7 +22,10 @@ views (`views/`) are derived: `brain index`, `brain views`. Use it instead of
 re-discovering project facts: `brain q "<question>"` (≤3 lines), `brain show
 <id>`, `brain brief`; record a durable, evidenced learning with `brain add`
 (always a candidate; `brain promote` needs evidence). Supersede or retire with
-`brain supersede` / `brain retire` — never by editing status by hand. The
+`brain supersede` / `brain retire`, mark disagreements with `brain conflict` —
+never by editing status by hand. `brain review` (inbox from capture, stale
+evidence, promotions), `brain doctor` (integrity), `brain share`, `brain sync`.
+Status against every V3 requirement: `docs/intake/2026-09-24-report-v3-status.md`. The
 legacy `memory/` files stay for the installed M00 runtime. Design and owner
 decisions: `docs/intake/2026-09-24-plan-v3-agent-native-redesign.md`; OMP is
 the only host in focus (`brainstem/omp-v3/`).
