@@ -36,6 +36,12 @@ def export(home: Path) -> int:
         }
     finally:
         conn.close()
+    # Rows written on Windows store home-relative body paths with backslashes, which
+    # Linux reads as one file name; "/" resolves on both.
+    for table in ("memories", "memory_versions"):
+        for row in tables[table]:
+            if row.get("body_path"):
+                row["body_path"] = row["body_path"].replace("\\", "/")
     seed = {
         "schema_version": schema,
         "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
