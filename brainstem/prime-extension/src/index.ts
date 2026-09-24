@@ -52,7 +52,9 @@ import {
   type RtdPreserver,
 } from "./rtd";
 import {
+  advisoryEmitCached,
   loadAutoInjectHostConfig,
+  parseShadowOutput,
   resolveProject,
   resolvedProjectIdForSession,
   runAdvisoryAutoInject,
@@ -61,7 +63,11 @@ import {
 } from "./autoinject";
 import { assemblePrefix, checkPrefixDrift } from "./injection-slots";
 import {
+  ACTIVE_STATE_DEFAULT_BUDGET,
+  ACTIVE_STATE_MAX_TEXT_CHARS,
   activeStateMessage,
+  activeStateRenderResult,
+  parseActiveStateResult,
   renderActiveState,
   runActiveStateEnsure,
   runActiveStateUpdate,
@@ -82,7 +88,18 @@ import {
 } from "./ledger-mirror";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
-import { runVmemCompactPrep, runVmemEvictSync, runVmemHotContext, runVmemStore } from "./vmem";
+import { e01SpanAsync, e01SpanEnd, e01Trace } from "./e01-trace";
+import {
+  getTurnHelper,
+  loadTurnBridgeConfig,
+  prepareTurnWithBridge,
+  resolveTurnPython,
+  stopTurnHelpers,
+  type TurnBridgePayload,
+  type TurnBridgeRequest,
+  type TurnBridgeSpawner,
+} from "./turn-bridge";
+import { parseHotContextOutput, runVmemCompactPrep, runVmemEvictSync, runVmemHotContext, runVmemStore } from "./vmem";
 import {
   createTelemetryDirEnsurer,
   sanitizeSessionStem,
@@ -625,6 +642,12 @@ export interface ExtensionOptions {
   ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
   /** Read-ledger reread hint seam; production invokes brainctl. */
   rereadHintRunner?: RereadHintRunner;
+  /**
+   * E01 turn-bridge seam: the reused-interpreter helper spawner. Omitted in
+   * production (node:child_process `spawn`); tests inject a scripted child so
+   * helper lifecycle behavior is exercised without a Python runtime.
+   */
+  turnBridgeSpawn?: TurnBridgeSpawner;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -634,6 +657,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return;
   }
   const telemetryDir: string = config.telemetryDir;
+
+  // E01 (PERF-02/PERF-04): the per-prompt memory phases run through ONE Python
+  // process — batched (`once`) or through a reused interpreter (`helper`, the
+  // default) — and fall back to the existing per-phase spawns on ANY failure,
+  // so memory delivery never depends on this optimization. The
+  // `SECOND_BRAIN_TURN_MODE` env value keeps the three designs directly
+  // comparable in measurement (`current` = the pre-E01 path).
+  const turnBridgeCfg = loadTurnBridgeConfig();
+  const turnPython = resolveTurnPython(config.home ?? "");
+  const turnBridgeEnabled = turnBridgeCfg.mode !== "current" && turnPython !== undefined;
+  const turnHelper = () =>
+    getTurnHelper({
+      home: config.home ?? "",
+      python: turnPython ?? "",
+      cfg: turnBridgeCfg,
+      spawnImpl: options.turnBridgeSpawn,
+    });
 
   // Phase 4: one shared directory-readiness seam for the whole factory
   // (plan: "at extension startup, ensure the telemetry directory once").
@@ -720,25 +760,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     fields: Record<string, unknown>,
     opts: { agentId?: string; parentEventId?: string; ignorable?: boolean; cwd?: string } = {},
   ): void => {
-    mirrorFireAndForget({
-      home: config.home ?? "",
-      hostSessionId: sessionId,
-      cwd: opts.cwd,
-      parentSessionId: nativeRootSessions.get(sessionId),
-      record: {
-        kind,
-        fields,
-        agentId: opts.agentId,
-        parentEventId: opts.parentEventId,
-        ignorable: opts.ignorable,
-      },
-      onError: (error) => {
-        try {
-          getStore(sessionId)?.append(mirrorExtensionError(sessionId, error));
-        } catch {
-          // storage failed too — stay silent
-        }
-      },
+    const mirrorStart = performance.now();
+    void Promise.resolve(
+      mirrorFireAndForget({
+        home: config.home ?? "",
+        hostSessionId: sessionId,
+        cwd: opts.cwd,
+        parentSessionId: nativeRootSessions.get(sessionId),
+        record: {
+          kind,
+          fields,
+          agentId: opts.agentId,
+          parentEventId: opts.parentEventId,
+          ignorable: opts.ignorable,
+        },
+        onError: (error) => {
+          try {
+            getStore(sessionId)?.append(mirrorExtensionError(sessionId, error));
+          } catch {
+            // storage failed too — stay silent
+          }
+        },
+      }),
+    ).then(() => {
+      e01SpanEnd("bg.ledger_mirror", mirrorStart, { kind });
     });
   };
   let currentTurnIndex = 0;
@@ -831,6 +876,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
    * fail-open and never affects the host turn or return value.
    */
   const queueP4Pulse = (event: string, session: string, ctx: ExtensionContext): void => {
+    const pulseStart = performance.now();
     runP4Pulse({
       home: config.home ?? "",
       hostSessionId: session,
@@ -838,6 +884,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       repo: ctxCwd(ctx),
     })
       .then((pulse) => {
+        e01SpanEnd("bg.p4_pulse", pulseStart, { event });
         if (pulse.ok && pulse.heartbeat) {
           getStore(session)?.append(sensors.heartbeatPulse(session, pulse.heartbeat));
         }
@@ -936,7 +983,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     ctx: ExtensionContext,
     options: EnvironmentAssessmentOptions,
   ): void => {
+    const backgroundStart = performance.now();
     void runEnvironmentAssessment(options).then((environment) => {
+      e01SpanEnd("bg.environment_assessment", backgroundStart, { phase: options.phase });
       if (!environment.ok) {
         getStore(session)?.append(
           mirrorExtensionError(session, environment.error ?? `${options.phase} environment assessment failed`),
@@ -961,7 +1010,17 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   };
 
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
+    const hookStart = performance.now();
+    e01Trace("hook_enter", { hook: "session_start", session });
     recordNativeRootSession(session, ctx);
+    // E01 cold-path option: start the reused interpreter while the HOST is
+    // still booting, so the first prompt never pays the interpreter+import
+    // cost on its own critical path. The startup span is recorded separately
+    // (it is still real CPU); `SECOND_BRAIN_TURN_HELPER_START=lazy` keeps the
+    // cost on the first prompt instead.
+    if (turnBridgeEnabled && turnBridgeCfg.mode === "helper" && turnBridgeCfg.helperStart === "session_start") {
+      void turnHelper().ensureStarted();
+    }
     // Phase 0C SHADOW: decide + record only; session_start carries no task
     // text, so the adapter no-ops on empty tasks. Never returns a patch.
     void runShadowAutoInject({
@@ -1049,6 +1108,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       getStore(session)?.append(sensors.extensionError(session, error));
     }
     queueP4Pulse("session_start", session, ctx);
+    e01SpanEnd("session_start.hook", hookStart, {});
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
   });
 
@@ -1183,12 +1243,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   }
 
   pi.on("before_agent_start", async (event, ctx) => {
+    const hookStart = performance.now();
     let session = "unknown";
     let aiCfg = loadAutoInjectHostConfig(config.home);
     let aiMessage: unknown = undefined;
     let activeMessage: unknown = undefined;
     try {
       session = resolveAndJournalSessionId(ctx);
+      e01Trace("hook_enter", {
+        hook: "before_agent_start",
+        session,
+        prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
+      });
       recordNativeRootSession(session, ctx);
       const environmentPrompt = typeof event.prompt === "string" ? event.prompt : "";
       const taskHash = taskSha256(environmentPrompt);
@@ -1213,29 +1279,102 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // spawns, so it runs concurrently with them instead of after them.
       const visibilityPending =
         config.home && taskText.trim().length > 0
-          ? ensureVisibilityPlan(session, taskText, ctx).catch(() => undefined)
+          ? e01SpanAsync(
+              "bg.visibility_plan",
+              ensureVisibilityPlan(session, taskText, ctx).catch(() => undefined),
+            )
           : undefined;
+      // E01: capsule ensure + hot-context render + AutoInject decision in ONE
+      // Python process (batched), or through the reused interpreter. The emit
+      // probe runs FIRST so a host re-emit of the same prompt never re-runs
+      // the Python decision (which would create a duplicate delivery). Any
+      // failure — no interpreter, spawn error, timeout, helper death, malformed
+      // response — leaves `batched` null and the per-phase path below runs
+      // unchanged, so this optimization can only remove latency, never memory.
+      const aiCall = autoinjectCall(session, event, ctx);
+      let batched: TurnBridgePayload | null = null;
+      if (
+        turnBridgeEnabled &&
+        taskText.trim().length > 0 &&
+        (aiCfg.mode === "advisory" || aiCfg.mode === "active")
+      ) {
+        const boundedTask = taskText.trim().slice(0, ACTIVE_STATE_MAX_TEXT_CHARS);
+        const emitCached = advisoryEmitCached(aiCall, taskText);
+        const turnRequest: TurnBridgeRequest = {
+          session,
+          task: taskText,
+          cwd: ctxCwd(ctx),
+          // NO inferred project: `project_id` is an EXPLICIT override in
+          // Python (it outranks cwd/registry resolution), so forwarding the
+          // adapter's remembered/`default` value would suppress the current
+          // repository's memories or admit another project's. The pre-E01
+          // per-phase spawn passes cwd only and lets Python resolve.
+          agentId: session,
+          branch: "main",
+          roleProfile: "worker",
+          objective: boundedTask,
+          nextAction: boundedTask,
+          budgetTokens: ACTIVE_STATE_DEFAULT_BUDGET,
+          want: emitCached ? ["capsule", "render"] : ["capsule", "render", "autoinject"],
+        };
+        const prepared = await e01SpanAsync(
+          "before_agent_start.turn_bridge",
+          prepareTurnWithBridge({
+            cfg: turnBridgeCfg,
+            home: config.home ?? "",
+            python: turnPython ?? "",
+            request: turnRequest,
+            spawnImpl: options.turnBridgeSpawn,
+          }),
+          { mode: turnBridgeCfg.mode, emit_cached: emitCached },
+        );
+        // A PARTIAL batch is kept: phases that succeeded committed their own
+        // effects (AutoInject records its delivery), so re-running them would
+        // see ALREADY_DELIVERED and lose the packet. `batchPhaseDone` decides
+        // per phase, and only a failed phase falls back to its own spawn.
+        if (prepared !== null) batched = prepared;
+      }
+      const batchPhaseDone = (phase: "capsule" | "render" | "autoinject"): boolean => {
+        if (batched === null) return false;
+        // Payloads without the map are all-or-nothing (older helper/one-shot).
+        if (batched.phases_ok === undefined) return batched.ok === true;
+        return batched.phases_ok[phase] === true;
+      };
       if (
         config.home &&
         taskText.trim().length > 0 &&
         (aiCfg.mode === "advisory" || aiCfg.mode === "active")
       ) {
-        const ensured = await runActiveStateEnsure({
-          home: config.home,
-          hostSessionId: session,
-          objective: taskText,
-          nextAction: taskText,
-        });
+        const ensured =
+          batchPhaseDone("capsule") && batched?.capsule_stdout !== undefined && batched.capsule_stdout !== null
+            ? parseActiveStateResult(batched.capsule_stdout, session)
+            : await e01SpanAsync(
+                "before_agent_start.capsule_ensure",
+                runActiveStateEnsure({
+                  home: config.home,
+                  hostSessionId: session,
+                  objective: taskText,
+                  nextAction: taskText,
+                }),
+                { source: "spawn" },
+              );
         if (!ensured.ok) {
           getStore(session)?.append(
             sensors.extensionError(session, new Error(ensured.error ?? "active-state ensure failed")),
           );
         } else if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
           activeStateTouchedSessions.add(session);
-          const rendered = await renderActiveState({
-            home: config.home,
-            hostSessionId: session,
-          });
+          const rendered =
+            batchPhaseDone("render") && batched?.render_stdout !== undefined && batched.render_stdout !== null
+              ? activeStateRenderResult(parseHotContextOutput(batched.render_stdout), session)
+              : await e01SpanAsync(
+                  "before_agent_start.hot_context_render",
+                  renderActiveState({
+                    home: config.home,
+                    hostSessionId: session,
+                  }),
+                  { source: "spawn" },
+                );
           if (!rendered.ok) {
             getStore(session)?.append(
               sensors.extensionError(session, new Error(rendered.error ?? "active-state render failed")),
@@ -1258,7 +1397,26 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }
       aiCfg = loadAutoInjectHostConfig(config.home);
       if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
-        aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
+        // A batched AutoInject decision is fed to the SAME orchestration
+        // (records, emit cache, resolved-project memory) through its runner
+        // seam, so the batched path cannot diverge from the spawn path;
+        // `undefined` here (emit-cache hit, or no batch) keeps the original
+        // spawn/cache behavior unchanged.
+        const batchedOutcome =
+          batchPhaseDone("autoinject") &&
+          batched?.autoinject_stdout !== undefined &&
+          batched.autoinject_stdout !== null
+            ? parseShadowOutput(batched.autoinject_stdout)
+            : undefined;
+        aiMessage = await e01SpanAsync(
+          "before_agent_start.autoinject",
+          runAdvisoryAutoInject(
+            batchedOutcome !== undefined
+              ? { ...aiCall, runner: async () => batchedOutcome }
+              : aiCall,
+          ),
+          { source: batchedOutcome !== undefined ? "batch" : "spawn" },
+        );
         // Phase B admission ref #1: AutoInject delivery. `aiMessage.details`
         // (delivery_id + packet_tokens) is the structured, non-transcript
         // reference already computed by messageFromOutcome (autoinject.ts)
@@ -1412,7 +1570,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         ? buildRecallQuery(event.prompt, recallCfg)
         : undefined;
       if (recallQuery !== undefined) {
-        const brief = await recallBrief(recallQuery, session, recallCfg);
+        const brief = await e01SpanAsync(
+          "before_agent_start.recall_brief",
+          recallBrief(recallQuery, session, recallCfg),
+        );
         if (brief !== undefined) {
           turnMessage = mergeRecallBriefMessage(turnMessage, brief);
         }
@@ -1436,6 +1597,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (message !== undefined && (aiCfg.mode === "advisory" || aiCfg.mode === "active")) {
         return { message };
       }
+    } finally {
+      // E01: closes on every exit path (patch, no patch, error) so the span
+      // measures the whole hook the host awaits.
+      e01SpanEnd("before_agent_start.hook", hookStart, { session, mode: aiCfg.mode });
     }
     return undefined;
   });
@@ -2186,6 +2351,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   wire<SessionShutdownEvent>(
     "session_shutdown",
     (event, ctx, session) => {
+      // E01 cleanup: the reused interpreter is a memory helper, so it goes
+      // away with the session that started it (an orphaned helper also
+      // self-exits on stdin EOF if this host dies without shutdown).
+      if (turnBridgeEnabled) stopTurnHelpers("session_shutdown");
       const activeStateCfg = loadAutoInjectHostConfig(config.home);
       if (
         activeStateTouchedSessions.has(session) &&
