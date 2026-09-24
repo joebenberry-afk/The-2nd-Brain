@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import commands_index, commands_views
+from . import commands_index, commands_views, hooks
 
 
 def home_from(args: argparse.Namespace) -> Path:
@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     commands_index.register(sub, common)
     commands_views.register(sub, common)
+    hooks.register(sub, common)
     return parser
 
 
