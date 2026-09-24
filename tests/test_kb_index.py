@@ -1304,3 +1304,13 @@ def test_retire_refuses_a_future_time(tmp_path: Path) -> None:
     with pytest.raises(RecordError):
         index.retire(tmp_path, rec.id, reason="r", effective_at="2999-01-01T00:00:00+00:00")
     assert records.load(tmp_path, rec.id).status == "current"
+
+
+def test_incidental_single_word_overlap_is_dropped(tmp_path: Path) -> None:
+    target = _saved(tmp_path, title="Migration ordering", body="apply migrations in numeric order")
+    for i in range(5):
+        _saved(
+            tmp_path, title=f"Telemetry trial {i} passes", body=f"run {i} kept the order of events"
+        )
+    hits = index.search(tmp_path, "migration order", None, limit=10)
+    assert [h.record.id for h in hits] == [target.id]
