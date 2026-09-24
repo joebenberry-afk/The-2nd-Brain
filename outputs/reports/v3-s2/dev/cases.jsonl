@@ -8,3 +8,17 @@
 {"id": "D08", "category": "no_benefit_format", "prompt": "Summarize this paragraph in one sentence: the cat sat on the mat and slept.", "expect": []}
 {"id": "D09", "category": "memory_short", "prompt": "Which OMP version introduced advisor.maxNotesPerUpdate?", "expect": ["mem-5ee4c7712fa3"]}
 {"id": "D10", "category": "no_benefit_overlap", "prompt": "List three generic best practices for writing shell commands.", "expect": []}
+{"id": "D11", "category": "memory_sessions", "prompt": "What does OMP 18.1.15 document about JSONL conversation trees and resume?", "expect": ["mem-812f9bb08444"]}
+{"id": "D12", "category": "memory_recursion", "prompt": "Why is RLM child recursion blocked?", "expect": ["mem-d2f7df353130"]}
+{"id": "D13", "category": "memory_fanout", "prompt": "What replaced the hard two-worker cap?", "expect": ["mem-f745bcb2eff2"]}
+{"id": "D14", "category": "memory_long_imperative", "prompt": "Without reading any files, tell me what the migration ordering rule is.", "expect": ["mem-a8d221e64549"]}
+{"id": "D15", "category": "no_benefit_format", "prompt": "Format the answer as a markdown table with three columns and no bullet points.", "expect": []}
+{"id": "D16", "category": "no_benefit_summarize", "prompt": "Summarize the paragraph above in two sentences.", "expect": []}
+{"id": "D17", "category": "no_benefit_rewrite", "prompt": "Rewrite this sentence in the passive voice: the cat sat on the mat.", "expect": []}
+{"id": "D18", "category": "no_benefit_math", "prompt": "What is 17 times 23?", "expect": []}
+{"id": "D19", "category": "no_benefit_echo", "prompt": "Reply with exactly: OK-42", "expect": []}
+{"id": "D20", "category": "wrong_project", "prompt": "What delay and factor does the brain-pilot-demo retry helper use?", "expect": [], "forbid": ["mem-f9b4deb601eb"]}
+{"id": "D21", "category": "archived_memory", "prompt": "What is the migration ordering rule?", "expect": ["mem-a8d221e64549"], "forbid": ["mem-621006a63d2d"]}
+{"id": "D22", "category": "memory_restore", "prompt": "How do I restore a database backup without leaving stale files?", "expect": ["mem-29557f93448f"]}
+{"id": "D23", "category": "memory_antigravity", "prompt": "Which memory records that the Antigravity hook contract is authoritative?", "expect": ["mem-79d7c4fd9876"]}
+{"id": "D24", "category": "memory_wal_restore", "prompt": "Which memory says a restore must not leave stale -wal files?", "expect": ["mem-29557f93448f"]}

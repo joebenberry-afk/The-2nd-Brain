@@ -117,8 +117,16 @@ def test_recent_used_memory_outranks_old(brain_home) -> None:
     assert ids.index(m_new) < ids.index(m_old)
 
 
-def test_low_need_high_cost_item_skipped(brain_home) -> None:
-    """An item with low P_need and high token cost ratio is skipped in prepare_injection."""
+def test_low_need_high_cost_item_ranked_not_vetoed(brain_home) -> None:
+    """Need-cost ROI ranks the budget stage; it never vetoes a deliverable item.
+
+    S2 residual R01-R03: a never-activated memory floors P_need at 0.5, and a long
+    body makes it expensive in target-token units, so the old
+    ``p_need * value < token_cost_ratio`` veto dropped the *only* relevant
+    candidate and answered CONTEXT_PRESSURE instead of the memory. The same
+    factors still order the budget stage, but a candidate that fits the packet is
+    delivered (see also test_budget_hard_cap_never_exceeded).
+    """
     mid = semantic.add_memory(
         brain_home,
         "Expensive deployment runbook",
@@ -154,17 +162,10 @@ def test_low_need_high_cost_item_skipped(brain_home) -> None:
     )
 
     decision = autoinject.prepare_injection(brain_home, intent, config=config)
-    assert decision.decision is contracts.InjectionDecision.NO_INJECTION
-    assert decision.reason is contracts.NoInjectionReason.CONTEXT_PRESSURE
-
-    # Now make the memory recently used -> P_need rises, item is no longer skipped
-    reconsolidation.record_activation(brain_home, mid, "correct", kind="used")
-    p_need_active = reconsolidation.compute_p_need(brain_home, mid)
-    assert p_need_active > 0.7
-
-    decision_after = autoinject.prepare_injection(brain_home, intent, config=config)
-    assert decision_after.decision is contracts.InjectionDecision.INJECT
-    assert mid in decision_after.selected_ids
+    assert decision.decision is contracts.InjectionDecision.INJECT
+    assert decision.selected_ids == [mid]
+    assert decision.packet_token_size is not None
+    assert decision.packet_token_size <= config.hard_cap_tokens
 
 
 def test_boundary_and_overflow(brain_home) -> None:
