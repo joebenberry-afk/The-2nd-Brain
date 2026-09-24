@@ -1,7 +1,8 @@
 # Authority closure packet — SEC-AUTH fail-closed, integrated prompt-sink proof, memory real path (2026-09-23)
 
 **Subject:** the orchestration-free M00 candidate on `brain/m00.3-producer-guard`,
-parent `4d0d97d`, plus the changes in §5 (the commit that carries this file).
+parent `4d0d97d`: packet commit `3722bd1`, review corrections `1d449b6`,
+`cdb9ac7`, `80f3c54` (final code subject), then documentation only.
 **Not** a production claim. Production activation: **NOT PERFORMED**.
 
 Companion records: [`high-dispositions-20260923.md`](high-dispositions-20260923.md)
@@ -125,7 +126,7 @@ has other live writers, so its mtime is not attributable either way (README §A)
 Not covered: `hub`/steering beyond the parent's wait, workpool, cancellation
 timing, model selection.
 
-## 4. Executed gates on this subject
+## 4. Executed gates on the first frozen subject (`3722bd1`)
 
 Candidate interpreter by absolute path, `PYTHONHOME`/`PYTHONPATH` removed.
 
@@ -145,9 +146,78 @@ those trees during the run; it passed in isolation and in the clean full run.
 
 ## 5. Files changed in this packet
 
-`src/second_brain/{verify,semantic,autoinject,hybrid_retrieval,reconsolidation,cli}.py`;
+`src/second_brain/{verify,semantic,autoinject,hybrid_retrieval,reconsolidation,cli,vmem}.py`
+(`vmem.py` and part of `cli.py`/`reconsolidation.py` in the review corrections, §6);
 `tests/test_authority_boundary.py`, `tests/test_prompt_sink_integration.py` (new);
 retained tests re-pinned to the new authority contract
 (`test_{activation,autoinject_writeback,cli,dogfood_token_economics,earned_memory,economics,holdout,hybrid_retrieval,jit,meta_memory,origin_authority,reconsolidation,retrieval_budget,retrieval_intelligence_v2,retrieval_isolation,retrieval_ranking,semantic,verify}.py`);
 `scripts/native_noninterference_probe.py` (`--memory-check`); this record, the
 memory payload and streams; the register and the active mandate.
+
+## 6. Independent review and the corrections it caused
+
+Two independent agents reviewed frozen `3722bd1`; neither authored it.
+
+**`FrozenGateExecutor` (executed, independent runtime).** Reproduced every
+author claim on `3722bd1`: subject identity and import origin; ruff clean;
+pyright `0 errors, 0 warnings, 0 informations`; full suite **2154 passed / 1
+skipped / 0 failed** counted from the progress stream (same 29×72+67
+derivation); 7 + 34 targeted tests; probe `--self-test` exit 0; N1–N5
+re-derived from the archived streams; the original SEC-AUTH reproductions now
+refused in a disposable home (`remember --grade VERIFIED` rc=2
+`VERIFIED_REQUIRES_ATTESTATION`; default `remember` → `advisory`; self-approved
+CRITICAL `verify gate` blocked with no outcome/profile rows; `models record`
+rc=2 `MODEL_IDENTITY_NOT_AUTHENTICATED`, no row); `brainstem/` tree hash
+identical to `4d0d97d`.
+
+**`AuthorityBoundaryReviewer` (security reviewer, executed disposable-home
+reproductions).** Found surfaces this packet had missed, and each one was fixed:
+
+| Finding | Fix | Commit |
+|---|---|---|
+| `memory search` printed a stored, unattested `VERIFIED`; the Prime recall brief renders that text as `grade=VERIFIED` in the model turn | prints the effective grade | `1d449b6` |
+| merging legacy `VERIFIED`/`project_rule` rows raised `authority_ceiling may only be lowered` after creating the derived row (orphan) | `_derived_memory` picks origin/grade by effective ceiling/grade; the curate call that could only fail is gone | `1d449b6` |
+| `vmem resolve` legacy fallback returned the stored `VERIFIED` to the agent | returns the effective grade | `cdb9ac7` |
+| `memory list` / `show` printed the stored claim as-is | print `TESTED (claimed VERIFIED)` | `cdb9ac7` |
+| `memory curate --status` stdout printed the stored claim as-is | same label | `80f3c54` |
+
+Regression tests: `test_memory_search_shows_effective_grade_for_a_stored_claim`
+(search, list, show, curate output) and
+`test_merge_of_legacy_elevated_rows_carries_no_claimed_authority`. The search and
+merge tests failed on `3722bd1` and pass after the fix.
+
+Dispositions the reviewer checked against the code and agreed with (no code change):
+
+- **`crossmodel.record_skill_outcome` as a direct Python API — LOW.** It does
+  write fabricated outcome rows when imported directly. But no CLI, hook or
+  extension route reaches it, and its consumers are only the informational
+  `models report/policy/transfer` outputs (`promotion` exposes just a diagnostic
+  count, and its guards use `causal_credit_count`). A caller able to import the
+  library can already write the same SQLite table directly.
+- **Self-scoped low-risk gate — MEDIUM caveat, no authority.** A gate that omits
+  criticality and files and self-passes its actions still reports LOW
+  `completion_allowed=true`. That verdict only sets the CLI exit code and a
+  ledger row: `stop` is retired, and `calibrate_risk` reads blocked records, not
+  grants. Approval-bearing and CRITICAL gates cannot complete.
+- **Legacy `VERIFIED` rows lose decay protection (HOT→WARM, never
+  auto-archived).** This is an accepted cost of failing closed.
+- **Raw canonical file bodies keep the original frontmatter** (`memory show`
+  body, `vmem resolve` body). Those are provenance bytes. The trust-bearing
+  metadata fields next to them report the effective grade.
+
+## 7. Gates on the final code subject (`80f3c54`)
+
+| Gate | Author | Independent (`FrozenGateExecutor`) |
+|---|---|---|
+| `ruff check src tests scripts` | clean | clean |
+| `pyright` | `0 errors, 0 warnings, 0 informations` | same |
+| Full pytest | **2156 passed / 1 skipped / 0 failed** on `cdb9ac7` (29×72+69); `80f3c54` adds only assertions to an existing test, and the targeted files passed | **2156 passed / 1 skipped / 0 failed** on `80f3c54`; `--collect-only` 2157 |
+| Targeted (`test_authority_boundary`, `test_meta_memory`, `test_cli`) | pass | 8 + 21 pass |
+| Legacy-row runtime (search/list/show/curate, merge) | test-covered | executed in a disposable home: `TESTED (claimed VERIFIED)`, search `[candidate/TESTED]`, merge → one TESTED/advisory row |
+
+Final security verdict (`AuthorityBoundaryReviewer`, on `80f3c54`): SEC-AUTH-01/02
+`FIXED — fail-closed` is supported for the retained authority sinks, with no
+blocking HIGH/MEDIUM authorization sink left. The self-scoped LOW gate verdict
+(MEDIUM audit caveat) and the direct crossmodel library API (LOW) remain as
+recorded in §6. The reviewer did not demonstrate live TS hook rendering; that
+surface's producer, `memory search`, was executed.
