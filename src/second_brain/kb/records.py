@@ -85,6 +85,7 @@ _SCALARS: tuple[str, ...] = (
 _LISTS: tuple[str, ...] = (
     "domains",
     "supersedes",
+    "conflicts",
     "evidence",
     "trigger_paths",
     "trigger_errors",
@@ -116,6 +117,9 @@ class Record:
     #: When the Brain recorded it (system time).
     recorded_at: str = ""
     supersedes: tuple[str, ...] = ()
+    #: Records this one disagrees with, unresolved (MEM-04): both stay visible, neither is pushed
+    #: as a correction, and the brief marks them.
+    conflicts: tuple[str, ...] = ()
     superseded_by: str | None = None
     supersession_kind: str | None = None
     supersession_reason: str | None = None
