@@ -41,7 +41,9 @@ export function normalizePath(value: string): string {
 
 /** `git@github.com:o/r.git` / `https://user@github.com/o/r` → `github.com/o/r`. */
 export function normalizeRemote(url: string): string {
-  let text = url.trim();
+  let text = url.trim().replace(/\\/g, "/");
+  // A local path (C:/repos/app.git, //nas/git/app.git) keeps only its folders; no scp-style ":".
+  if (/^[A-Za-z]:\//.test(text) || text.startsWith("//")) return text.replace(/^[A-Za-z]:/, "").replace(/^\/+/, "").replace(/\/$/, "").replace(/\.git$/, "").toLowerCase();
   text = text.replace(/^[a-z+]+:\/\//, "");
   text = text.replace(/^[^@/]+@/, "");
   if (/^[^/]+:[^/]/.test(text)) text = text.replace(":", "/");
@@ -63,7 +65,7 @@ function sameRepo(a: string, b: string): boolean {
 export function loadProjects(home: string): Record<string, ProjectEntry> {
   let raw: unknown;
   try {
-    raw = (JSON.parse(readFileSync(join(home, "projects.json"), "utf8")) as { projects?: unknown } | null)?.projects;
+    raw = (JSON.parse(readFileSync(join(home, "projects.json"), "utf8").replace(/^\uFEFF/, "")) as { projects?: unknown } | null)?.projects;
   } catch {
     return {};
   }

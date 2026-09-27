@@ -1,6 +1,6 @@
 /** Regressions for the issue swarm's findings (each reproduced before its fix). */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,10 @@ import { acceptProposal, errorSignature, findFix, program, rejectProposal, scanE
 import { convertV3 } from "../src/convert.ts";
 import { createNote, formatNote, loadNotes, retireNote, saveNote } from "../src/notes.ts";
 import { scrub } from "../src/scrub.ts";
+import { loadProjects, normalizeRemote } from "../src/project.ts";
 import { answer, recall } from "../src/search.ts";
+import { sync, SyncError } from "../src/sync.ts";
+import { writeAtomic } from "../src/util.ts";
 
 const tmp = (p = "brain-swarm-") => mkdtempSync(join(tmpdir(), p));
 const demo = { id: "demo", tags: [], root: null };
@@ -187,4 +190,124 @@ it("formatNote still writes what parseNote reads after all of this", () => {
   const note = createNote(home, { text: "headline\n\nbody", project: "demo", errors: ["a: b # c"], tags: ["C++", "Type Script"] });
   expect(readFileSync(note.path, "utf8")).toBe(formatNote({ ...note }));
   expect(spawnSync("git", ["--version"]).status).toBe(0);
+});
+
+const git = (cwd: string, ...args: string[]) => {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+  return r.stdout;
+};
+
+/** A bare remote with two clones, a and b, both on main. */
+function twoClones(): { a: string; b: string } {
+  const root = tmp();
+  const [bare, a, b] = [join(root, "remote.git"), join(root, "a"), join(root, "b")];
+  git(root, "init", "--bare", "-b", "main", bare);
+  for (const dir of [a, b]) {
+    git(root, "clone", "-q", bare, dir);
+    git(dir, "config", "user.name", "T");
+    git(dir, "config", "user.email", "t@example.com");
+    git(dir, "checkout", "-q", "-B", "main");
+  }
+  writeFileSync(join(a, ".gitkeep"), "");
+  git(a, "add", ".gitkeep");
+  git(a, "commit", "-qm", "init");
+  git(a, "push", "-q", "-u", "origin", "main");
+  git(b, "pull", "-q", "origin", "main");
+  git(b, "branch", "-q", "--set-upstream-to=origin/main");
+  return { a, b };
+}
+
+describe("batch 2: Windows and sync", () => {
+  it("reads a projects.json saved with a BOM (Windows PowerShell 5 Set-Content)", () => {
+    const home = tmp();
+    writeFileSync(join(home, "projects.json"), "\uFEFF" + JSON.stringify({ projects: { app: { aliases: ["the-app"] } } }));
+    expect(Object.keys(loadProjects(home))).toEqual(["app"]);
+  });
+
+  it("matches local-path remotes however the slashes and drive are written", () => {
+    expect(normalizeRemote("C:\\repos\\App.git")).toBe("repos/app");
+    expect(normalizeRemote("C:/repos/app")).toBe("repos/app");
+    expect(normalizeRemote("\\\\nas\\git\\app.git")).toBe("nas/git/app");
+    expect(normalizeRemote("git@github.com:o/r.git")).toBe("github.com/o/r");
+  });
+
+  it("masks credentials set with setx or SetEnvironmentVariable", () => {
+    expect(scrub("setx DB_PASSWORD hunter2hunter2").text).toBe("setx DB_PASSWORD ***");
+    expect(scrub('setx GITHUB_TOKEN "abcdefgh12345"').text).toBe("setx GITHUB_TOKEN ***");
+    expect(scrub('[Environment]::SetEnvironmentVariable("API_KEY", "abc def 123", "User")').text).toBe(
+      '[Environment]::SetEnvironmentVariable("API_KEY", "***", "User")',
+    );
+    expect(scrub("setx PATH C:\\tools").text).toBe("setx PATH C:\\tools");
+  });
+
+  it("never leaves a temp file behind when the rename fails", () => {
+    const dir = tmp();
+    mkdirSync(join(dir, "target"));
+    expect(() => writeAtomic(join(dir, "target"), "x")).toThrow();
+    expect(readdirSync(dir)).toEqual(["target"]);
+  });
+
+  it("does not delete a re-saved note when its old path is the same file under another name", () => {
+    const home = tmp();
+    const note = createNote(home, { text: "keep me", project: "demo" });
+    // notes/Demo → notes/demo stands in for a case-insensitive filesystem.
+    symlinkSync(join(home, "notes", "demo"), join(home, "notes", "Demo"));
+    saveNote(home, { ...note, path: join(home, "notes", "Demo", `${note.id}.md`) });
+    expect(existsSync(join(home, "notes", "demo", `${note.id}.md`))).toBe(true);
+  });
+
+  it("never syncs a Private folder in another case, or a leftover temp file", () => {
+    const { a } = twoClones();
+    createNote(a, { text: "shared", project: "demo" });
+    mkdirSync(join(a, "notes", "demo", "Private"), { recursive: true });
+    writeFileSync(join(a, "notes", "demo", "Private", "n-secret.md"), "---\nid: n-secret\n---\n\nmine\n");
+    writeFileSync(join(a, "notes", "demo", "n-x.md.123.abc.tmp"), "partial");
+    sync(a, { push: false });
+    expect(git(a, "ls-files", "notes")).not.toMatch(/Private|\.tmp/);
+  });
+
+  it("merges rejections from two machines instead of failing the sync", () => {
+    const { a, b } = twoClones();
+    const rejected = (signatures: string[]) => JSON.stringify({ signatures, texts: [] }, null, 2) + "\n";
+    writeFileSync(join(a, "rejected.json"), rejected(["base"]));
+    sync(a);
+    sync(b);
+    writeFileSync(join(a, "rejected.json"), rejected(["base", "from-a"]));
+    sync(a);
+    writeFileSync(join(b, "rejected.json"), rejected(["base", "from-b"]));
+    expect(sync(b)).toMatchObject({ pulled: true, pushed: true });
+    expect(JSON.parse(readFileSync(join(b, "rejected.json"), "utf8")).signatures.sort()).toEqual(["base", "from-a", "from-b"]);
+    expect(git(b, "status", "--porcelain")).toBe("");
+  });
+
+  it("reports a conflict between pulled changes and uncommitted non-Brain edits instead of success", () => {
+    const { a, b } = twoClones();
+    writeFileSync(join(a, "README.md"), "one\n");
+    git(a, "add", "README.md");
+    git(a, "commit", "-qm", "readme");
+    git(a, "push", "-q");
+    git(b, "pull", "-q");
+    writeFileSync(join(a, "README.md"), "two from a\n");
+    git(a, "commit", "-qam", "readme a");
+    git(a, "push", "-q");
+    writeFileSync(join(b, "README.md"), "two from b, not committed\n");
+    createNote(b, { text: "a note on b", project: "demo" });
+    expect(() => sync(b)).toThrow(SyncError);
+    expect(git(b, "stash", "list")).toContain("autostash");
+  });
+
+  it("gives the same captured pair the same proposal id on every machine and scan", () => {
+    const events = [
+      { command: "make", ok: false, error: "make: *** No rule to make target 'all'" },
+      { command: "make -C src", ok: true },
+    ].map((o) => JSON.stringify({ v: 1, at: "2026-09-27T10:00:00Z", session: "s", cwd: "", tool: "bash", ...o }) + "\n").join("");
+    const ids = [tmp(), tmp()].map((home) => {
+      mkdirSync(join(home, "state", "events"), { recursive: true });
+      writeFileSync(join(home, "state", "events", "s.jsonl"), events);
+      return scanEvents(home, []).map((p) => p.id);
+    });
+    expect(ids[0]).toHaveLength(1);
+    expect(ids[1]).toEqual(ids[0]);
+  });
 });

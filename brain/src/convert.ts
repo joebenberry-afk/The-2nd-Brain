@@ -127,7 +127,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
   let projectsWritable = true;
   if (existsSync(projectsFile)) {
     try {
-      const parsed: unknown = JSON.parse(readFileSync(projectsFile, "utf8"));
+      const parsed: unknown = JSON.parse(readFileSync(projectsFile, "utf8").replace(/^\uFEFF/, ""));
       const inner = (parsed as { projects?: unknown } | null)?.projects;
       if (!inner || typeof inner !== "object") throw new Error('expected { "projects": { … } }');
       rawProjects = inner as Record<string, unknown>;

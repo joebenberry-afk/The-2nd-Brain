@@ -8,7 +8,7 @@
  * The body's first line is the headline. Scope comes from the path, never from a field.
  * A note is active until it is retired; retired notes stay on disk as history.
  */
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { scrub } from "./scrub.ts";
 import { nowIso, randomId, slug, tagList, writeAtomic } from "./util.ts";
@@ -270,6 +270,14 @@ export function findNote(notes: Note[], id: string): Note | undefined {
   return notes.find((n) => n.id === id);
 }
 
+function sameFile(a: string, b: string): boolean {
+  try {
+    return realpathSync.native(a) === realpathSync.native(b);
+  } catch {
+    return false;
+  }
+}
+
 /** Ids and project names become path segments: only plain, single segments are accepted. */
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
@@ -279,7 +287,9 @@ export function saveNote(home: string, note: Note): Note {
   if (note.project !== slug(note.project)) throw new NoteError(`not a project id: ${JSON.stringify(note.project)} (use ${slug(note.project)})`);
   const path = join(noteDir(home, note.project, note.private), `${note.id}.md`);
   writeAtomic(path, formatNote(note));
-  if (note.path && note.path !== path && existsSync(note.path)) rmSync(note.path);
+  // On a case-insensitive filesystem (Windows, macOS) notes/MyProj and notes/myproj are one
+  // folder: the "old" file is the one just written, so it must not be removed.
+  if (note.path && note.path !== path && existsSync(note.path) && !sameFile(note.path, path)) rmSync(note.path);
   return { ...note, path };
 }
 

@@ -293,7 +293,7 @@ function configErrors(home: string): string[] {
   const projectsFile = join(home, "projects.json");
   if (existsSync(projectsFile)) {
     try {
-      const data: unknown = JSON.parse(readFileSync(projectsFile, "utf8"));
+      const data: unknown = JSON.parse(readFileSync(projectsFile, "utf8").replace(/^\uFEFF/, ""));
       const projects = (data as { projects?: unknown } | null)?.projects;
       if (!projects || typeof projects !== "object") errors.push(`${projectsFile}: expected { "projects": { … } }`);
     } catch (error) {

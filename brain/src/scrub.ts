@@ -52,6 +52,14 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   result = result.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s@/]+@/gi, "$1***@");
   result = result.replace(/((?:^|\s)(?:-u\s*|--user[=\s]\s*)[^\s:]+:)\S+/g, "$1***");
 
+  // Windows: setx NAME value, [Environment]::SetEnvironmentVariable("NAME", "value", …)
+  result = result.replace(/\b(setx\s+)(\S+)(\s+)("[^"]*"|\S+)/gi, (match, cmd: string, name: string, space: string, value: string) =>
+    isCredential(name, value) ? `${cmd}${name}${space}***` : match,
+  );
+  result = result.replace(/(SetEnvironmentVariable\(\s*)(["'])([^"']+)\2(\s*,\s*)(["'])((?:\\.|(?!\5)[^\\\n])*)\5/gi, (match, call: string, q1: string, name: string, comma: string, q2: string, value: string) =>
+    isCredential(name, value) ? `${call}${q1}${name}${q1}${comma}${q2}***${q2}` : match,
+  );
+
   // key = "quoted value": masked whole — spaces, the other quote and escaped quotes included
   result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)(["'])((?:\\.|(?!\3)[^\\\n])*)\3/g, (match, name: string, sep: string, quote: string, value: string) =>
     value !== "***" && isCredential(name, value) ? `${name}${sep}${quote}***${quote}` : match,

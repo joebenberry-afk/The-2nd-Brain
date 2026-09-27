@@ -19,13 +19,22 @@ describe("work", () => {
     expect(work).toBeNull();
   });
 
-  it("readWork: null when unparseable", () => {
+  it("readWork: a file without frontmatter is the plan, and an auto refresh keeps it", () => {
     const home = tmp();
     mkdirSync(join(home, "work"), { recursive: true });
-    const badFile = join(home, "work", "p.md");
-    writeFileSync(badFile, "no frontmatter");
-    const work = readWork(home, "p");
-    expect(work).toBeNull();
+    writeFileSync(join(home, "work", "p.md"), "Goal: ship the sync fix\nNext: run the installer test");
+    expect(readWork(home, "p")).toMatchObject({ text: "Goal: ship the sync fix\nNext: run the installer test", auto: "", at: "" });
+    writeAuto(home, "p", { ask: "continue" });
+    expect(readWork(home, "p")).toMatchObject({ text: "Goal: ship the sync fix\nNext: run the installer test", auto: "- last ask: continue" });
+    expect(readWork(home, "nothing-here")).toBeNull();
+  });
+
+  it("readWork: a plan line that is exactly '## auto' stays in the plan", () => {
+    const home = tmp();
+    writeWork(home, "p", "Goal: fix the parser\n## auto\nNext: tests");
+    expect(readWork(home, "p")?.text).toBe("Goal: fix the parser\n## auto\nNext: tests");
+    writeAuto(home, "p", { ask: "go on" });
+    expect(readWork(home, "p")).toMatchObject({ text: "Goal: fix the parser\n## auto\nNext: tests", auto: "- last ask: go on" });
   });
 
   it("writeWork: creates file with trimmed text, cuts to WORK_BUDGET", () => {

@@ -1,6 +1,6 @@
 /** Small shared helpers. Node built-ins only. */
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,12 +55,29 @@ export function randomId(prefix: string): string {
   return `${prefix}-${randomBytes(5).toString("hex")}`;
 }
 
-/** Write a file atomically (temp file + rename), creating parent directories. */
+/**
+ * Write a file atomically (temp file + rename), creating parent directories. On Windows a rename
+ * fails while antivirus or the indexer holds the target: retry briefly, and never leave the temp
+ * file behind.
+ */
 export function writeAtomic(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${randomBytes(3).toString("hex")}.tmp`;
   writeFileSync(tmp, text, "utf8");
-  renameSync(tmp, path);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt < 10 && (code === "EPERM" || code === "EACCES" || code === "EBUSY")) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+        continue;
+      }
+      rmSync(tmp, { force: true });
+      throw error;
+    }
+  }
 }
 
 /** The checkout this package lives in (brain/src/util.ts → repo root). */

@@ -1,5 +1,5 @@
 /** Working state that survives compaction, per project. */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cutToTokens, nowIso, writeAtomic } from "./util.ts";
 import { parseFrontmatter } from "./notes.ts";
@@ -35,49 +35,35 @@ export function workPath(home: string, project: string): string {
 /** Read a work file; return null when missing, unreadable, or unparseable. */
 export function readWork(home: string, project: string): Work | null {
   const path = workPath(home, project);
-  if (!existsSync(path)) return null;
-
+  let raw: string;
   try {
-    const text = readFileSync(path, "utf8");
-    const { fields, body } = parseFrontmatter(text);
-
-    const atRaw = fields.get("at");
-    const at = typeof atRaw === "string" ? atRaw : "";
-    const autoAtRaw = fields.get("auto_at");
-    const autoAt = typeof autoAtRaw === "string" ? autoAtRaw : "";
-
-    // Find the "## auto" marker
-    const lines = body.split("\n");
-    let autoIndex = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i];
-      if (line && line.trim() === "## auto") {
-        autoIndex = i;
-        break;
-      }
-    }
-
-    let workText: string;
-    let autoText: string;
-    if (autoIndex === -1) {
-      workText = body.trim();
-      autoText = "";
-    } else {
-      workText = lines.slice(0, autoIndex).join("\n").trim();
-      autoText = lines.slice(autoIndex + 1).join("\n").trim();
-    }
-
-    return {
-      project,
-      at,
-      autoAt,
-      text: workText,
-      auto: autoText,
-      path,
-    };
+    raw = readFileSync(path, "utf8");
   } catch {
     return null;
   }
+  let fields: Map<string, string | string[]>;
+  let body: string;
+  try {
+    ({ fields, body } = parseFrontmatter(raw));
+  } catch {
+    // Written by hand, or left by a merge: the whole file is the plan. It is shown, and never
+    // replaced by an auto refresh.
+    const text = raw.replace(/^\uFEFF/, "").trim();
+    return text ? { project, at: "", autoAt: "", text, auto: "", path } : null;
+  }
+  const scalar = (key: string) => {
+    const v = fields.get(key);
+    return typeof v === "string" ? v : "";
+  };
+  const at = scalar("at");
+  const autoAt = scalar("auto_at");
+  // Only a file the extension refreshed (auto_at set) has an auto section, and it is the last
+  // "## auto" heading — a plan that itself contains "## auto" is never split.
+  const lines = body.split("\n");
+  const autoIndex = autoAt ? lines.map((l) => l.trim()).lastIndexOf("## auto") : -1;
+  const text = (autoIndex < 0 ? lines : lines.slice(0, autoIndex)).join("\n").trim();
+  const auto = autoIndex < 0 ? "" : lines.slice(autoIndex + 1).join("\n").trim();
+  return { project, at, autoAt, text, auto, path };
 }
 
 /** Write work text (agent text, drops auto section). Throws WorkError on empty text. */

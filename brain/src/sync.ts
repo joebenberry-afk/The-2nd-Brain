@@ -1,6 +1,6 @@
 /** Git sync of the Brain home, and sharing a note across projects. */
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
@@ -35,7 +35,7 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
 
   // Build pathspecs with exclude for private notes. With no Brain path on disk there is nothing to
   // commit — and an exclude-only pathspec would mean "everything else", so it is never used.
-  const pathspecs = [...existingPaths, ":(exclude,glob)notes/*/private/**"];
+  const pathspecs = [...existingPaths, ":(exclude,glob,icase)notes/*/private/**", ":(exclude,glob)**/*.tmp"];
   const stage = existingPaths.length > 0;
 
   let hasChanges = false;
@@ -117,8 +117,22 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
   });
 
   if (pullResult.status !== 0 && !(rebaseInProgress(home) && resolveWorkConflicts(home))) {
-    spawnSync("git", ["-C", home, "rebase", "--abort"], { encoding: "utf8" });
+    abortRebase(home);
     throw new SyncError(pullResult.stderr.slice(0, 500));
+  }
+  // `pull --autostash` exits 0 even when re-applying the local changes conflicted: never report
+  // success with unmerged files. Brain files are merged by rule; anything else is the owner's call.
+  const leftover = unmerged(home);
+  if (leftover.length) {
+    if (!leftover.every(mergeable)) {
+      throw new SyncError(
+        `pulled, but your uncommitted changes to ${leftover.join(", ")} conflict with what was pulled; ` +
+          "git kept your version in its stash (git stash list). Resolve the conflict, then run brain sync again.",
+      );
+    }
+    resolveInIndex(home, leftover);
+    const top = git(home, "stash", "list", "-n", "1").stdout;
+    if (/autostash/i.test(top)) git(home, "stash", "drop", "-q");
   }
   pulled = true;
 
@@ -168,26 +182,71 @@ function stampOf(text: string): string {
   return `${/^at:\s*(\S+)/m.exec(text)?.[1] ?? ""} ${/^auto_at:\s*(\S+)/m.exec(text)?.[1] ?? ""}`;
 }
 
+/** Unmerged paths, relative to the home. */
+function unmerged(home: string): string[] {
+  return git(home, "diff", "--name-only", "--relative", "--diff-filter=U", "-z").stdout.split("\0").filter(Boolean);
+}
+
+/** Files the Brain can merge without asking: working states (newer wins) and the rejected list (union). */
+function mergeable(file: string): boolean {
+  return file.startsWith("work/") || file === "rejected.json";
+}
+
+function merge(file: string, upstream: string | null, local: string | null): string {
+  if (upstream === null) return local ?? "";
+  if (local === null) return upstream;
+  if (file === "rejected.json") {
+    const read = (text: string): Record<string, unknown> => {
+      try {
+        return JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    };
+    const [a, b] = [read(upstream), read(local)];
+    const union = (key: string) => [...new Set([...(Array.isArray(a[key]) ? a[key] : []), ...(Array.isArray(b[key]) ? b[key] : [])])];
+    return JSON.stringify({ signatures: union("signatures"), texts: union("texts") }, null, 2) + "\n";
+  }
+  return stampOf(local) > stampOf(upstream) ? local : upstream;
+}
+
+/** Resolve the given unmerged files from index stages 2 (upstream) and 3 (local), then stage them. */
+function resolveInIndex(home: string, files: string[]): void {
+  for (const file of files) {
+    const stage = (n: number) => {
+      const r = git(home, "show", `:${n}:./${file}`);
+      return r.status === 0 ? r.stdout : null;
+    };
+    writeFileSync(join(home, file), merge(file, stage(2), stage(3)));
+    git(home, "add", "--", file);
+  }
+}
+
 /**
- * A rebase stopped only on working-state files (work/*.md) is resolved, not aborted: a working
- * state is a snapshot, so the side with the newer `at` wins. Any other conflict → false.
+ * A rebase stopped only on files the Brain can merge (working states, the rejected list) is
+ * resolved and continued, not aborted. Any other conflict → false.
  */
 function resolveWorkConflicts(home: string): boolean {
   for (let round = 0; round < 50 && rebaseInProgress(home); round++) {
-    // Paths relative to the home, which may be a subdirectory of the repository
-    const conflicted = git(home, "diff", "--name-only", "--relative", "--diff-filter=U", "-z").stdout.split("\0").filter(Boolean);
-    if (!conflicted.length || !conflicted.every((f) => f.startsWith("work/"))) return false;
-    for (const file of conflicted) {
-      const upstream = git(home, "show", `:2:./${file}`);
-      const local = git(home, "show", `:3:./${file}`);
-      const keep =
-        upstream.status !== 0 ? local.stdout : local.status !== 0 ? upstream.stdout : stampOf(local.stdout) > stampOf(upstream.stdout) ? local.stdout : upstream.stdout;
-      writeFileSync(join(home, file), keep);
-      git(home, "add", "--", file);
-    }
+    const conflicted = unmerged(home);
+    if (!conflicted.length || !conflicted.every(mergeable)) return false;
+    resolveInIndex(home, conflicted);
     git(home, "rebase", "--continue");
   }
   return !rebaseInProgress(home);
+}
+
+/**
+ * Abort a stopped rebase. If git cannot (a rebase directory holding only the autostash, left by a
+ * write racing the pull), keep the stashed changes in the stash list and quit the rebase, so the
+ * next sync is not wedged.
+ */
+function abortRebase(home: string): void {
+  if (git(home, "rebase", "--abort").status === 0 || !rebaseInProgress(home)) return;
+  const dir = git(home, "rev-parse", "--git-path", "rebase-merge").stdout.trim();
+  const autostash = join(isAbsolute(dir) ? dir : join(home, dir), "autostash");
+  if (existsSync(autostash)) git(home, "stash", "store", "-m", "brain sync autostash", readFileSync(autostash, "utf8").trim());
+  git(home, "rebase", "--quit");
 }
 
 export function shareNote(home: string, id: string, tag: string): Note {

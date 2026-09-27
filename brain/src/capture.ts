@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
-import { cutToTokens, estimateTokens, nowIso, randomId, writeAtomic } from "./util.ts";
+import { cutToTokens, estimateTokens, nowIso, writeAtomic } from "./util.ts";
 
 export { scrub };
 import {
@@ -60,6 +60,11 @@ export class CaptureError extends Error {}
 
 function inboxDir(home: string): string {
   return join(home, "state", "inbox");
+}
+
+/** The same captured pair or trailer always gets the same id, so concurrent scans cannot duplicate it. */
+function proposalId(evidence: string[], text: string): string {
+  return `p-${createHash("sha256").update(`${evidence.join("|")}\n${text}`).digest("hex").slice(0, 10)}`;
 }
 
 function saveProposal(home: string, proposal: Proposal): void {
@@ -401,16 +406,18 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
           // The signature is matched against future raw errors: only credentials are masked in it.
           const sig = errorSignature(scrub(failed.error, { longRuns: false }).text).slice(0, 60);
           const head = cutToTokens(`${prog}: ${short(failedCmd)} fails (${sig}); ${short(fixedCmd)} works`, 50);
+          const evidence = [`events:${fileName}#${starts[i] ?? i}-${starts[j] ?? j}`];
+          const text = `${head}\n\n${failedCmd}\n\n${fixedCmd}\n\nError: ${error}`.slice(0, 800);
           propose(home, seen, {
-            id: randomId("p"),
+            id: proposalId(evidence, text),
             at: nowIso(now),
             project: failed.cwd ? resolveProject(home, failed.cwd, {}).id : GLOBAL,
             kind: "gotcha",
-            text: `${head}\n\n${failedCmd}\n\n${fixedCmd}\n\nError: ${error}`.slice(0, 800),
+            text,
             errors: sig ? [sig] : [],
             tested: true,
             source: "capture",
-            evidence: [`events:${fileName}#${i}-${j}`],
+            evidence,
           }, proposals);
           paired = true;
           i = j;
@@ -464,7 +471,7 @@ export function scanCommits(home: string, repoRoot: string, project: string, not
       const text = cutToTokens(scrub((match[2] ?? "").trim()).text, 200);
       if (!text) continue;
       propose(home, seen, {
-        id: randomId("p"),
+        id: proposalId([`commit:${sha}`], text),
         at: nowIso(),
         project,
         kind: (match[1] ?? "").toLowerCase() === "decision" ? "decision" : "gotcha",
