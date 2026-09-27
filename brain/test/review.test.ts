@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, write
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findFix, scanCommits, scanEvents } from "../src/capture.ts";
+import { errorSignature, findFix, scanCommits, scanEvents } from "../src/capture.ts";
 import { convertV3 } from "../src/convert.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import secondBrain, { type HostLike } from "../src/omp.ts";
@@ -211,5 +211,28 @@ describe("second review", () => {
     const card = renderCard(home, loadNotes(home).notes, { id: "demo", tags: [], root: null });
     expect(card).toContain("Where we left off");
     expect(Math.ceil(card.length / 4)).toBeLessThanOrEqual(400);
+  });
+});
+
+describe("third review", () => {
+  it("a captured signature matches its own error with CRLF, colour codes and doubled spaces", () => {
+    const raw = "\x1b[31merror TS2304:\x1b[0m  Cannot   find name 'x'.\r\nat src/a.ts:1\r\n";
+    const home = tmp();
+    const note = createNote(home, { text: "Declare x", project: "global", kind: "gotcha", errors: [errorSignature(raw)], tested: true });
+    expect(errorSignature(raw)).toBe("error TS2304: Cannot find name 'x'.");
+    expect(findFix([note], raw, null)?.id).toBe(note.id);
+  });
+
+  it("a working state without a plan never outranks a plan in a sync conflict", async () => {
+    const { writeAuto } = await import("../src/work.ts");
+    const home = tmp();
+    writeAuto(home, "demo", { ask: "hello" });
+    expect(readFileSync(join(home, "work", "demo.md"), "utf8")).not.toMatch(/^at:/m);
+  });
+
+  it("masks secrets under quoted JSON keys and every GitHub token prefix", async () => {
+    const { scrub } = await import("../src/scrub.ts");
+    expect(scrub('{"password": "hunter2", "api_key": "abcd1234", "user": "me"}').text).toBe('{"password": "***", "api_key": "***", "user": "me"}');
+    for (const prefix of ["ghp", "gho", "ghu", "ghs", "ghr"]) expect(scrub(`${prefix}_${"A1b2".repeat(9)}`).text).toBe("***");
   });
 });

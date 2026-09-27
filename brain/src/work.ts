@@ -42,7 +42,7 @@ export function readWork(home: string, project: string): Work | null {
     const { fields, body } = parseFrontmatter(text);
 
     const atRaw = fields.get("at");
-    const at = typeof atRaw === "string" ? atRaw : "1970-01-01T00:00:00Z";
+    const at = typeof atRaw === "string" ? atRaw : "";
     const autoAtRaw = fields.get("auto_at");
     const autoAt = typeof autoAtRaw === "string" ? autoAtRaw : "";
 
@@ -160,10 +160,11 @@ export function writeAuto(home: string, project: string, fields: AutoFields): Wo
   const existing = readWork(home, project);
   const text = existing?.text ?? "";
 
-  // Refreshing the auto section does not make the plan newer: `at` moves only with the text.
+  // Refreshing the auto section does not make the plan newer: `at` moves only with the text, and a
+  // file without a plan has no `at` at all (so it never wins a sync conflict against a real plan).
   const autoAt = nowIso();
-  const at = text ? (existing?.at ?? autoAt) : autoAt;
-  const frontmatter = `---\nat: ${at}\nauto_at: ${autoAt}\n---`;
+  const at = text ? (existing?.at ?? autoAt) : "";
+  const frontmatter = at ? `---\nat: ${at}\nauto_at: ${autoAt}\n---` : `---\nauto_at: ${autoAt}\n---`;
   const autoSection = `## auto\n${formatted}`;
   const parts = [frontmatter];
   if (text) parts.push("", text);

@@ -28,7 +28,7 @@ describe("secrets never reach notes or working state", () => {
     expect(file).not.toContain("ghp_");
     expect(file).not.toContain("eyJhbGci");
     expect(file).toContain(SHA);
-    expect(file).toContain("token= ***");
+    expect(file).toContain("token=***");
   });
 
   it("masks credentials in the working state and its auto section", () => {

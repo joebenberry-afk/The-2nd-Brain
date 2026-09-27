@@ -208,17 +208,13 @@ export function errorSignature(error: string): string {
     /(error|exception|failed|failure|not found|denied|mismatch|no such|cannot|unable)/i;
   for (const line of lines) {
     if (line.trim() && keywordPattern.test(line)) {
-      const sig = line.split(/\s+/).join(" ");
-      return sig.slice(0, 120);
+      return line.trim().split(/\s+/).join(" ").slice(0, 120);
     }
   }
 
   // Fall back to first non-empty line
   for (const line of lines) {
-    if (line.trim()) {
-      const sig = line.split(/\s+/).join(" ");
-      return sig.slice(0, 120);
-    }
+    if (line.trim()) return line.trim().split(/\s+/).join(" ").slice(0, 120);
   }
 
   return "";
@@ -642,10 +638,12 @@ export function findFix(
 ): Note | null {
   if (!errorText.trim()) return null;
 
-  // Patterns may come from scrubbed text (older logs, hand-written notes with ***): match the raw
-  // error and its scrubbed form.
+  // Patterns may come from scrubbed text (older logs, hand-written notes with ***) or from an
+  // error signature (colour codes stripped, whitespace collapsed): match the raw error, its
+  // scrubbed form and its normalized form.
   const scrubbed = scrub(errorText).text;
-  const haystack = `${errorText}\n${scrubbed}`.toLowerCase();
+  const flat = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\s+/g, " ");
+  const haystack = `${errorText}\n${scrubbed}\n${flat(errorText)}\n${flat(scrubbed)}`.toLowerCase();
   let best: { len: number; id: string; note: Note } | null = null;
 
   for (const note of notes) {
@@ -660,7 +658,7 @@ export function findFix(
         const regexText = pattern.slice(3).trim();
         try {
           const regex = new RegExp(regexText, "i");
-          if (regex.test(errorText) || regex.test(scrubbed)) {
+          if (regex.test(errorText) || regex.test(scrubbed) || regex.test(flat(errorText))) {
             matchLen = regexText.length;
           }
         } catch {
@@ -668,7 +666,7 @@ export function findFix(
         }
       } else {
         // Substring match (case-folded)
-        const patternLower = pattern.toLowerCase();
+        const patternLower = pattern.trim().replace(/\s+/g, " ").toLowerCase();
         if (haystack.includes(patternLower)) {
           matchLen = pattern.length;
         }

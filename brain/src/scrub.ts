@@ -13,7 +13,7 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   let result = text;
 
   // GitHub tokens
-  result = result.replace(/\bgh[po]_[A-Za-z0-9_]+/g, "***");
+  result = result.replace(/\bgh[pousr]_[A-Za-z0-9_]+/g, "***");
   result = result.replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "***");
 
   // OpenAI-style and Slack tokens (a key starts a word and carries a digit)
@@ -30,10 +30,11 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   // key=value / key: value — the key is kept, the value masked. The key may end a longer name
   // (DB_PASSWORD, client_secret, access_token, GITHUB_TOKEN). Passwords, secrets and API keys at
   // any length; a token only when its value looks like one (so "Unexpected token: }" stays).
-  result = result.replace(/(password|passwd|pwd|secret|api[_-]?key)(\s*[=:])\s*([^\s,;]+)/gi, "$1$2 ***");
-  result = result.replace(/(token)(\s*[=:])\s*(?=[^\s,;]*[A-Za-z0-9]{8})([^\s,;]+)/gi, "$1$2 ***");
+  // Quoted keys and values (JSON, YAML) keep their quotes: "password": "***".
+  result = result.replace(/(password|passwd|pwd|secret|api[_-]?key)(["']?\s*[=:]\s*["']?)([^\s,;"'}]+)/gi, "$1$2***");
+  result = result.replace(/(token)(["']?\s*[=:]\s*["']?)(?=[^\s,;"'}]*[A-Za-z0-9]{8})([^\s,;"'}]+)/gi, "$1$2***");
   // Upper-case environment names that end in a credential word: AWS_SECRET_ACCESS_KEY=…, NPM_TOKEN=…
-  result = result.replace(/\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIALS?))(\s*[=:])\s*(?!\*\*\*)([^\s,;]+)/g, "$1$2 ***");
+  result = result.replace(/\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIALS?))(["']?\s*[=:]\s*["']?)(?!\*\*\*)([^\s,;"'}]+)/g, "$1$2***");
 
   if (opts.longRuns === false) return { text: result, scrubbed: result !== original };
 
