@@ -253,8 +253,9 @@ describe("batch 2: Windows and sync", () => {
   it("does not delete a re-saved note when its old path is the same file under another name", () => {
     const home = tmp();
     const note = createNote(home, { text: "keep me", project: "demo" });
-    // notes/Demo → notes/demo stands in for a case-insensitive filesystem.
-    symlinkSync(join(home, "notes", "demo"), join(home, "notes", "Demo"));
+    // notes/Demo → notes/demo: a real case-insensitive filesystem (Windows, macOS) already
+    // resolves it; elsewhere a symlink stands in for one.
+    if (!existsSync(join(home, "notes", "Demo"))) symlinkSync(join(home, "notes", "demo"), join(home, "notes", "Demo"));
     saveNote(home, { ...note, path: join(home, "notes", "Demo", `${note.id}.md`) });
     expect(existsSync(join(home, "notes", "demo", `${note.id}.md`))).toBe(true);
   });
