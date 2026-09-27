@@ -15,6 +15,7 @@ import { estimateTokens, findHome } from "./util.ts";
 import { writeAuto, writeWork, type AutoFields } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
+const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
 
 export interface HostLike {
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
@@ -415,7 +416,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       appendEvent(home, key, cwd, fields);
 
       // Track edited path on success
-      if (fields.ok && fields.path) {
+      // Only tools that change files count as edits; reads and searches also carry a path.
+      if (fields.ok && fields.path && EDITING_TOOL.test(fields.tool)) {
         const path = fields.path;
         // Check if path is inside project.root; if so, make it relative
         const normalizedPath = displayPath(path, project.root, cwd);

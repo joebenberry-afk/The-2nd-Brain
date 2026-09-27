@@ -10,7 +10,10 @@ export const AUTO_BUDGET = 80;
 
 export interface Work {
   project: string;
+  /** When the agent last wrote the plan (the text). Sync conflicts are won by the newer plan. */
   at: string;
+  /** When the auto section was last refreshed (compaction, session end); "" when never. */
+  autoAt: string;
   text: string;
   auto: string;
   path: string;
@@ -38,10 +41,10 @@ export function readWork(home: string, project: string): Work | null {
     const text = readFileSync(path, "utf8");
     const { fields, body } = parseFrontmatter(text);
 
-    // Extract 'at' field
     const atRaw = fields.get("at");
-    const at =
-      typeof atRaw === "string" ? atRaw : "1970-01-01T00:00:00Z";
+    const at = typeof atRaw === "string" ? atRaw : "1970-01-01T00:00:00Z";
+    const autoAtRaw = fields.get("auto_at");
+    const autoAt = typeof autoAtRaw === "string" ? autoAtRaw : "";
 
     // Find the "## auto" marker
     const lines = body.split("\n");
@@ -67,6 +70,7 @@ export function readWork(home: string, project: string): Work | null {
     return {
       project,
       at,
+      autoAt,
       text: workText,
       auto: autoText,
       path,
@@ -92,6 +96,7 @@ export function writeWork(home: string, project: string, text: string): Work {
   return {
     project,
     at,
+    autoAt: "",
     text: cut,
     auto: "",
     path,
@@ -155,8 +160,10 @@ export function writeAuto(home: string, project: string, fields: AutoFields): Wo
   const existing = readWork(home, project);
   const text = existing?.text ?? "";
 
-  const at = nowIso();
-  const frontmatter = `---\nat: ${at}\n---`;
+  // Refreshing the auto section does not make the plan newer: `at` moves only with the text.
+  const autoAt = nowIso();
+  const at = text ? (existing?.at ?? autoAt) : autoAt;
+  const frontmatter = `---\nat: ${at}\nauto_at: ${autoAt}\n---`;
   const autoSection = `## auto\n${formatted}`;
   const parts = [frontmatter];
   if (text) parts.push("", text);
@@ -169,6 +176,7 @@ export function writeAuto(home: string, project: string, fields: AutoFields): Wo
   return {
     project,
     at,
+    autoAt,
     text,
     auto: formatted,
     path,
@@ -179,7 +187,8 @@ export function writeAuto(home: string, project: string, fields: AutoFields): Wo
 export function resumeText(work: Work | null): string {
   if (!work || (!work.text && !work.auto)) return "";
 
-  const timeStr = work.at.slice(0, 16).replace("T", " ");
+  const latest = work.autoAt > work.at ? work.autoAt : work.at;
+  const timeStr = latest.slice(0, 16).replace("T", " ");
   const prefix = `Where we left off (${timeStr} UTC):`;
   const parts = [prefix];
 

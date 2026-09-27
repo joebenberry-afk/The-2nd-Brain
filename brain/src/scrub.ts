@@ -27,17 +27,27 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   // Bearer tokens
   result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer ***");
 
-  // key=value / key: value — the key is kept, the value masked. Passwords, secrets and API keys
-  // at any length; a "token" only when its value looks like one (so "Unexpected token: }" stays).
-  result = result.replace(/\b(password|passwd|pwd|secret|api[_-]?key)(\s*[=:])\s*([^\s,;]+)/gi, "$1$2 ***");
-  result = result.replace(/\b(token)(\s*[=:])\s*(?=[^\s,;]*[A-Za-z0-9]{8})([^\s,;]+)/gi, "$1$2 ***");
+  // key=value / key: value — the key is kept, the value masked. The key may end a longer name
+  // (DB_PASSWORD, client_secret, access_token, GITHUB_TOKEN). Passwords, secrets and API keys at
+  // any length; a token only when its value looks like one (so "Unexpected token: }" stays).
+  result = result.replace(/(password|passwd|pwd|secret|api[_-]?key)(\s*[=:])\s*([^\s,;]+)/gi, "$1$2 ***");
+  result = result.replace(/(token)(\s*[=:])\s*(?=[^\s,;]*[A-Za-z0-9]{8})([^\s,;]+)/gi, "$1$2 ***");
+  // Upper-case environment names that end in a credential word: AWS_SECRET_ACCESS_KEY=…, NPM_TOKEN=…
+  result = result.replace(/\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|CREDENTIALS?))(\s*[=:])\s*(?!\*\*\*)([^\s,;]+)/g, "$1$2 ***");
 
   if (opts.longRuns === false) return { text: result, scrubbed: result !== original };
 
-  // Long hex runs (hashes, keys) and base64 runs. A run with "/" is a path unless it is padded.
+  // Long hex runs (hashes, keys) and base64 runs. A run containing "/" is a path unless it is padded
+  // or reads like random base64 (digits present and at least a quarter of its letters upper-case).
   result = result.replace(/\b[A-Fa-f0-9]{40,}\b/g, "***");
   result = result.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+]{40,}={0,2}/g, "***");
-  result = result.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={1,2}/g, "***");
+  result = result.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}/g, (run) => (run.endsWith("=") || randomLooking(run) ? "***" : run));
 
   return { text: result, scrubbed: result !== original };
+}
+
+function randomLooking(run: string): boolean {
+  const letters = run.replace(/[^A-Za-z]/g, "");
+  const upper = run.replace(/[^A-Z]/g, "").length;
+  return /\d/.test(run) && letters.length > 0 && upper / letters.length >= 0.25;
 }

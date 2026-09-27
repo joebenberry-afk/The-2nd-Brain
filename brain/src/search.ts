@@ -108,8 +108,13 @@ export const STOPWORDS = new Set([
 ]);
 
 /** Extract tokens from text: 3+ alphanumeric, lowercased, no stopwords, duplicates removed. */
+/** Lower-cased, accents removed (é → e), so queries and notes compare letter for letter. */
+export function fold(text: string): string {
+  return text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
 export function tokens(text: string): string[] {
-  const found = text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [];
+  const found = fold(text).match(/[a-z0-9]{3,}/g) ?? [];
   const seen = new Set<string>();
   const result: string[] = [];
   for (const token of found) {
@@ -259,7 +264,7 @@ export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
     if (!opts.history && note.retired) continue;
 
     // Match rule: need enough matched tokens
-    const allText = text.toLowerCase();
+    const allText = fold(text);
     const words = allText.match(/[a-z0-9]{3,}/g) ?? [];
     const matched: string[] = [];
     for (const term of q) {

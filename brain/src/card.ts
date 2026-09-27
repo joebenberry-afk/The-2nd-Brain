@@ -17,7 +17,7 @@ import { kitsDir, kitsFor, loadKits, type Kit } from "./kits.ts";
 import { GLOBAL, headline, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { recall } from "./search.ts";
-import { estimateTokens } from "./util.ts";
+import { cutToTokens, estimateTokens } from "./util.ts";
 import { readWork, resumeText } from "./work.ts";
 
 export const CARD_BUDGET = 400;
@@ -95,7 +95,12 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const tail = [kitsLine(kits, fresh, home), pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", footer(opts.tools === true)].filter(Boolean);
   const lines = [head];
   const fits = (extra: string[]): boolean => estimateTokens([...lines, ...extra, ...tail].join("\n")) <= CARD_BUDGET;
-  if (resume && fits([resume])) lines.push(resume);
+  if (resume) {
+    // The working state is what compaction would lose: cut it to the room left, never drop it.
+    const room = CARD_BUDGET - estimateTokens([...lines, ...tail].join("\n")) - 1;
+    const text = fits([resume]) ? resume : cutToTokens(resume, Math.max(0, room));
+    if (text.trim()) lines.push(text);
+  }
   const known = ranked.slice(0, CARD_NOTES).map(noteLine);
   if (known.length && fits(["Known here:", known[0] as string])) {
     lines.push("Known here:");

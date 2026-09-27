@@ -1,6 +1,6 @@
 /** Regressions for the code-review findings on brain/src (each failed before its fix). */
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,10 @@ import { findFix, scanCommits, scanEvents } from "../src/capture.ts";
 import { convertV3 } from "../src/convert.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import secondBrain, { type HostLike } from "../src/omp.ts";
-import { projectById, resolveProject } from "../src/project.ts";
+import { loadProjects, projectById, resolveProject } from "../src/project.ts";
+import { main } from "../src/cli.ts";
+import { renderCard } from "../src/card.ts";
+import { recall } from "../src/search.ts";
 
 const tmp = (p = "brain-review-") => mkdtempSync(join(tmpdir(), p));
 const git = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" });
@@ -106,5 +109,107 @@ describe("conversion and project ids", () => {
     expect(projectById(home, "SZ Tool", home).id).toBe("sztool");
     expect(projectById(home, "../../tmp/x", home).id).toBe("tmp-x");
     expect(resolveProject(home, home, { BRAIN_PROJECT: "SZ_Tool" }).id).toBe("sztool");
+  });
+});
+
+describe("second review", () => {
+  it("masks env-style and unpadded secrets", async () => {
+    const { scrub } = await import("../src/scrub.ts");
+    for (const [text, kept] of [
+      ["DB_PASSWORD=hunter2 psql", "DB_PASSWORD="],
+      ["curl -d client_secret=abcdef12345", "client_secret="],
+      ["access_token=abcdEFGH1234ijkl", "access_token="],
+      ["GITHUB_TOKEN=abcd1234efgh5678", "GITHUB_TOKEN="],
+      ["export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "AWS_SECRET_ACCESS_KEY="],
+    ] as const) {
+      const out = scrub(text).text;
+      expect(out, text).toContain(kept);
+      expect(out, text).toContain("***");
+      expect(out, text).not.toMatch(/hunter2|abcdef12345|abcdEFGH1234ijkl|abcd1234efgh5678|bPxRfiCYEXAMPLEKEY/);
+    }
+    expect(scrub("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEYmore").text).toBe("***");
+    expect(scrub("KEYBOARD_LAYOUT=us").scrubbed).toBe(false);
+  });
+
+  it("names a project the same way whether it comes from a path, an id, or a synced key", () => {
+    const home = tmp();
+    const dir = tmp("brain-review-sz-");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { SZ_Tool: { paths: [dir], tags: ["sparking-zero"] }, "../escape": {} } }));
+    expect(resolveProject(home, dir, {})).toMatchObject({ id: "sz-tool", tags: ["sparking-zero"] });
+    expect(projectById(home, "SZ_Tool", dir).id).toBe("sz-tool");
+    expect(Object.keys(loadProjects(home)).sort()).toEqual(["escape", "sz-tool"]);
+  });
+
+  it("files a captured failure under the directory it happened in, not BRAIN_PROJECT", () => {
+    const home = tmp();
+    const repoDir = join(tmp(), "beta");
+    mkdirSync(join(repoDir, ".git"), { recursive: true });
+    mkdirSync(join(home, "state", "events"), { recursive: true });
+    writeFileSync(
+      join(home, "state", "events", "s.jsonl"),
+      line({ cwd: repoDir, command: "pytest", ok: false, error: "ImportError: no module named x" }) + line({ cwd: repoDir, command: "pytest -p no:cacheprovider", ok: true }),
+    );
+    const before = process.env.BRAIN_PROJECT;
+    process.env.BRAIN_PROJECT = "alpha";
+    try {
+      expect(scanEvents(home, [])[0]?.project).toBe("beta");
+    } finally {
+      if (before === undefined) delete process.env.BRAIN_PROJECT;
+      else process.env.BRAIN_PROJECT = before;
+    }
+  });
+
+  it("refreshing the auto section does not make the plan newer", async () => {
+    const { writeAuto, writeWork, readWork } = await import("../src/work.ts");
+    const home = tmp();
+    const plan = writeWork(home, "demo", "Goal: the new plan");
+    await new Promise((r) => setTimeout(r, 1100));
+    const after = writeAuto(home, "demo", { ask: "closing the session" });
+    expect(after?.at).toBe(plan.at);
+    expect((after?.autoAt ?? "") > plan.at).toBe(true);
+    expect(readWork(home, "demo")?.autoAt).toBe(after?.autoAt);
+  });
+
+  it("move and kit new resolve aliases", async () => {
+    const home = tmp();
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { "second-brain": { aliases: ["the-2nd-brain"] } } }));
+    const out: string[] = [];
+    const io = { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "scratch" }, cwd: home, out: (s: string) => out.push(s), err: (s: string) => out.push(s) };
+    await main(["note", "We chose vite", "--kind", "decision"], io);
+    const id = out[0]?.replace("saved ", "") ?? "";
+    await main(["move", id, "--to", "The-2nd-Brain"], io);
+    expect(loadNotes(home).notes[0]?.project).toBe("second-brain");
+    await main(["kit", "new", "web", "--from", "the-2nd-brain"], io);
+    expect(readFileSync(join(home, "kits", "web", "SKILL.md"), "utf8")).toContain("We chose vite");
+  });
+
+  it("counts only file-changing tools as edits", () => {
+    const home = tmp();
+    const handlers = new Map<string, (e: unknown, c: unknown) => unknown>();
+    secondBrain({ on: (e, h) => void handlers.set(e, h) }, { SECOND_BRAIN_HOME: home });
+    const ctx = { cwd: home, sessionManager: { getSessionId: () => "s" } };
+    handlers.get("tool_result")?.({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [] }, ctx);
+    handlers.get("tool_result")?.({ toolName: "edit", input: { path: "b.ts" }, isError: false, content: [] }, ctx);
+    handlers.get("session_before_compact")?.({}, { ...ctx });
+    expect(readFileSync(join(home, "work", `${resolveProject(home, home, {}).id}.md`), "utf8")).toContain("- edited: b.ts\n");
+  });
+
+  it("finds notes with accented words", () => {
+    const home = tmp();
+    createNote(home, { text: "Résumé export uses the cache", project: "demo" });
+    const { notes } = loadNotes(home);
+    const project = { id: "demo", tags: [], root: null };
+    expect(recall(notes, "resume", { project }).length).toBe(1);
+    expect(recall(notes, "Résumé", { project }).length).toBe(1);
+  });
+
+  it("cuts an oversized working state to fit the card instead of dropping it", () => {
+    const home = tmp();
+    mkdirSync(join(home, "work"), { recursive: true });
+    writeFileSync(join(home, "work", "demo.md"), `---\nat: 2026-09-27T10:00:00Z\n---\n\nGoal: ${"a long plan ".repeat(300)}\n`);
+    createNote(home, { text: "A decision", project: "demo", kind: "decision" });
+    const card = renderCard(home, loadNotes(home).notes, { id: "demo", tags: [], root: null });
+    expect(card).toContain("Where we left off");
+    expect(Math.ceil(card.length / 4)).toBeLessThanOrEqual(400);
   });
 });

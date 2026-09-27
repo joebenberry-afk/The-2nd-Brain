@@ -131,14 +131,14 @@ describe("work", () => {
   });
 
   it("resumeText: empty when both text and auto are empty", () => {
-    const work = { project: "p", at: "2026-09-27T10:00:00Z", text: "", auto: "", path: "" };
+    const work = { project: "p", at: "2026-09-27T10:00:00Z", autoAt: "", text: "", auto: "", path: "" };
     expect(resumeText(work)).toBe("");
   });
 
   it("resumeText: includes timestamp and text/auto", () => {
     const work = {
       project: "p",
-      at: "2026-09-27T10:30:45Z",
+      at: "2026-09-27T10:30:45Z", autoAt: "",
       text: "Goal: xyz",
       auto: "- edited: a.ts",
       path: "",
@@ -152,14 +152,14 @@ describe("work", () => {
   });
 
   it("resumeText: format with text only", () => {
-    const work = { project: "p", at: "2026-09-27T10:00:00Z", text: "Goal", auto: "", path: "" };
+    const work = { project: "p", at: "2026-09-27T10:00:00Z", autoAt: "", text: "Goal", auto: "", path: "" };
     const result = resumeText(work);
     expect(result).toContain("Where we left off");
     expect(result).toContain("Goal");
   });
 
   it("resumeText: format with auto only", () => {
-    const work = { project: "p", at: "2026-09-27T10:00:00Z", text: "", auto: "- edited: x", path: "" };
+    const work = { project: "p", at: "2026-09-27T10:00:00Z", autoAt: "", text: "", auto: "- edited: x", path: "" };
     const result = resumeText(work);
     expect(result).toContain("Where we left off");
     expect(result).toContain("- edited: x");

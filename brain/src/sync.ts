@@ -159,9 +159,9 @@ function rebaseInProgress(home: string): boolean {
   });
 }
 
-/** The `at:` of a working-state file's text, "" when absent. */
+/** A working state's recency: the plan's `at:` first, the auto section's `auto_at:` second. */
 function stampOf(text: string): string {
-  return /^at:\s*(\S+)/m.exec(text)?.[1] ?? "";
+  return `${/^at:\s*(\S+)/m.exec(text)?.[1] ?? ""} ${/^auto_at:\s*(\S+)/m.exec(text)?.[1] ?? ""}`;
 }
 
 /**

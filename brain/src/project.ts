@@ -56,14 +56,26 @@ function sameRepo(a: string, b: string): boolean {
   return a.split("/").length >= 3 && b.split("/").length >= 3 && tail(a) === tail(b);
 }
 
+/**
+ * projects.json, with every key and alias slugged the way derived ids are — so all ways of naming
+ * a project agree, and no synced key can point notes/ or work/ outside the home.
+ */
 export function loadProjects(home: string): Record<string, ProjectEntry> {
+  let raw: unknown;
   try {
-    const data: unknown = JSON.parse(readFileSync(join(home, "projects.json"), "utf8"));
-    const projects = (data as { projects?: unknown })?.projects;
-    return projects && typeof projects === "object" ? (projects as Record<string, ProjectEntry>) : {};
+    raw = (JSON.parse(readFileSync(join(home, "projects.json"), "utf8")) as { projects?: unknown } | null)?.projects;
   } catch {
     return {};
   }
+  if (!raw || typeof raw !== "object") return {};
+  const projects: Record<string, ProjectEntry> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") continue;
+    const entry = value as ProjectEntry;
+    const aliases = Array.isArray(entry.aliases) ? entry.aliases.filter((a): a is string => typeof a === "string").map(slug) : undefined;
+    projects[slug(key)] = { ...entry, ...(aliases ? { aliases } : {}) };
+  }
+  return projects;
 }
 
 /** The nearest directory at or above `cwd` that contains a `.git` entry. */

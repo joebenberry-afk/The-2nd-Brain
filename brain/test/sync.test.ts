@@ -288,3 +288,20 @@ describe("sync failure modes (review regressions)", () => {
     expect(gitCmd(a, "status", "--porcelain")).toBe("?? unrelated.txt\n");
   });
 });
+
+describe("sync: the newer plan beats a newer auto refresh (review regression)", () => {
+  it("keeps machine A's newer plan over machine B's later session-end stamp", () => {
+    const { a, b } = pairRepos();
+    const work = (at: string, autoAt: string | null, text: string) =>
+      `---\nat: ${at}\n${autoAt ? `auto_at: ${autoAt}\n` : ""}---\n\n${text}\n${autoAt ? "\n## auto\n- last ask: bye\n" : ""}`;
+    mkdirSync(join(a, "work"), { recursive: true });
+    writeFileSync(join(a, "work", "demo.md"), work("2026-09-27T09:00:00Z", null, "old plan"));
+    sync(a);
+    sync(b);
+    writeFileSync(join(a, "work", "demo.md"), work("2026-09-27T10:00:00Z", null, "new plan from A"));
+    sync(a);
+    writeFileSync(join(b, "work", "demo.md"), work("2026-09-27T09:00:00Z", "2026-09-27T10:05:00Z", "old plan"));
+    sync(b);
+    expect(readFileSync(join(b, "work", "demo.md"), "utf8")).toContain("new plan from A");
+  });
+});

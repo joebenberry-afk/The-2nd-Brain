@@ -257,12 +257,10 @@ export function appendEvent(
     }
 
     // Scrub and truncate fields
-    const command = fields.command
-      ? cutToTokens(scrub(fields.command).text, 125)
-      : undefined;
-    const error = fields.error
-      ? cutToTokens(scrub(fields.error).text, 125)
-      : undefined;
+    // The log is local (state/): credentials are masked, long runs are kept so the signatures
+    // derived from it match future raw errors. Proposals made from it get the full scrub.
+    const command = fields.command ? cutToTokens(scrub(fields.command, { longRuns: false }).text, 125) : undefined;
+    const error = fields.error ? cutToTokens(scrub(fields.error, { longRuns: false }).text, 125) : undefined;
     const path = fields.path ? fields.path.slice(0, 300) : undefined;
 
     const line: ToolEvent = {
@@ -393,7 +391,7 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
           propose(home, seen, {
             id: randomId("p"),
             at: nowIso(now),
-            project: failed.cwd ? resolveProject(home, failed.cwd).id : GLOBAL,
+            project: failed.cwd ? resolveProject(home, failed.cwd, {}).id : GLOBAL,
             kind: "gotcha",
             text: `${head}\n\n${failedCmd}\n\n${fixedCmd}\n\nError: ${error}`.slice(0, 800),
             errors: sig ? [sig] : [],
@@ -644,6 +642,8 @@ export function findFix(
 ): Note | null {
   if (!errorText.trim()) return null;
 
+  // Patterns may come from scrubbed text (older logs, hand-written notes with ***): match the raw
+  // error and its scrubbed form.
   const scrubbed = scrub(errorText).text;
   const haystack = `${errorText}\n${scrubbed}`.toLowerCase();
   let best: { len: number; id: string; note: Note } | null = null;

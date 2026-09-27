@@ -188,7 +188,8 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
 
   move(c) {
     const id = need(c.args[0], "a note id");
-    const to = slug(need(c.opts.to, "--to <project|global>"));
+    const target = need(c.opts.to, "--to <project|global>");
+    const to = slug(target) === GLOBAL ? GLOBAL : projectById(c.home, target, c.io.cwd).id;
     const note = findNote(loadNotes(c.home).notes, id);
     if (!note) throw new Error(`no note ${id}`);
     saveNote(c.home, { ...note, project: to });
@@ -249,7 +250,8 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     }
     if (sub === "new") {
       const tags = c.opts.tag ?? [];
-      const kit = draftKit(c.home, need(name, "a kit name"), c.opts.from ?? c.project.id, loadNotes(c.home).notes, tags.length ? tags : undefined);
+      const from = c.opts.from ? projectById(c.home, c.opts.from, c.io.cwd).id : c.project.id;
+      const kit = draftKit(c.home, need(name, "a kit name"), from, loadNotes(c.home).notes, tags.length ? tags : undefined);
       c.io.out(`drafted ${kit.path}`);
       return 0;
     }
