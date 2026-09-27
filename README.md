@@ -1,116 +1,90 @@
 # The Second Brain
 
-A portable, current-state memory for coding agents: **plain Markdown files plus a small
-`brain` command**, that tells an agent what is true now about a project and otherwise stays
-out of the way. The host (focus: **Oh My Pi**) owns agents, tools and lifecycle; the Brain only
-remembers, finds and — at two well-defined moments — reminds.
+**Memory for coding agents that survives compaction, follows you across projects, and costs
+almost nothing when it has nothing to say.** Built for Oh My Pi;
+usable from any shell or agent through the `brain` command.
 
-> **Status (2026-09-24):** V3 is complete in code and continuously tested (CI on every push).
-> The live qualification in OMP on the owner's machine has not been run yet — see
-> [the status report](docs/intake/2026-09-24-report-v3-status.md). The V2 runtime (`2.0.0`,
-> activated 2026-09-24, [release notes](CHANGELOG.md)) stays in the tree unchanged, so going
-> back is one command.
+> **Status (2026-09-27): V4 in development** on branch `claude/new-session-nro2r6` — see
+> [the plan](docs/intake/2026-09-27-plan-v4-agent-experience.md). The V2/V3 runtimes stay in
+> the tree, untouched, until V4 has run in daily use; rollback is one command.
 
-## What V3 does
+## What an agent feels
 
-| | |
-|---|---|
-| **Remembers what is currently true** | One Markdown record per fact, typed (`fact`, `decision`, `gotcha`, `procedure`, `locator`, `correction`, `state`), with evidence and an effective trust grade. A fact changes only by explicit `supersede` / `retire` / `conflict`, never because something is newer; history stays queryable (`--history`, `--as-of`). |
-| **Speaks only when it helps** | In OMP it adds exactly two things: a **project brief** on a session's first turn and after compaction (≤ 600 tokens, nothing when the project has no current records), and **one tested correction** when a tool call fails with a known error (≤ 80 tokens). Ordinary prompts get nothing. |
-| **Answers when asked** | `brain q "<question>"` returns at most three one-line answers, or nothing. |
-| **Learns from real work** | A failed command followed by a working variant, and `Brain-Decision:` / `Brain-Gotcha:` commit trailers, become *proposals* in a local inbox (secrets scrubbed). Nothing is trusted until you `accept` and `promote` it with evidence. |
-| **Works across projects and machines** | Records are scoped to a project, shared to tagged groups of projects (`brain share`), or global. `brain sync` moves them between machines through git; `records/private/` never leaves the machine. |
-| **Stays honest** | Everything pushed is labelled advisory. Nothing retrieved grants permission; a claimed VERIFIED grade counts as TESTED without an independent issuer; promotions record who promoted. |
+| Moment | The agent gets | Cost |
+|---|---|---|
+| **Session start** | a *start card*: where we left off, the 5 notes that matter for this project and the current work, matching MVP kits | ≤ 400 tokens, nothing when there is nothing to say |
+| **Compaction** | the same card again, including the working state it would otherwise lose — injected straight after compaction, even mid-run | ≤ 400 tokens, cache-stable |
+| **Working** | `brain_recall(query)` · `brain_note(text)` · `brain_state(goal/done/next)` — one argument each | ≤ 3 lines per recall |
+| **A tool fails** | the one known, tested fix for that error, appended to the result | ≤ 80 tokens, or nothing |
+| **New project** | *kits*: the proven path from idea to running MVP (stack and why, scaffold steps, gotchas, done-check) | one file, ≤ 600 tokens |
+| **Any other prompt** | nothing | 0 |
 
-It does **not** depend on a harness or on an OMP version: the records and the CLI work from any
-shell or agent, and the OMP extension reads host fields defensively (a host change degrades it
-to "adds nothing"). Antigravity, Hermes and Codex adapters are out of focus and frozen.
+Measured on this repository: the start card is 169 tokens and builds in ~6 ms; recall answers in
+~4 ms over 120 notes and matches the previous SQLite engine exactly (frozen cases: dev 13/15,
+held-out 7/8).
 
-## Put it on your machine (Windows + OMP)
+## How it works
 
-In your Brain checkout (the canonical home, e.g. `C:\Users\<you>\Documents\The-Second-Brain`):
-
-```powershell
-git status                                   # commit or stash local changes first
-git fetch origin
-git switch main
-git pull
-
-$env:PYTHONHOME = $null; $env:PYTHONPATH = $null
-.venv\Scripts\python.exe -m pip install -e .                 # installs .venv\Scripts\brain.exe
-[Environment]::SetEnvironmentVariable("SECOND_BRAIN_HOME", (Get-Location).Path, "User")
-$env:SECOND_BRAIN_HOME = (Get-Location).Path
-
-# Bring in memories added on this machine since the V3 snapshot (existing records are skipped):
-.venv\Scripts\brain.exe convert --from-db db\brain.sqlite --legacy-home .
-.venv\Scripts\brain.exe doctor                               # expect: errors (0)
-.venv\Scripts\brain.exe views                                # compile briefs and correction tables
-.\scripts\install-omp-v3.ps1 -DisableLegacy                  # parks the old extension (reversible)
+```text
+notes/<project>/*.md     one Markdown file per durable fact (decision, gotcha, procedure, fact, note)
+notes/global/*.md        cross-project notes; tagged ones reach only projects with that tag
+notes/*/private/         never leaves the machine
+kits/<name>/SKILL.md     MVP kits (Agent Skills format — OMP and Claude Code can load them natively)
+work/<project>.md        working state: goal · done · next · watch out (+ files edited, last failure)
+projects.json            optional: extra paths, remotes and tags per project
 ```
 
-Restart OMP. Checks for the first sessions, the live native-vs-V3 comparison and rollback
-(`.\scripts\uninstall-omp-v3.ps1 -RestoreLegacy`) are in the
-[OMP runbook](brainstem/omp-v3/README.md).
+Plain files in git are the only truth; there is no database, no index to rebuild, no service.
+Projects need no registration: the id comes from the git remote or the folder. `brain sync`
+moves notes, kits and working state between machines through git.
+
+The package is `brain/` — TypeScript, Node built-ins only, no build step (Node ≥ 22.18 or Bun
+runs it directly):
+
+| Module | Does |
+|---|---|
+| `notes.ts` · `project.ts` | note format and storage · which project a directory belongs to |
+| `search.ts` | in-memory BM25 (a faithful port of SQLite FTS5's `bm25()`) |
+| `card.ts` · `work.ts` | the start card · the working state |
+| `capture.ts` | tool-event log, failed→fixed and commit-trailer proposals, known fixes |
+| `kits.ts` · `sync.ts` | MVP kits · git sync and sharing |
+| `omp.ts` | the Oh My Pi extension (in-process: no subprocess per event) |
+| `cli.ts` | the `brain` command and a Claude Code hook |
+
+## Install (Windows + Oh My Pi)
+
+In your Brain checkout:
+
+```powershell
+git fetch origin
+git switch claude/new-session-nro2r6
+.\scripts\install-v4.ps1        # brain command on PATH, SECOND_BRAIN_HOME, OMP extension; parks V2/V3 extensions
+brain check                     # notes, projects, kits; exit 0
+brain card                      # what a session in this project will see
+```
+
+Restart OMP. Details, verification and rollback (`.\scripts\uninstall-v4.ps1 -Restore`):
+[brain/README.md](brain/README.md).
 
 ## Everyday commands
 
-| Command | Does |
-|---|---|
-| `brain q "<question>" [--all-projects] [--history] [--as-of DATE]` | search (≤ 3 lines) |
-| `brain show <id>` · `brain brief` | one record · this project's brief |
-| `brain add "<claim>" --type gotcha --evidence … [--trigger-error …]` | record a learning (always a candidate) |
-| `brain promote <id> --reason …` | make a candidate current (needs evidence) |
-| `brain supersede <old> --by <new> --reason …` · `brain retire <id> --reason …` | change what is current |
-| `brain conflict <a> <b> --reason …` | keep a disagreement visible (neither is pushed) |
-| `brain edit <id> --type …` | change a record's description, never its standing |
-| `brain review` · `brain accept <id>` · `brain reject <id> --reason …` | proposals, stale evidence, duplicates, recent promotions |
-| `brain share <id> --domain <tag> --reason …` · `brain sync` | share across projects · sync machines |
-| `brain doctor` | integrity, views, privacy, storage, runtime identity |
-| `brain export-skill <id> --dir <skills dir>` | a proven procedure as an Agent Skills `SKILL.md` |
-
-## How it is built
-
 ```text
-records/*.md (canonical, git)  ──►  db/kb.sqlite (FTS5 index, derived)  ◄── brain q
-            │                  └─►  views/<project>/brief.md, corrections.json (derived)
-            │                                   │
-            ▼                                   ▼
-      brain CLI (Python, stdlib)        OMP extension (one TypeScript file, reads views only)
+brain card                          the start card for this directory's project
+brain recall "<question>" [--all]   ≤ 3 one-line answers
+brain note "<text>" [--kind gotcha --error "<msg>" --tested] [--global]
+brain state ["goal … / next …"]     show or replace the working state
+brain review · accept · reject      proposals captured from failed→fixed commands and commit trailers
+brain kit list · show · new         MVP kits
+brain sync                          notes, kits, working state ↔ git remote
+brain stats                         what the Brain actually did this week
 ```
-
-- `src/second_brain/kb/` — the V3 core (records, projects, index, views, capture, sync, doctor,
-  CLI). Standard library only; nothing on its import path loads the legacy modules.
-- `brainstem/omp-v3/` — the standalone OMP extension and its runbook.
-- `records/` and `projects/` are canonical and versioned; `db/`, `views/`, `state/`,
-  `telemetry/` are derived or local and rebuildable.
-- Everything else under `src/second_brain/` and `brainstem/prime-extension/` is the legacy
-  (M00/v2) runtime, kept untouched for rollback until V3 passes its live qualification.
-
-Measured choices: Python was kept (the old hook's cost was its import graph, not the language —
-same index workload: Python 28 ms, Go 23 ms); SQLite FTS5 is the index (no server, no vector DB
-until a paraphrase class fails keyword search); git is the sync.
 
 ## Development
 
 ```bash
-python -m pip install -e ".[dev]"
-python -m pytest tests/test_kb_*.py          # V3 core
-python -m ruff check src tests && python -m pyright src/second_brain/kb
-cd brainstem/prime-extension && npm ci && npx vitest run tests/omp-v3.test.ts
+cd brain && npm ci
+npx eslint src test && npx tsc --noEmit && npx vitest run
 ```
 
-On Windows use `.venv\Scripts\python.exe` with `PYTHONHOME`/`PYTHONPATH` cleared (see
-`AGENTS.md`). CI (`.github/workflows/ci.yml`) runs lint, types, the V3 tests on Python 3.11 and
-3.13, the OMP extension tests, and the frozen retrieval case sets on every push. Some legacy
-tests are Windows-only; `CLAUDE.md` lists them.
-
-## Design and decisions
-
-- [V3 agent-native redesign](docs/intake/2026-09-24-plan-v3-agent-native-redesign.md) — the
-  design, owner decisions O1–O7 and the binding rules (host focus, no harness dependence).
-- [V3 status against every requirement](docs/intake/2026-09-24-report-v3-status.md)
-- [Currentness sweep](docs/intake/2026-09-24-report-v3-currentness-sweep.md) — what was retired
-  when the corpus was converted.
-- [V3 requirements baseline](docs/intake/Second_Brain_V3_Requirements_2026-09-24/START_V3.md)
-
-The protected rules live in `constitution/` and change only through reviewed change control.
+CI runs the same on Node 22 and 24 plus a Bun smoke run, including the frozen recall eval on the
+committed notes. Design: [V4 plan](docs/intake/2026-09-27-plan-v4-agent-experience.md).

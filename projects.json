@@ -14,7 +14,12 @@
       "paths": [
         "C:/Users/assas/Documents/The-Second-Brain"
       ],
-      "remote": "https://github.com/joebenberry-afk/The-2nd-Brain"
+      "remote": "https://github.com/joebenberry-afk/The-2nd-Brain",
+      "tags": [
+        "typescript",
+        "omp",
+        "node"
+      ]
     }
   }
 }

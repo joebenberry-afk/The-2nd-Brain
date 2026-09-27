@@ -1,8 +1,8 @@
 ---
 date: 2026-09-27
 type: plan
-authority: proposed
-status: draft — awaiting owner decisions D1–D6
+authority: owner-approved
+status: accepted 2026-09-27 ("I support all your decisions"); P0–P5 in progress
 scope: v4-overhaul
 supersedes: 2026-09-24-plan-v3-agent-native-redesign.md (direction), all earlier plans (history)
 superseded-by: none
@@ -225,4 +225,9 @@ installed V3/V2 runtime until the installer runs in P2, and that installer is re
 | **D-5** | Rebuild `main` as the V4 tree after P2 is live, with `v2-archive` keeping everything? | Yes, in P6, after a week of use. Outward-facing: needs your explicit go. |
 | **D-6** | Which two projects supply the first kits? (Held-out cases mention SZ-tools and BasicUpscaler.) | Name them; the plan does not depend on which. |
 
-Answering "go with the recommendations" is enough to start P0.
+**Answered 2026-09-27:** the owner accepted every recommendation ("I support all your
+decisions"). D-4: kits are the "ponytail" feature. D-6: no projects named, so the first two kits
+come from what this repository proved (`omp-extension`, `node-ts-cli`); kits from SZ-tools /
+BasicUpscaler follow when those projects are worked on. D-5: the `v2-archive` tag and the
+rebuild of `main` wait for P6, after a week of daily use, and still get a final go before the
+tag is pushed.

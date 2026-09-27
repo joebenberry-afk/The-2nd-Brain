@@ -14,21 +14,23 @@ before adding any Claude-facing adapter code — it maps what already exists
 (memory, retrieval, telemetry, ledger, Lean Code, evidence) so it isn't
 rebuilt.
 
-## V3 core (agent-native memory)
+## V4 (in development) — what the Brain is now
 
-V3 memory is `records/*.md` (canonical, one fact per file) plus the `brain` CLI
-(`second_brain.kb`, stdlib-only). The index (`db/kb.sqlite`) and per-project
-views (`views/`) are derived: `brain index`, `brain views`. Use it instead of
-re-discovering project facts: `brain q "<question>"` (≤3 lines), `brain show
-<id>`, `brain brief`; record a durable, evidenced learning with `brain add`
-(always a candidate; `brain promote` needs evidence). Supersede or retire with
-`brain supersede` / `brain retire`, mark disagreements with `brain conflict` —
-never by editing status by hand. `brain review` (inbox from capture, stale
-evidence, promotions), `brain doctor` (integrity), `brain share`, `brain sync`.
-Status against every V3 requirement: `docs/intake/2026-09-24-report-v3-status.md`. The
-legacy `memory/` files stay for the installed M00 runtime. Design and owner
-decisions: `docs/intake/2026-09-24-plan-v3-agent-native-redesign.md`; OMP is
-the only host in focus (`brainstem/omp-v3/`).
+Plan and binding rules: `docs/intake/2026-09-27-plan-v4-agent-experience.md` (§3.2).
+The product is `brain/` (TypeScript, Node built-ins only, no build step; Node ≥ 22.18 or Bun
+runs `.ts` directly). Truth is plain files: `notes/<project>/*.md` (one fact each; scope comes
+from the path), `notes/global/`, `kits/<name>/SKILL.md`, `work/<project>.md` (working state),
+`projects.json`. No database; nothing derived is committed.
+
+Use it while working here (`node brain/bin/brain.mjs …` in the cloud, `brain …` once installed):
+`brain recall "<question>"` before re-discovering a project fact; `brain note "<text>"` for a
+durable learning (`--kind gotcha --error "<msg>" --tested` when you verified a fix);
+`brain state "goal … / next …"` when the plan changes. After TypeScript changes in `brain/`:
+`npx eslint src test && npx tsc --noEmit && npx vitest run` (includes the frozen recall eval —
+it must stay at dev ≥ 13/15, held-out ≥ 7/8).
+
+The V3 Python core (`src/second_brain/kb`, `records/`) and the V2 runtime stay untouched until
+V4 has run in daily use (plan P6); do not extend them.
 
 ## Cloud sessions (Claude Code on the web)
 

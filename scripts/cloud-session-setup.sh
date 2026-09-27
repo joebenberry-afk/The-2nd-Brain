@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code cloud-session bootstrap (SessionStart hook, .claude/settings.json).
-# Builds the Python venv, the Prime extension's node_modules, and a Brain home
+# Builds the V4 test dependencies and `brain` shim, the Python venv, the Prime extension's
+# node_modules, and a Brain home
 # rooted at this checkout whose memory corpus comes from the committed seed
 # (scripts/cloud_corpus.py). Local sessions exit immediately: the Windows
 # machine keeps its own venv and live Brain home.
@@ -21,6 +22,16 @@ if [ ! -f "$ext/node_modules/.package-lock.json" ] ||
     (cd "$ext" && npm ci --no-audit --no-fund --loglevel=error)
 fi
 
+# V4: brain/ has no runtime dependencies; node_modules is only for its tests. The `brain`
+# shim goes first on PATH so it wins over the V3 Python console script in .venv/bin.
+if [ ! -f brain/node_modules/.package-lock.json ] ||
+    [ brain/package-lock.json -nt brain/node_modules/.package-lock.json ]; then
+    (cd brain && npm ci --no-audit --no-fund --loglevel=error)
+fi
+mkdir -p state/bin
+printf '#!/usr/bin/env bash\nexec node "%s/brain/bin/brain.mjs" "$@"\n' "$home" >state/bin/brain
+chmod +x state/bin/brain
+
 export SECOND_BRAIN_HOME="$home"
 .venv/bin/python -m second_brain init >/dev/null
 .venv/bin/python scripts/cloud_corpus.py load
@@ -32,6 +43,6 @@ export SECOND_BRAIN_HOME="$home"
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     {
         echo "export SECOND_BRAIN_HOME=\"$home\""
-        echo "export PATH=\"$home/.venv/bin:\$PATH\""
+        echo "export PATH=\"$home/state/bin:$home/.venv/bin:\$PATH\""
     } >>"$CLAUDE_ENV_FILE"
 fi

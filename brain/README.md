@@ -1,0 +1,91 @@
+# Second Brain V4 — install, verify, roll back
+
+## 1. Install (Windows, in the Brain checkout)
+
+```powershell
+git status                                # commit or stash local changes first
+git fetch origin
+git switch claude/new-session-nro2r6
+.\scripts\install-v4.ps1
+```
+
+The installer (every step reversible):
+- picks the runtime — Node ≥ 22.18, else Bun — and writes `brain.cmd` in the checkout, which it
+  adds to your user PATH (`-NoPath` skips that);
+- sets `SECOND_BRAIN_HOME` to the checkout when it is unset;
+- parks the V2 (`second-brain`) and V3 (`second-brain-v3`) OMP extensions in
+  `~/.omp/agent/extensions-disabled/` so memory is not pushed twice;
+- writes `~/.omp/agent/extensions/second-brain-v4/index.ts`, a one-line loader that imports
+  `brain/src/omp.ts` from the checkout — `git pull` plus an OMP restart is the whole update.
+
+No `npm install` is needed to run it (no runtime dependencies); `npm ci` in `brain/` is only for
+tests.
+
+**Memories added on this machine since the V3 snapshot** (optional, one time): the committed
+`notes/` were converted from the V3 `records/`. If the V2 database on this machine has newer
+memories, bring them over through V3 first, then convert (existing ids are skipped):
+
+```powershell
+.venv\Scripts\brain.exe convert --from-db db\brain.sqlite --legacy-home .   # V2 db → records/
+brain convert --from .                                                     # records/ → notes/
+```
+
+Open a new terminal, then:
+
+```powershell
+brain check     # notes: N (A active) · projects: P · kits: K — exit 0
+brain card      # what a session in this checkout will see
+```
+
+Restart OMP.
+
+## 2. Verify in the first sessions
+
+1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message;
+   later prompts add nothing. `brain stats` shows one `card` per session.
+2. **Working state.** Ask the agent to set the plan (`brain_state`). Then force a compaction
+   (`/compact`) and ask "where are we?": the answer should give goal and next step without
+   re-reading files. `work/<project>.md` now also has an `## auto` section (files edited, last
+   failure, last ask).
+3. **Known fix.** Run a command that fails with an error some tested note names (e.g. a bare
+   `python` with a broken `PYTHONHOME` on this machine): the failed result ends with
+   `Brain (advisory): … [id]`.
+4. **Learning.** After a few sessions, `brain review` lists failed→fixed commands and
+   `Brain-Decision:` / `Brain-Gotcha:` commit trailers as proposals; `brain accept <id>` makes a note.
+5. **Weekly.** `brain stats --days 7`: which moments fired and what they cost. Anything never used
+   for a week gets removed (plan rule 1).
+
+## 3. Claude Code (optional)
+
+In `~/.claude/settings.json` (or a project's `.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }]
+  }
+}
+```
+
+The hook fails open (`{}`, exit 0). After compaction Claude Code fires `SessionStart` with
+source `compact`, so the card — and the working state — comes back.
+
+## 4. Roll back
+
+```powershell
+.\scripts\uninstall-v4.ps1 -Restore      # removes the V4 extension, restores the parked one
+```
+
+Restart OMP. `-RemovePath` also takes the checkout off your PATH. Notes, kits and working state
+stay as files; nothing in the V2/V3 stores was changed by V4.
+
+## 5. Develop
+
+```bash
+npm ci
+npx eslint src test && npx tsc --noEmit && npx vitest run
+```
+
+`test/eval.test.ts` runs the frozen V3 recall cases against the committed `notes/`. Rules for
+changes: [the V4 plan](../docs/intake/2026-09-27-plan-v4-agent-experience.md) §3.2.
