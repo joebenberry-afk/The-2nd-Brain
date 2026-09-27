@@ -8,7 +8,7 @@ import { nowIso, tagKey } from "./util.ts";
 
 export class SyncError extends Error {}
 
-export const SYNC_PATHS = ["notes", "kits", "work", "projects.json"] as const;
+export const SYNC_PATHS = ["notes", "kits", "work", "projects.json", "rejected.json"] as const;
 
 export interface SyncResult {
   committed: boolean;

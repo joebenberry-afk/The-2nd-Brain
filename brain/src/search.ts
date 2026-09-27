@@ -1,5 +1,5 @@
 /** Full-text search over notes with BM25 ranking (faithful port of V3 SQLite FTS5). */
-import { headline, type Note } from "./notes.ts";
+import { firstLine, restOfBody, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
@@ -114,7 +114,7 @@ export function fold(text: string): string {
 }
 
 export function tokens(text: string): string[] {
-  const found = fold(text).match(/[a-z0-9]{3,}/g) ?? [];
+  const found = fold(text).match(/[\p{L}\p{N}]{3,}/gu) ?? [];
   const seen = new Set<string>();
   const result: string[] = [];
   for (const token of found) {
@@ -188,9 +188,9 @@ export function scoreQuery(notes: Note[], query: string): Scored {
   const rows: Row[] = notes.map((note) => ({
     note,
     id: note.id,
-    title: headline(note),
+    title: firstLine(note),
     terms: [...note.tags, ...note.errors, note.kind].join(" "),
-    body: note.body.split("\n").slice(1).join("\n"),
+    body: restOfBody(note),
   }));
 
   // Tokenize for BM25 (unicode61 compatible: every length counts), once per row
@@ -246,7 +246,8 @@ export function scoreQuery(notes: Note[], query: string): Scored {
     if (a.score !== b.score) return b.score - a.score;
     return a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0;
   });
-  candidates.splice(200);
+  // (V3's SQL took the top 200 before filtering; here visibility filters first, so a project's own
+  // match is never crowded out by other projects' notes.)
 
   return { q, candidates: candidates.map(({ row, score }) => ({ note: row.note, score, words: `${row.title} ${row.terms} ${row.body}` })) };
 }
@@ -265,7 +266,7 @@ export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
 
     // Match rule: need enough matched tokens
     const allText = fold(text);
-    const words = allText.match(/[a-z0-9]{3,}/g) ?? [];
+    const words = allText.match(/[\p{L}\p{N}]{3,}/gu) ?? [];
     const matched: string[] = [];
     for (const term of q) {
       if (words.some((word) => word.startsWith(term))) {
@@ -300,48 +301,15 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
 /** Render a hit as a single line of at most `max` chars (default 240). */
 export function renderHit(hit: Hit, max = 240): string {
   const { note } = hit;
-  const h = headline(note);
-  const tested = note.tested ? ", tested" : "";
-  const kindLabel = `[${note.kind}${tested}]`;
-
-  // Build the body excerpt
-  const bodyLines = note.body.split("\n");
-  const rest = bodyLines.slice(1).join("\n").trim();
-
-  // Build the retired marker if needed
-  let retiredMarker = "";
-  if (note.retired) {
-    const retiredDate = note.retired.slice(0, 10);
-    const replacedBy = note.replacedBy ? `, replaced by ${note.replacedBy}` : "";
-    retiredMarker = ` (retired ${retiredDate}${replacedBy})`;
-  }
-
-  // Assemble the parts
-  const idAndKind = `${note.id} ${kindLabel}`;
-  const headlineAndRetired = rest
-    ? `${h}${retiredMarker} — ${rest}`
-    : `${h}${retiredMarker}`;
-  const fullLine = `${idAndKind} ${headlineAndRetired}`;
-
-  // Cut to max chars, being careful not to cut the retired marker
-  if (fullLine.length <= max) return fullLine;
-
-  const head = idAndKind + " " + h + retiredMarker;
-  const remainder = rest ? ` — ${rest}` : "";
-
-  if ((head + remainder).length <= max) return head + remainder;
-
-  const remaining = max - head.length - 1;
-  if (remaining <= 0) {
-    return head.slice(0, max - 3) + "…";
-  }
-
-  if (!remainder) {
-    return head;
-  }
-
-  const cut = remainder.slice(0, remaining).trimEnd();
-  return head + cut + "…";
+  const idAndKind = `${note.id} [${note.kind}${note.tested ? ", tested" : ""}]`;
+  const marker = note.retired ? ` (retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""})` : "";
+  const rest = restOfBody(note);
+  const full = `${idAndKind} ${firstLine(note)}${marker}${rest ? ` — ${rest}` : ""}`;
+  if (full.length <= max) return full;
+  // Cut the text, never the id, the kind or the retired marker.
+  const room = max - idAndKind.length - 1 - marker.length;
+  const text = `${firstLine(note)}${rest ? ` — ${rest}` : ""}`;
+  return room <= 1 ? `${idAndKind}${marker}`.slice(0, max) : `${idAndKind} ${text.slice(0, room - 1).trimEnd()}…${marker}`;
 }
 
 /** Longest first answer: most questions are settled by the top hit, so it gets room to say it. */
@@ -363,7 +331,8 @@ export function answer(notes: Note[], query: string, opts: RecallOptions): strin
   const id = query.trim();
   const note = /^[a-z]+-[0-9a-f]{6,}$/.test(id) ? notes.find((n) => n.id === id) : undefined;
   if (note && (opts.all || visibleTo(note, opts.project))) {
-    const meta = [note.kind, note.tested ? "tested" : "", note.retired ? `retired ${note.retired.slice(0, 10)}` : "", note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
+    const retiredMeta = note.retired ? `retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""}` : "";
+    const meta = [note.kind, note.tested ? "tested" : "", retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
     return cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS);
   }
   const scored = scoreQuery(notes, query);
@@ -372,9 +341,11 @@ export function answer(notes: Note[], query: string, opts: RecallOptions): strin
   // A retired note that answers better than anything current is the truth the agent needs:
   // "that changed on <date>" (and what replaced it), not an unrelated current note.
   const retired = filterHits(scored, { ...opts, history: true, limit: 10 }).find((h) => h.note.retired);
-  const lines = hits.length ? renderHits(hits) : "";
   if (retired && (!hits.length || retired.score > (hits[0]?.score ?? 0))) {
-    return [lines, renderHit(retired)].filter(Boolean).join("\n");
+    // It leads, the current hits keep the relative floor against it, and the limit still holds.
+    const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
+    const current = hits.filter((h) => h.score >= RELATIVE_FLOOR * retired.score);
+    return renderHits([retired, ...current].slice(0, limit));
   }
-  return lines || "no match";
+  return renderHits(hits);
 }

@@ -10,7 +10,6 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -84,6 +83,11 @@ export function safeSession(session: string): string {
   if (!/[A-Za-z0-9]/.test(safe)) return "unknown";
   if (safe.length <= 100) return safe;
   return `${safe.slice(-60).replace(/^[._-]+/, "")}-${createHash("sha256").update(session).digest("hex").slice(0, 12)}`;
+}
+
+/** A long text as its first and last `keep` characters. */
+export function headAndTail(text: string, keep: number): string {
+  return text.length <= keep * 2 + 5 ? text : `${text.slice(0, keep)}\n…\n${text.slice(-keep)}`;
 }
 
 /**
@@ -174,19 +178,23 @@ export function toolEventFrom(
  * Skip VAR=value assignments, sudo, env, time; take basename; strip .exe on Windows.
  */
 export function program(command: string): string {
-  if (!command.trim()) return "";
-
-  const parts = command.split(/\s+/);
-  for (const part of parts) {
-    // Skip VAR=value
+  // The last segment of "cd X && …", "pushd X; …" is what ran.
+  const segments = command.split(/&&|\|\||;/).map((s) => s.trim()).filter(Boolean);
+  const main = segments.find((s) => !/^(cd|pushd|popd|set|export|source|\.)(\s|$)/.test(s)) ?? segments.at(-1) ?? "";
+  const parts = main.split(/\s+/);
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i] as string;
+    if (!part) continue;
+    // VAR=value assignments
     if (part.includes("=") && !part.startsWith("-")) continue;
-    // Skip sudo, env, time
-    if (["sudo", "env", "time"].includes(part)) continue;
-    // Found the program
+    // Wrappers, and env's own options (env -u NAME, env -i)
+    if (["sudo", "env", "time", "nice", "nohup", "exec"].includes(part)) {
+      while (parts[i + 1]?.startsWith("-")) i += /^-(u|C|S)$/.test(parts[i + 1] as string) ? 2 : 1;
+      continue;
+    }
     const prog = part.replace(/\\/g, "/").split("/").pop() ?? "";
     return prog.toLowerCase().endsWith(".exe") ? prog.slice(0, -4) : prog;
   }
-
   return "";
 }
 
@@ -195,29 +203,17 @@ export function program(command: string): string {
  * Strip ANSI escapes, collapse whitespace, cut to 120 characters.
  */
 export function errorSignature(error: string): string {
-  if (!error.trim()) return "";
-
-  // Strip ANSI escapes
-  const clean = error.replace(/\x1b\[[0-9;]*m/g, "");
-
-  // Split into lines
-  const lines = clean.split("\n");
-
-  // Find first line with error keywords (case-insensitive)
-  const keywordPattern =
-    /(error|exception|failed|failure|not found|denied|mismatch|no such|cannot|unable)/i;
-  for (const line of lines) {
-    if (line.trim() && keywordPattern.test(line)) {
-      return line.trim().split(/\s+/).join(" ").slice(0, 120);
-    }
-  }
-
-  // Fall back to first non-empty line
-  for (const line of lines) {
-    if (line.trim()) return line.trim().split(/\s+/).join(" ").slice(0, 120);
-  }
-
-  return "";
+  const clean = (line: string) => line.trim().split(/\s+/).join(" ").slice(0, 120);
+  const lines = error.replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).filter((l) => l.trim());
+  // Banners and headers say nothing about which error it was.
+  const banner = /^(traceback \(most recent call last\):|during handling of the above exception|the above exception was the direct cause|[=_*#~-]{3,}.*[=_*#~-]{3,}$|[=_*#~-]{5,}$)/i;
+  const useful = lines.filter((l) => !banner.test(l.trim()));
+  // A Python-style exception line ("ModuleNotFoundError: …") is the error; the last one wins.
+  const exception = [...useful].reverse().find((l) => /^\s*(E\s+)?[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b.*:/.test(l));
+  if (exception) return clean(exception.replace(/^\s*E\s+/, ""));
+  const keyword = /(error|exception|failed|failure|not found|denied|mismatch|no such|cannot|unable)/i;
+  const hit = useful.find((l) => keyword.test(l)) ?? useful[0] ?? lines[0];
+  return hit ? clean(hit) : "";
 }
 
 /**
@@ -255,8 +251,10 @@ export function appendEvent(
     // Scrub and truncate fields
     // The log is local (state/): credentials are masked, long runs are kept so the signatures
     // derived from it match future raw errors. Proposals made from it get the full scrub.
-    const command = fields.command ? cutToTokens(scrub(fields.command, { longRuns: false }).text, 125) : undefined;
-    const error = fields.error ? cutToTokens(scrub(fields.error, { longRuns: false }).text, 125) : undefined;
+    // Cut before scrubbing (scrubbing megabytes of output would block the session). An error keeps
+    // its head and its tail: compilers report first, Python tracebacks end with the actual error.
+    const command = fields.command ? cutToTokens(scrub(fields.command.slice(0, 2000), { longRuns: false }).text, 125) : undefined;
+    const error = fields.error ? scrub(headAndTail(fields.error, 300), { longRuns: false }).text : undefined;
     const path = fields.path ? fields.path.slice(0, 300) : undefined;
 
     const line: ToolEvent = {
@@ -275,6 +273,24 @@ export function appendEvent(
   } catch {
     // Never throw
   }
+}
+
+/** Rejected proposals: synced with the notes, so a rejection holds on every machine. */
+export function rejectedPath(home: string): string {
+  return join(home, "rejected.json");
+}
+
+/** The rejected list, merged with the pre-sync location (state/rejected.json) when present. */
+function readRejected(home: string): { signatures: string[]; texts: string[] } {
+  const merged = { signatures: [] as string[], texts: [] as string[] };
+  for (const path of [rejectedPath(home), join(home, "state", "rejected.json")]) {
+    const data = readJson<{ signatures?: unknown; texts?: unknown }>(path, {});
+    for (const key of ["signatures", "texts"] as const) {
+      const list = data[key];
+      if (Array.isArray(list)) for (const v of list) if (typeof v === "string" && !merged[key].includes(v)) merged[key].push(v);
+    }
+  }
+  return merged;
 }
 
 /** What must not be proposed again: active notes, pending proposals, rejected ones (lower-cased). */
@@ -297,9 +313,10 @@ function seenBefore(home: string, notes: Note[]): Seen {
     seen.headlines.add(headlineText.toLowerCase());
     for (const e of errors) seen.errors.add(e.toLowerCase());
   };
-  for (const note of notes) if (isActive(note)) add(headline(note), note.errors);
+  // Retired notes count too: an accepted-then-retired learning is not proposed again.
+  for (const note of notes) add(headline(note), note.errors);
   for (const p of listProposals(home)) add(headline({ body: p.text }), p.errors);
-  const rejected = readJson<{ signatures?: string[]; texts?: string[] }>(join(home, "state", "rejected.json"), {});
+  const rejected = readRejected(home);
   for (const text of rejected.texts ?? []) seen.headlines.add(text.toLowerCase());
   for (const sig of rejected.signatures ?? []) seen.errors.add(sig.toLowerCase());
   return seen;
@@ -557,37 +574,14 @@ export function rejectProposal(home: string, id: string): void {
     );
   }
 
-  // Load or create rejected.json
-  const rejectedFile = join(home, "state", "rejected.json");
-  let rejected: { signatures: string[]; texts: string[] } = {
-    signatures: [],
-    texts: [],
-  };
-  try {
-    rejected = JSON.parse(readFileSync(rejectedFile, "utf8"));
-  } catch {
-    // Create new
-  }
-
-  // Add headline and errors (lower-cased)
+  const rejected = readRejected(home);
   const hl = headline({ body: prop.text }).toLowerCase();
-  if (!rejected.texts.includes(hl)) {
-    rejected.texts.push(hl);
-  }
+  if (!rejected.texts.includes(hl)) rejected.texts.push(hl);
   for (const err of prop.errors) {
     const errLower = err.toLowerCase();
-    if (!rejected.signatures.includes(errLower)) {
-      rejected.signatures.push(errLower);
-    }
+    if (!rejected.signatures.includes(errLower)) rejected.signatures.push(errLower);
   }
-
-  // Write rejected.json
-  try {
-    mkdirSync(join(home, "state"), { recursive: true });
-    writeFileSync(rejectedFile, JSON.stringify(rejected), "utf8");
-  } catch {
-    // Ignore
-  }
+  writeAtomic(rejectedPath(home), JSON.stringify(rejected, null, 2) + "\n");
 
   // Delete inbox file
   try {
@@ -641,6 +635,7 @@ export function findFix(
   // Patterns may come from scrubbed text (older logs, hand-written notes with ***) or from an
   // error signature (colour codes stripped, whitespace collapsed): match the raw error, its
   // scrubbed form and its normalized form.
+  errorText = headAndTail(errorText, 4000); // patterns run on every failed result: bounded input
   const scrubbed = scrub(errorText).text;
   const flat = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\s+/g, " ");
   const haystack = `${errorText}\n${scrubbed}\n${flat(errorText)}\n${flat(scrubbed)}`.toLowerCase();

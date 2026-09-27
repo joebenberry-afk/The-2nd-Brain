@@ -11,7 +11,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { scrub } from "./scrub.ts";
-import { nowIso, randomId, tagList, writeAtomic } from "./util.ts";
+import { nowIso, randomId, slug, tagList, writeAtomic } from "./util.ts";
 
 export const GLOBAL = "global";
 export const KINDS = ["note", "fact", "decision", "gotcha", "procedure"] as const;
@@ -48,10 +48,22 @@ export class NoteError extends Error {}
 const LIST_KEYS = new Set(["tags", "errors", "evidence"]);
 const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "tested", "replaces", "replaced_by", "retired"];
 
-/** First non-empty body line without leading "#", at most 160 chars. */
-export function headline(note: Pick<Note, "body">): string {
+/** The full first non-empty body line, without leading "#". */
+export function firstLine(note: Pick<Note, "body">): string {
   const line = note.body.split("\n").find((l) => l.trim()) ?? "";
-  const text = line.replace(/^#+\s*/, "").trim();
+  return line.replace(/^#+\s*/, "").trim();
+}
+
+/** Everything after the first non-empty line, whitespace collapsed. */
+export function restOfBody(note: Pick<Note, "body">): string {
+  const lines = note.body.split("\n");
+  const first = lines.findIndex((l) => l.trim());
+  return first < 0 ? "" : lines.slice(first + 1).join(" ").replace(/\s+/g, " ").trim();
+}
+
+/** The first line for display on the card and in lists, at most 160 chars. */
+export function headline(note: Pick<Note, "body">): string {
+  const text = firstLine(note);
   return text.length > 160 ? text.slice(0, 159) + "…" : text;
 }
 
@@ -258,8 +270,13 @@ export function findNote(notes: Note[], id: string): Note | undefined {
   return notes.find((n) => n.id === id);
 }
 
+/** Ids and project names become path segments: only plain, single segments are accepted. */
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 /** Write a note to the file its project/private flags say; removes the old file when it moved. */
 export function saveNote(home: string, note: Note): Note {
+  if (!SAFE_ID.test(note.id) || note.id.includes("..")) throw new NoteError(`unsafe note id ${JSON.stringify(note.id)}`);
+  if (note.project !== slug(note.project)) throw new NoteError(`not a project id: ${JSON.stringify(note.project)} (use ${slug(note.project)})`);
   const path = join(noteDir(home, note.project, note.private), `${note.id}.md`);
   writeAtomic(path, formatNote(note));
   if (note.path && note.path !== path && existsSync(note.path)) rmSync(note.path);

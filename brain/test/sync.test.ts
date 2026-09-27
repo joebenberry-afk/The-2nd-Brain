@@ -218,7 +218,7 @@ describe("sync", () => {
   });
 
   it("exports SYNC_PATHS", () => {
-    expect(SYNC_PATHS).toEqual(["notes", "kits", "work", "projects.json"]);
+    expect(SYNC_PATHS).toEqual(["notes", "kits", "work", "projects.json", "rejected.json"]);
   });
 });
 

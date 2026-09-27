@@ -1,9 +1,9 @@
 /** One-shot import of V3 records. */
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { loadNotes, parseFrontmatter, saveNote, type Note, GLOBAL } from "./notes.ts";
 import { loadProjects } from "./project.ts";
-import { nowIso } from "./util.ts";
+import { nowIso, slug, writeAtomic } from "./util.ts";
 
 export interface ConvertReport {
   written: number;
@@ -112,9 +112,30 @@ function parseTomlString(content: string): Record<string, string | string[]> {
 export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: boolean }): ConvertReport {
   const report: ConvertReport = { written: 0, skipped: 0, errors: [], projects: 0 };
 
-  const existingIds = new Set(loadNotes(toHome).notes.map((n) => n.id));
+  if (!existsSync(join(fromHome, "records")) && !existsSync(join(fromHome, "projects"))) {
+    report.errors.push(`${fromHome}: no V3 records/ or projects/ here — nothing to convert`);
+    return report;
+  }
 
-  // Load projects.json to check for existing entries
+  // Every note file already present counts, even one that no longer parses: never overwrite it.
+  const existingIds = new Set(loadNotes(toHome).notes.map((n) => n.id));
+  for (const file of listMarkdown(join(toHome, "notes"))) existingIds.add(basename(file, ".md"));
+
+  // projects.json is merged into as written (raw), and never rewritten when it does not parse.
+  const projectsFile = join(toHome, "projects.json");
+  let rawProjects: Record<string, unknown> = {};
+  let projectsWritable = true;
+  if (existsSync(projectsFile)) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(projectsFile, "utf8"));
+      const inner = (parsed as { projects?: unknown } | null)?.projects;
+      if (!inner || typeof inner !== "object") throw new Error('expected { "projects": { … } }');
+      rawProjects = inner as Record<string, unknown>;
+    } catch (error) {
+      projectsWritable = false;
+      report.errors.push(`${projectsFile}: ${error instanceof Error ? error.message : String(error)} — left untouched`);
+    }
+  }
   const existingProjects = loadProjects(toHome);
 
   // Process V3 records
@@ -140,6 +161,10 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
         }
 
         const id = v3Record.id;
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) || id.includes("..")) {
+          report.errors.push(`${path}: not a V3 record id: ${JSON.stringify(id)}`);
+          continue;
+        }
         if (existingIds.has(id)) {
           report.skipped++;
           continue;
@@ -147,7 +172,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
 
         // Map V3 to V4 fields
         const kind = mapV3ToV4Kind(v3Record.type);
-        const project = mapV3ToV4Project(v3Record.scope, v3Record.project, v3Record.domains);
+        const project = slug(mapV3ToV4Project(v3Record.scope, v3Record.project, v3Record.domains));
         const tags = mapV3ToV4Tags(v3Record.scope, v3Record.domains, v3Record.terms);
         const at = v3Record.valid_from || v3Record.recorded_at || "1970-01-01T00:00:00Z";
         const tested = v3Record.status === "current" && (v3Record.grade === "TESTED" || v3Record.grade === "VERIFIED");
@@ -204,8 +229,9 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
         const content = readFileSync(projectPath, "utf8");
         const parsed = parseTomlString(content);
 
-        // Skip if already exists
-        if (existingProjects[projectName.name]) {
+        // Keyed by the slugged id; an entry already present (under any spelling) is kept as is
+        const projectId = slug(typeof parsed.id === "string" && parsed.id ? parsed.id : projectName.name);
+        if (existingProjects[projectId]) {
           continue;
         }
 
@@ -241,7 +267,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
           }
         }
 
-        newProjectEntries[projectName.name] = entry;
+        newProjectEntries[projectId] = entry;
       } catch {
         // Skip projects that fail to parse
         continue;
@@ -249,18 +275,30 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
     }
   }
 
-  // Write projects.json if there are new entries
-  if (!opts?.dryRun && Object.keys(newProjectEntries).length > 0) {
-    const merged = { ...existingProjects, ...newProjectEntries };
-    writeFileSync(
-      join(toHome, "projects.json"),
-      JSON.stringify({ projects: merged }, null, 2) + "\n",
-      "utf8",
-    );
-    report.projects = Object.keys(newProjectEntries).length;
-  } else if (opts?.dryRun) {
+  // Merge new entries into projects.json exactly as it was written (never through the normalized copy)
+  if (projectsWritable) {
+    if (!opts?.dryRun && Object.keys(newProjectEntries).length > 0) {
+      writeAtomic(projectsFile, JSON.stringify({ projects: { ...rawProjects, ...newProjectEntries } }, null, 2) + "\n");
+    }
     report.projects = Object.keys(newProjectEntries).length;
   }
 
   return report;
+}
+
+/** Every *.md file below `dir`, at any depth. */
+function listMarkdown(dir: string): string[] {
+  const out: string[] = [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listMarkdown(path));
+    else if (entry.name.toLowerCase().endsWith(".md")) out.push(path);
+  }
+  return out;
 }

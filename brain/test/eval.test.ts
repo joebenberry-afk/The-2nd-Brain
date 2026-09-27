@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadNotes } from "../src/notes.ts";
-import { recall } from "../src/search.ts";
+import { answer, recall } from "../src/search.ts";
 import { PACKAGE_HOME } from "../src/util.ts";
 
 interface Case {
@@ -49,6 +49,16 @@ describe.skipIf(!hasNotes)("recall eval on the frozen S2 cases", () => {
     console.log(`held-out ${result.hits}/${result.total} missed ${result.missed.join(",")}`);
     expect(result.total).toBe(8);
     expect(result.hits).toBeGreaterThanOrEqual(7);
+  });
+
+  it("what the agent sees (answer, with retired history): dev >= 14/15, held-out 8/8", () => {
+    const { notes } = loadNotes(PACKAGE_HOME);
+    for (const [file, min] of [["recall-dev.jsonl", 14], ["recall-heldout.jsonl", 8]] as const) {
+      const memory = cases(file).filter((c) => c.expect.length);
+      const found = memory.filter((c) => c.expect.some((id) => answer(notes, c.prompt, { project }).includes(id)));
+      console.log(`answer ${file}: ${found.length}/${memory.length}`);
+      expect(found.length).toBeGreaterThanOrEqual(min);
+    }
   });
 
   it("never returns a forbidden note: other projects' notes, archived duplicates", () => {

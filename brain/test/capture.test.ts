@@ -705,7 +705,7 @@ describe("capture.rejectProposal", () => {
 
     rejectProposal(home, "p-1");
 
-    const rejectedFile = join(home, "state", "rejected.json");
+    const rejectedFile = join(home, "rejected.json"); // synced with the notes
     expect(existsSync(rejectedFile)).toBe(true);
     const rejected = JSON.parse(readFileSync(rejectedFile, "utf8"));
     expect(rejected.texts).toContain("this is a false alarm");
