@@ -214,6 +214,21 @@ Each phase ends with something felt in a session on the owner's machine, not wit
 Order is fixed for P0–P2; P3–P5 can interleave with daily use. Nothing in P1–P5 touches the
 installed V3/V2 runtime until the installer runs in P2, and that installer is reversible.
 
+### 6.1 Status (2026-09-27, cloud-verified; live OMP runs are the owner's)
+
+| Phase | State | Evidence |
+|---|---|---|
+| P0 | done, except the `v2-archive` tag (moved to P6) | plan accepted; decisions in §7 |
+| P1 | done | 120 notes converted, 0 errors; recall = V3 exactly (dev 13/15, held-out 7/8, `test/eval.test.ts`), 4 ms/query; card 169 tokens in ~6 ms |
+| P2 | built, **live run pending** | `omp.ts`: card on turn 1, frozen resume card at index 0 of every call after compaction (fallback on the next prompt), tools with the host's TypeBox shim; simulated session in `test/omp.test.ts` |
+| P3 | built | capture → review → accept round trip; known fix ≤ 80 tokens on a failed tool result |
+| P4 | built, first kits written | `kits/omp-extension`, `kits/node-ts-cli`; card lists kits (all of them on a new project) |
+| P5 | built | git sync (private excluded by pathspec; slashed branches); `brain hook claude-code` |
+| P6 | waiting | after ≥ 1 week of daily use on the owner's machine |
+
+Next on the owner's machine: `brain/README.md` §1–2 (install, then the four checks), then a
+week of use and `brain stats`.
+
 ## 7. Owner decisions needed before P1
 
 | # | Question | Recommendation |

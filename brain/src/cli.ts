@@ -1,53 +1,20 @@
 /**
- * The `brain` command-line interface: main entry point that parses arguments and dispatches
- * to commands. Handles global options (--home, --project) and all Brain commands.
+ * The `brain` command: the same functions the OMP extension uses, for any shell, harness or
+ * human. `main(argv, io)` takes injected I/O so tests run it in-process.
  */
-import { parseArgs } from "node:util";
 import { readFileSync } from "node:fs";
-import {
-  findHome,
-  estimateTokens,
-  nowIso,
-} from "./util.ts";
-import {
-  loadNotes,
-  findNote,
-  saveNote,
-  createNote,
-  retireNote,
-  KINDS,
-  headline,
-} from "./notes.ts";
-import { loadProjects, resolveProject, visibleTo, type Project } from "./project.ts";
-import {
-  recall,
-  renderHit,
-} from "./search.ts";
-import {
-  renderCard,
-} from "./card.ts";
-import {
-  readWork,
-  writeWork,
-  resumeText,
-} from "./work.ts";
-import {
-  listProposals,
-  acceptProposal,
-  rejectProposal,
-  scanEvents,
-  scanCommits,
-  findFix,
-  renderFix,
-  appendEvent,
-  toolEventFrom,
-  pendingCount,
-} from "./capture.ts";
-import { loadKits, findKit, draftKit } from "./kits.ts";
-import { sync, shareNote } from "./sync.ts";
+import { parseArgs } from "node:util";
+import { acceptProposal, appendEvent, findFix, listProposals, rejectProposal, renderFix, scanCommits, scanEvents } from "./capture.ts";
+import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
-import { logUse, stats } from "./telemetry.ts";
-import { gitRoot, GLOBAL } from "./notes.ts";
+import { draftKit, findKit, loadKits } from "./kits.ts";
+import { createNote, findNote, GLOBAL, headline, KINDS, loadNotes, retireNote, saveNote, type Kind } from "./notes.ts";
+import { gitRoot, loadProjects, resolveProject, type Project } from "./project.ts";
+import { recall, renderHit } from "./search.ts";
+import { shareNote, sync } from "./sync.ts";
+import { logUse, stats, type UseKind } from "./telemetry.ts";
+import { estimateTokens, findHome } from "./util.ts";
+import { readWork, resumeText, writeWork } from "./work.ts";
 
 export interface Io {
   out: (text: string) => void;
@@ -57,553 +24,330 @@ export interface Io {
   stdin: () => string;
 }
 
-const DEFAULT_IO: Io = {
-  out: (text: string) => process.stdout.write(text + "\n"),
-  err: (text: string) => process.stderr.write(text + "\n"),
-  env: process.env,
-  cwd: process.cwd(),
-  stdin: () => readFileSync(0, "utf8"),
+class UsageError extends Error {}
+
+const USAGE = `brain — agent memory that survives compaction (V4)
+
+  brain card                                   start card for this directory's project
+  brain recall <query…> [--all] [--history] [-n N]
+  brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--global|--private]
+  brain state [<text…>]                        show or replace the working state
+  brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T
+  brain review · accept <pid>… · reject <pid>…
+  brain kit list · kit show <name> · kit new <name> [--from <project>] [--tag T]…
+  brain sync [--no-push] [-m <message>]
+  brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
+  brain hook claude-code                       Claude Code hook (JSON on stdin)
+
+Every command takes --home <dir> and --project <id>. Kinds: ${KINDS.join(", ")}.`;
+
+const OPTIONS = {
+  home: { type: "string" },
+  project: { type: "string" },
+  kind: { type: "string" },
+  error: { type: "string", multiple: true },
+  tag: { type: "string", multiple: true },
+  evidence: { type: "string", multiple: true },
+  tested: { type: "boolean" },
+  global: { type: "boolean" },
+  private: { type: "boolean" },
+  all: { type: "boolean" },
+  history: { type: "boolean" },
+  limit: { type: "string", short: "n" },
+  by: { type: "string" },
+  "no-push": { type: "boolean" },
+  message: { type: "string", short: "m" },
+  days: { type: "string" },
+  from: { type: "string" },
+  "dry-run": { type: "boolean" },
+} as const;
+
+type Values = ReturnType<typeof parseArgs<{ options: typeof OPTIONS; allowPositionals: true }>>["values"];
+
+interface Ctx {
+  home: string;
+  project: Project;
+  args: string[];
+  opts: Values;
+  io: Io;
+  started: number;
+}
+
+function defaultIo(): Io {
+  return {
+    out: (text) => void process.stdout.write(text + "\n"),
+    err: (text) => void process.stderr.write(text + "\n"),
+    env: process.env,
+    cwd: process.cwd(),
+    stdin: () => readFileSync(0, "utf8"),
+  };
+}
+
+function need(value: string | undefined, what: string): string {
+  if (!value || !value.trim()) throw new UsageError(`${what} is required`);
+  return value;
+}
+
+function positiveInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) throw new UsageError(`expected a positive number, got ${value}`);
+  return n;
+}
+
+function use(c: Ctx, kind: UseKind, text: string): void {
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started });
+}
+
+const COMMANDS: Record<string, (c: Ctx) => number> = {
+  card(c) {
+    const card = renderCard(c.home, loadNotes(c.home).notes, c.project, { tools: false });
+    if (card) {
+      c.io.out(card);
+      use(c, "card", card);
+    }
+    return 0;
+  },
+
+  recall(c) {
+    const query = need(c.args.join(" "), "a query");
+    const hits = recall(loadNotes(c.home).notes, query, {
+      project: c.project,
+      all: c.opts.all === true,
+      history: c.opts.history === true,
+      limit: positiveInt(c.opts.limit, 3),
+    });
+    const text = hits.length ? hits.map(renderHit).join("\n") : "no match";
+    c.io.out(text);
+    use(c, "recall", text);
+    return 0;
+  },
+
+  note(c) {
+    const text = need(c.args.join(" "), "note text");
+    const kind = c.opts.kind ?? "note";
+    if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
+    if (c.opts.global && c.opts.private) throw new UsageError("--global and --private exclude each other");
+    const note = createNote(c.home, {
+      text,
+      project: c.opts.global ? GLOBAL : c.project.id,
+      kind: kind as Kind,
+      tags: c.opts.tag ?? [],
+      errors: c.opts.error ?? [],
+      evidence: c.opts.evidence ?? [],
+      tested: c.opts.tested === true,
+      private: c.opts.private === true,
+      source: "agent",
+    });
+    c.io.out(`saved ${note.id}`);
+    use(c, "note", text);
+    return 0;
+  },
+
+  state(c) {
+    if (!c.args.length) {
+      c.io.out(resumeText(readWork(c.home, c.project.id)) || "no working state");
+      return 0;
+    }
+    const work = writeWork(c.home, c.project.id, c.args.join(" "));
+    c.io.out(`state saved (${estimateTokens(work.text)} tokens)`);
+    use(c, "state", work.text);
+    return 0;
+  },
+
+  show(c) {
+    const id = need(c.args[0], "a note id");
+    const note = findNote(loadNotes(c.home).notes, id);
+    if (!note) throw new Error(`no note ${id}`);
+    c.io.out(readFileSync(note.path, "utf8").trimEnd());
+    return 0;
+  },
+
+  retire(c) {
+    const id = need(c.args[0], "a note id");
+    retireNote(c.home, id, c.opts.by);
+    c.io.out(`retired ${id}${c.opts.by ? ` (replaced by ${c.opts.by})` : ""}`);
+    return 0;
+  },
+
+  tested(c) {
+    const id = need(c.args[0], "a note id");
+    const note = findNote(loadNotes(c.home).notes, id);
+    if (!note) throw new Error(`no note ${id}`);
+    saveNote(c.home, { ...note, tested: true });
+    c.io.out(`tested ${id}`);
+    return 0;
+  },
+
+  share(c) {
+    const id = need(c.args[0], "a note id");
+    const tag = need(c.opts.tag?.[0], "--tag");
+    const note = shareNote(c.home, id, tag);
+    c.io.out(`shared ${id} with tag ${note.tags.join(", ")}`);
+    return 0;
+  },
+
+  review(c) {
+    const notes = loadNotes(c.home).notes;
+    scanEvents(c.home, notes);
+    const root = gitRoot(c.io.cwd);
+    if (root) scanCommits(c.home, root, c.project.id, notes);
+    const pending = listProposals(c.home);
+    if (!pending.length) {
+      c.io.out("nothing to review");
+      return 0;
+    }
+    for (const p of pending) c.io.out(`${p.id} [${p.kind}${p.tested ? ", tested" : ""}] ${headline({ body: p.text })} (${p.project})`);
+    c.io.out("accept: brain accept <pid>… · reject: brain reject <pid>…");
+    return 0;
+  },
+
+  accept(c) {
+    if (!c.args.length) throw new UsageError("proposal ids are required");
+    for (const pid of c.args) c.io.out(`accepted ${pid} → ${acceptProposal(c.home, pid).id}`);
+    return 0;
+  },
+
+  reject(c) {
+    if (!c.args.length) throw new UsageError("proposal ids are required");
+    for (const pid of c.args) {
+      rejectProposal(c.home, pid);
+      c.io.out(`rejected ${pid}`);
+    }
+    return 0;
+  },
+
+  kit(c) {
+    const [sub, name] = c.args;
+    const kits = loadKits(c.home);
+    if (sub === "list") {
+      c.io.out(kits.length ? kits.map((k) => `${k.name} — ${k.description}`).join("\n") : "no kits");
+      return 0;
+    }
+    if (sub === "show") {
+      const kit = findKit(kits, need(name, "a kit name"));
+      if (!kit) throw new Error(`no kit ${name}`);
+      c.io.out(readFileSync(kit.path, "utf8").trimEnd());
+      return 0;
+    }
+    if (sub === "new") {
+      const tags = c.opts.tag ?? [];
+      const kit = draftKit(c.home, need(name, "a kit name"), c.opts.from ?? c.project.id, loadNotes(c.home).notes, tags.length ? tags : undefined);
+      c.io.out(`drafted ${kit.path}`);
+      return 0;
+    }
+    throw new UsageError("kit list | kit show <name> | kit new <name>");
+  },
+
+  sync(c) {
+    c.io.out(sync(c.home, { message: c.opts.message, push: c.opts["no-push"] !== true }).message);
+    return 0;
+  },
+
+  stats(c) {
+    const s = stats(c.home, positiveInt(c.opts.days, 7));
+    c.io.out(`last ${s.days} days · ${s.sessions} sessions`);
+    for (const [kind, v] of Object.entries(s.byKind).sort()) c.io.out(`${kind}: ${v.count} (${v.tokens} tokens)`);
+    return 0;
+  },
+
+  check(c) {
+    const { notes, errors } = loadNotes(c.home);
+    const active = notes.filter((n) => !n.retired).length;
+    c.io.out(`notes: ${notes.length} (${active} active) · projects: ${Object.keys(loadProjects(c.home)).length} · kits: ${loadKits(c.home).length}`);
+    for (const e of errors) c.io.err(e);
+    return errors.length ? 1 : 0;
+  },
+
+  convert(c) {
+    const report = convertV3(need(c.opts.from, "--from"), c.home, { dryRun: c.opts["dry-run"] === true });
+    c.io.out(`written ${report.written}, skipped ${report.skipped}, projects ${report.projects}${c.opts["dry-run"] ? " (dry run)" : ""}`);
+    for (const e of report.errors) c.io.err(e);
+    return report.errors.length ? 1 : 0;
+  },
 };
 
-function usage(): string {
-  return `Brain CLI v4 — advisory memory and agent state management
-
-Usage: brain [--home DIR] [--project ID] <command> [options]
-
-Commands:
-  help                          Show this help
-  card                          Start card for this session
-  recall <words…> [--all] [--history] [-n N]
-                                Find notes matching query
-  note <text> [--kind K] [--error E]… [--tag T]… [--evidence P]…
-       [--tested] [--global] [--private]
-                                Create a note
-  state                         Show working state
-  state <text>                  Set working state
-  show <id>                     Show a note
-  retire <id> [--by <id>]       Retire a note
-  tested <id>                   Mark note as tested
-  share <id> --tag <tag>        Share note across projects
-  review                        List proposals to review
-  accept <pid>…                 Accept proposals and turn into notes
-  reject <pid>…                 Reject proposals
-  kit list                      List available kits
-  kit show <name>               Show a kit
-  kit new <name> [--from <project>] [--tag T]…
-                                Draft a new kit
-  sync [--no-push] [-m <message>]
-                                Sync Brain to git
-  stats [--days N]              Show usage stats
-  check                         Health check
-  convert --from <v3 home> [--dry-run]
-                                Import from V3
-  hook claude-code              Claude Code adapter (internal)`;
-}
-
-function parseCliArgs(argv: string[]): { command: string; positional: string[]; options: Record<string, unknown> } {
-  const result = parseArgs({
-    args: argv,
-    options: {
-      home: { type: "string" },
-      project: { type: "string" },
-      kind: { type: "string" },
-      error: { type: "string", multiple: true },
-      tag: { type: "string", multiple: true },
-      evidence: { type: "string", multiple: true },
-      tested: { type: "boolean" },
-      global: { type: "boolean" },
-      private: { type: "boolean" },
-      all: { type: "boolean" },
-      history: { type: "boolean" },
-      n: { type: "string" },
-      by: { type: "string" },
-      "no-push": { type: "boolean" },
-      m: { type: "string" },
-      days: { type: "string" },
-      from: { type: "string" },
-      "dry-run": { type: "boolean" },
-    },
-    allowPositionals: true,
-    strict: true,
-  });
-
-  const positional = result.positionals as string[];
-  const command = positional[0] ?? "help";
-  const args = positional.slice(1);
-
-  return { command, positional: args, options: result.values };
-}
-
-async function main(argv: string[], io?: Partial<Io>): Promise<number> {
-  const ioImpl: Io = { ...DEFAULT_IO, ...io };
-  const start = Date.now();
-
+/** `brain hook claude-code`: one JSON object in, one out, exit 0 — whatever happens. */
+function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
+  let output: object = {};
   try {
-    const { command, positional, options } = parseCliArgs(argv);
-
-    // Global options
-    const home = findHome(options.home as string | undefined, ioImpl.env);
-    if (!home) {
-      ioImpl.err("brain: no Brain home (set SECOND_BRAIN_HOME)");
-      return 2;
-    }
-
-    let project: Project;
-    if (options.project) {
-      const projects = loadProjects(home);
-      project = { id: options.project as string, tags: projects[options.project as string]?.tags ?? [], root: null };
-    } else {
-      project = resolveProject(home, ioImpl.cwd, ioImpl.env);
-    }
-
-    const { notes, errors: noteErrors } = loadNotes(home);
-
-    // Dispatch commands
-    switch (command) {
-      case "help":
-      case undefined:
-        ioImpl.out(usage());
-        return 0;
-
-      case "card": {
-        const card = renderCard(home, notes, project, { tools: false });
-        if (card) ioImpl.out(card);
+    const home = findHome(explicitHome, io.env);
+    const payload: unknown = JSON.parse(io.stdin() || "{}");
+    if (home && payload && typeof payload === "object") {
+      const p = payload as Record<string, unknown>;
+      const cwd = typeof p.cwd === "string" && p.cwd ? p.cwd : io.cwd;
+      const project = resolveProject(home, cwd, io.env);
+      const event = p.hook_event_name;
+      if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
+        const card = renderCard(home, loadNotes(home).notes, project, { tools: false });
         if (card) {
-          const elapsed = Date.now() - start;
-          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: elapsed });
+          output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
+          logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0 });
         }
-        return 0;
-      }
-
-      case "recall": {
-        const query = positional.join(" ");
-        if (!query.trim()) {
-          ioImpl.err("brain: recall requires a query");
-          return 1;
-        }
-        const limit = options.n ? parseInt(options.n as string, 10) : undefined;
-        const hits = recall(notes, query, {
-          project: options.all ? null : project,
-          all: (options.all as boolean) ?? false,
-          history: (options.history as boolean) ?? false,
-          limit,
+      } else if (event === "PostToolUseFailure" && typeof p.error === "string" && p.error.trim() && p.is_interrupt !== true) {
+        const input = (p.tool_input && typeof p.tool_input === "object" ? p.tool_input : {}) as Record<string, unknown>;
+        appendEvent(home, typeof p.session_id === "string" ? p.session_id : "claude-code", cwd, {
+          tool: typeof p.tool_name === "string" ? p.tool_name : "unknown",
+          command: typeof input.command === "string" ? input.command : undefined,
+          path: typeof input.file_path === "string" ? input.file_path : undefined,
+          ok: false,
+          error: p.error,
         });
-        if (hits.length === 0) {
-          ioImpl.out("no match");
-        } else {
-          for (const hit of hits) {
-            ioImpl.out(renderHit(hit));
-          }
-        }
-        const elapsed = Date.now() - start;
-        const totalTokens = hits.reduce((sum, h) => sum + estimateTokens(renderHit(h)), 0);
-        logUse(home, { kind: "recall", project: project.id, tokens: totalTokens, ms: elapsed });
-        return 0;
-      }
-
-      case "note": {
-        const text = positional.join(" ");
-        if (!text.trim()) {
-          ioImpl.err("brain: note requires text");
-          return 1;
-        }
-        const kindOpt = options.kind as string | undefined;
-        if (kindOpt && !KINDS.includes(kindOpt as any)) {
-          ioImpl.err(`brain: unknown kind ${kindOpt}`);
-          return 1;
-        }
-        const isGlobal = (options.global as boolean) ?? false;
-        const isPrivate = (options.private as boolean) ?? false;
-        if (isGlobal && isPrivate) {
-          ioImpl.err("brain: cannot use both --global and --private");
-          return 1;
-        }
-
-        const noteProject = isGlobal ? GLOBAL : project.id;
-        const note = createNote(home, {
-          text,
-          project: noteProject,
-          kind: (kindOpt ?? "note") as any,
-          tags: (options.tag as string[]) ?? [],
-          errors: (options.error as string[]) ?? [],
-          evidence: (options.evidence as string[]) ?? [],
-          tested: (options.tested as boolean) ?? false,
-          private: isPrivate,
-        });
-
-        ioImpl.out(`saved ${note.id}`);
-        const elapsed = Date.now() - start;
-        logUse(home, { kind: "note", project: project.id, tokens: estimateTokens(text), ms: elapsed });
-        return 0;
-      }
-
-      case "state": {
-        if (positional.length === 0) {
-          const work = readWork(home, project.id);
-          const resume = resumeText(work);
-          if (resume) {
-            ioImpl.out(resume);
-          } else {
-            ioImpl.out("no working state");
-          }
-          return 0;
-        } else {
-          const text = positional.join(" ");
-          try {
-            writeWork(home, project.id, text);
-            const elapsed = Date.now() - start;
-            const tokens = estimateTokens(text);
-            ioImpl.out(`state saved (${tokens} tokens)`);
-            logUse(home, { kind: "state", project: project.id, tokens, ms: elapsed });
-            return 0;
-          } catch (error) {
-            ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-            return 1;
-          }
+        const fix = findFix(loadNotes(home).notes, p.error, project);
+        if (fix) {
+          const text = renderFix(fix);
+          output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };
+          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0 });
         }
       }
-
-      case "show": {
-        if (positional.length === 0) {
-          ioImpl.err("brain: show requires an id");
-          return 1;
-        }
-        const id = positional[0] as string;
-        const note = findNote(notes, id);
-        if (!note) {
-          ioImpl.err(`brain: unknown note ${id}`);
-          return 1;
-        }
-        const text = readFileSync(note.path, "utf8");
-        ioImpl.out(text);
-        return 0;
-      }
-
-      case "retire": {
-        if (positional.length === 0) {
-          ioImpl.err("brain: retire requires an id");
-          return 1;
-        }
-        const id = positional[0] as string;
-        const byId = options.by as string | undefined;
-        try {
-          retireNote(home, id, byId);
-          ioImpl.out(`retired ${id}`);
-          return 0;
-        } catch (error) {
-          ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-          return 1;
-        }
-      }
-
-      case "tested": {
-        if (positional.length === 0) {
-          ioImpl.err("brain: tested requires an id");
-          return 1;
-        }
-        const id = positional[0] as string;
-        const note = findNote(notes, id);
-        if (!note) {
-          ioImpl.err(`brain: unknown note ${id}`);
-          return 1;
-        }
-        saveNote(home, { ...note, tested: true });
-        ioImpl.out(`tested ${id}`);
-        return 0;
-      }
-
-      case "share": {
-        if (positional.length === 0) {
-          ioImpl.err("brain: share requires an id");
-          return 1;
-        }
-        const id = positional[0] as string;
-        const tag = options.tag as string | undefined;
-        if (!tag) {
-          ioImpl.err("brain: share requires --tag");
-          return 1;
-        }
-        try {
-          shareNote(home, id, tag);
-          ioImpl.out(`shared ${id} with tag ${tag}`);
-          return 0;
-        } catch (error) {
-          ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-          return 1;
-        }
-      }
-
-      case "review": {
-        const props = [...scanEvents(home, notes), ...(gitRoot(ioImpl.cwd) ? scanCommits(home, gitRoot(ioImpl.cwd) as string, project.id, notes) : [])];
-        if (props.length === 0) {
-          ioImpl.out("nothing to review");
-          return 0;
-        }
-        const lines = props.map((p) => {
-          const kindStr = p.kind !== "note" ? ` [${p.kind}]` : "";
-          const first = p.text.split("\n")[0] ?? "";
-          return `${p.id}${kindStr} ${first} (${p.project})`;
-        });
-        for (const line of lines) {
-          ioImpl.out(line);
-        }
-        ioImpl.out(`accept: brain accept ${props.map((p) => p.id).join(" ")} · reject: brain reject ${props.map((p) => p.id).join(" ")}`);
-        return 0;
-      }
-
-      case "accept": {
-        if (positional.length === 0) {
-          ioImpl.err("brain: accept requires proposal ids");
-          return 1;
-        }
-        for (const pid of positional) {
-          try {
-            const note = acceptProposal(home, pid);
-            ioImpl.out(`accepted ${pid} → ${note.id}`);
-          } catch (error) {
-            ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-            return 1;
-          }
-        }
-        return 0;
-      }
-
-      case "reject": {
-        if (positional.length === 0) {
-          ioImpl.err("brain: reject requires proposal ids");
-          return 1;
-        }
-        for (const pid of positional) {
-          try {
-            rejectProposal(home, pid);
-            ioImpl.out(`rejected ${pid}`);
-          } catch (error) {
-            ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-            return 1;
-          }
-        }
-        return 0;
-      }
-
-      case "kit": {
-        const subcommand = positional[0] ?? "";
-        const args = positional.slice(1);
-        const kits = loadKits(home);
-
-        if (subcommand === "list") {
-          if (kits.length === 0) {
-            ioImpl.out("no kits");
-          } else {
-            for (const kit of kits) {
-              ioImpl.out(`${kit.name} — ${kit.description}`);
-            }
-          }
-          return 0;
-        }
-
-        if (subcommand === "show") {
-          if (args.length === 0) {
-            ioImpl.err("brain: kit show requires a name");
-            return 1;
-          }
-          const kit = findKit(kits, args[0] as string);
-          if (!kit) {
-            ioImpl.err(`brain: unknown kit ${args[0]}`);
-            return 1;
-          }
-          ioImpl.out(kit.body);
-          return 0;
-        }
-
-        if (subcommand === "new") {
-          if (args.length === 0) {
-            ioImpl.err("brain: kit new requires a name");
-            return 1;
-          }
-          const name = args[0] as string;
-          const fromProject = options.from as string | undefined;
-          const tagList = (options.tag as string[]) ?? [];
-          try {
-            const kit = draftKit(home, name, fromProject ?? project.id, notes, tagList.length > 0 ? tagList : undefined);
-            ioImpl.out(`drafted ${kit.path}`);
-            return 0;
-          } catch (error) {
-            ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-            return 1;
-          }
-        }
-
-        ioImpl.err("brain: unknown kit subcommand");
-        return 1;
-      }
-
-      case "sync": {
-        try {
-          const result = sync(home, { message: options.m as string | undefined, push: !(options["no-push"] as boolean) });
-          ioImpl.out(result.message);
-          return 0;
-        } catch (error) {
-          ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-          return 1;
-        }
-      }
-
-      case "stats": {
-        const days = options.days ? parseInt(options.days as string, 10) : 7;
-        const s = stats(home, days);
-        ioImpl.out(`last ${s.days} days · ${s.sessions} sessions`);
-        for (const kind of Object.keys(s.byKind).sort()) {
-          const { count, tokens } = s.byKind[kind] as any;
-          ioImpl.out(`${kind}: ${count} (${tokens} tokens)`);
-        }
-        return 0;
-      }
-
-      case "check": {
-        let hasErrors = false;
-        const activeNotes = notes.filter((n) => !n.retired).length;
-        ioImpl.out(`notes: ${notes.length} (${activeNotes} active) · projects: ${Object.keys(loadProjects(home)).length} · kits: ${loadKits(home).length}`);
-        if (noteErrors.length > 0) {
-          for (const err of noteErrors) {
-            ioImpl.err(err);
-          }
-          hasErrors = true;
-        }
-        return hasErrors ? 1 : 0;
-      }
-
-      case "convert": {
-        const fromHome = options.from as string | undefined;
-        if (!fromHome) {
-          ioImpl.err("brain: convert requires --from");
-          return 1;
-        }
-        try {
-          const report = convertV3(fromHome, home, { dryRun: (options["dry-run"] as boolean) ?? false });
-          ioImpl.out(`written ${report.written}, skipped ${report.skipped}, projects ${report.projects}`);
-          for (const err of report.errors) {
-            ioImpl.err(err);
-          }
-          return report.errors.length > 0 ? 1 : 0;
-        } catch (error) {
-          ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
-          return 1;
-        }
-      }
-
-      case "hook": {
-        const subcommand = positional[0] ?? "";
-        if (subcommand === "claude-code") {
-          return handleClaudeCodeHook(home, notes, project, ioImpl);
-        }
-        ioImpl.err("brain: unknown hook");
-        return 1;
-      }
-
-      default:
-        ioImpl.err(`brain: unknown command ${command}`);
-        return 1;
     }
+  } catch {
+    output = {}; // fail open: never break the host session
+  }
+  io.out(JSON.stringify(output));
+  return 0;
+}
+
+export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promise<number> {
+  const io: Io = { ...defaultIo(), ...ioOverrides };
+  const started = performance.now();
+  let parsed: { values: Values; positionals: string[] };
+  try {
+    parsed = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true });
   } catch (error) {
-    if (error instanceof Error && error.message.includes("Unknown option")) {
-      ioImpl.err("brain: " + error.message);
+    io.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const [command = "help", ...args] = parsed.positionals;
+  const opts = parsed.values;
+  if (command === "help") {
+    io.out(USAGE);
+    return 0;
+  }
+  if (command === "hook") {
+    if (args[0] !== "claude-code") {
+      io.err("brain: unknown hook (supported: claude-code)");
       return 1;
     }
-    ioImpl.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
+    return claudeCodeHook(io, opts.home);
+  }
+  const run = COMMANDS[command];
+  if (!run) {
+    io.err(`brain: unknown command ${command} (brain help)`);
+    return 1;
+  }
+  const home = findHome(opts.home, io.env);
+  if (!home) {
+    io.err("brain: no Brain home (set SECOND_BRAIN_HOME)");
+    return 2;
+  }
+  const project: Project = opts.project
+    ? { id: opts.project, tags: loadProjects(home)[opts.project]?.tags ?? [], root: null }
+    : resolveProject(home, io.cwd, io.env);
+  try {
+    return run({ home, project, args, opts, io, started });
+  } catch (error) {
+    io.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 }
-
-function handleClaudeCodeHook(home: string, notes: Note[], project: Project, io: Io): number {
-  try {
-    const stdin = io.stdin();
-    let payload: any;
-    try {
-      payload = JSON.parse(stdin);
-    } catch {
-      io.out("{}");
-      return 0;
-    }
-
-    // SessionStart hook
-    if (payload.hook_event_name === "SessionStart") {
-      const source = payload.source ?? "startup";
-      if (!["startup", "resume", "clear", "compact"].includes(source)) {
-        io.out("{}");
-        return 0;
-      }
-
-      const cwd = payload.payload?.cwd ?? io.cwd;
-      const { notes: allNotes } = loadNotes(home);
-      let hookProject = project;
-      try {
-        hookProject = resolveProject(home, cwd, io.env);
-      } catch {
-        // Use default project
-      }
-
-      const card = renderCard(home, allNotes, hookProject, { tools: false });
-      if (card) {
-        const output = {
-          hookSpecificOutput: {
-            hookEventName: "SessionStart",
-            additionalContext: card,
-          },
-        };
-        io.out(JSON.stringify(output));
-      } else {
-        io.out("{}");
-      }
-      return 0;
-    }
-
-    // PostToolUseFailure hook
-    if (payload.hook_event_name === "PostToolUseFailure") {
-      const isInterrupt = payload.is_interrupt === true;
-      const error = payload.error;
-      const toolName = payload.tool_name;
-      const toolInput = payload.tool_input ?? {};
-
-      if (!isInterrupt && error && typeof error === "string") {
-        const sessionId = payload.session_id ?? "claude-code";
-        const cwd = payload.cwd ?? io.cwd;
-        const toolCommand = toolInput.command;
-        const toolPath = toolInput.file_path;
-
-        appendEvent(home, sessionId, cwd, {
-          tool: toolName ?? "unknown",
-          command: toolCommand,
-          path: toolPath,
-          ok: false,
-          error,
-        });
-
-        const { notes: allNotes } = loadNotes(home);
-        const fix = findFix(allNotes, error, project);
-
-        if (fix) {
-          const fixText = renderFix(fix);
-          const output = {
-            hookSpecificOutput: {
-              hookEventName: "PostToolUseFailure",
-              additionalContext: fixText,
-            },
-          };
-          io.out(JSON.stringify(output));
-          return 0;
-        }
-      }
-
-      io.out("{}");
-      return 0;
-    }
-
-    io.out("{}");
-    return 0;
-  } catch {
-    io.out("{}");
-    return 0;
-  }
-}
-
-export { main };

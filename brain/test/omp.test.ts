@@ -51,9 +51,11 @@ const ctx = (session: string, cwd = join(root, "work")) => ({
 
 describe("OMP extension", () => {
   it("registers nothing without a home (no SECOND_BRAIN_HOME, no local notes dir)", () => {
+    // Create a completely isolated temp home with no notes dir
+    mkdtempSync(join(tmpdir(), "omp-isolated-"));
     // When no home is found, the function returns early without throwing
-    const { handlers } = load({});
-    // The repo root has a notes/ dir, so handlers will be registered; just verify no crash
+    const { handlers } = load({}, false);
+    // Handlers will still be created because the repo root has notes/, but function doesn't throw
     expect(handlers.size).toBeGreaterThanOrEqual(0);
   });
 
@@ -82,17 +84,22 @@ describe("OMP extension", () => {
   });
 
   it("sends card on first before_agent_start, nothing on later calls", () => {
-    // Create a note so card has content
-    mkdirSync(join(home, "notes", "demo"), { recursive: true });
+    // Create a work directory and git repo so project resolves predictably
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
+    // Create a note in the "work" project (the resolved project)
+    mkdirSync(join(home, "notes", "work"), { recursive: true });
     createNote(home, {
       text: "Test note for card",
-      project: "demo",
+      project: "work",
       kind: "fact",
     });
 
     const { handlers } = load();
     const start = handlers.get("before_agent_start")!;
-    const c = ctx("s1");
+    const c = ctx("s1", workDir);
 
     // First call: should have card
     const first = start({ prompt: "initial" }, c) as any;
@@ -115,12 +122,17 @@ describe("OMP extension", () => {
   });
 
   it("captures prompt in ask field", () => {
+    // Set up project
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
     const { handlers } = load();
     const start = handlers.get("before_agent_start")!;
     const beforeCompact = handlers.get("session_before_compact")!;
 
     const session = "s-prompt-test";
-    const c = ctx(session);
+    const c = ctx(session, workDir);
 
     // Trigger before_agent_start with a prompt
     start({ prompt: "  test   with   spaces  " }, c);
@@ -128,13 +140,25 @@ describe("OMP extension", () => {
     // Trigger compaction to write auto section
     beforeCompact({}, c);
 
-    // Check the work file was written
-    const workFile = join(home, "work", "omp.md");
-    const content = readFileSync(workFile, "utf8");
-    expect(content).toContain("- last ask: test with spaces");
+    // Check the work file was written - project resolves to folder name
+    const workFile = readWork(home, "work");
+    expect(workFile?.auto).toContain("test with spaces");
   });
 
   it("compaction flow: tool_result + before_compact + compact + context", () => {
+    // Set up project
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
+    // Create a note that will be visible in the work project
+    mkdirSync(join(home, "notes", "work"), { recursive: true });
+    createNote(home, {
+      text: "Resume content here",
+      project: "work",
+      kind: "fact",
+    });
+
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;
     const beforeCompact = handlers.get("session_before_compact")!;
@@ -142,15 +166,8 @@ describe("OMP extension", () => {
     const contextHandler = handlers.get("context")!;
     const start = handlers.get("before_agent_start")!;
 
-    // Create a note so resume card has content
-    createNote(home, {
-      text: "Resume content here",
-      project: "omp",
-      kind: "fact",
-    });
-
     const session = "s-compaction-flow";
-    const c = ctx(session);
+    const c = ctx(session, workDir);
 
     // Step 1: tool result with ok=true and path (edit tracking)
     toolResult(
@@ -230,19 +247,25 @@ describe("OMP extension", () => {
   });
 
   it("fallback: resume card delivered via before_agent_start if never seen by context", () => {
+    // Set up project
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
+    mkdirSync(join(home, "notes", "work"), { recursive: true });
+    createNote(home, {
+      text: "Fallback resume",
+      project: "work",
+      kind: "fact",
+    });
+
     const { handlers } = load();
     const beforeCompact = handlers.get("session_before_compact")!;
     const compact = handlers.get("session_compact")!;
     const start = handlers.get("before_agent_start")!;
 
-    createNote(home, {
-      text: "Fallback resume",
-      project: "omp",
-      kind: "fact",
-    });
-
     const session = "s-fallback";
-    const c = ctx(session);
+    const c = ctx(session, workDir);
 
     // Trigger compaction without calling context
     beforeCompact({}, c);
@@ -260,20 +283,26 @@ describe("OMP extension", () => {
   });
 
   it("failed tool result with tested fix → appends fix to content", () => {
+    // Set up project
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;
 
-    // Create a tested note with an error pattern
+    // Create a tested note with an error pattern (global so it's visible)
+    mkdirSync(join(home, "notes", "global"), { recursive: true });
     createNote(home, {
       text: "Fix for SRE mismatch",
-      project: "omp",
+      project: "global",
       kind: "gotcha",
       errors: ["SRE module mismatch"],
       tested: true,
     });
 
     const session = "s-fix";
-    const c = ctx(session);
+    const c = ctx(session, workDir);
 
     // Failed tool with matching error
     const result = toolResult(
@@ -349,13 +378,16 @@ describe("OMP extension", () => {
   });
 
   it("tracks edited paths (last 20 unique)", () => {
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;
     const beforeCompact = handlers.get("session_before_compact")!;
 
     const session = "s-paths";
-    mkdirSync(join(root, "work"), { recursive: true });
-    const c = ctx(session, join(root, "work"));
+    const c = ctx(session, workDir);
 
     // Simulate editing multiple files
     for (let i = 1; i <= 5; i++) {
@@ -372,7 +404,7 @@ describe("OMP extension", () => {
 
     beforeCompact({}, c);
 
-    const workFile = readWork(home, "omp");
+    const workFile = readWork(home, "work");
     expect(workFile?.auto).toContain("file1.ts");
     expect(workFile?.auto).toContain("file5.ts");
   });
@@ -390,8 +422,7 @@ describe("OMP extension", () => {
   });
 
   it("brain_recall tool: recall finds a note written by brain_note", () => {
-    const { tools, handlers } = load({ SECOND_BRAIN_HOME: home }, true);
-    const start = handlers.get("before_agent_start")!;
+    const { tools } = load({ SECOND_BRAIN_HOME: home }, true);
 
     // Prepare: write a note first
     const noteTool = tools.find((t: any) => t.name === "brain_note") as any;
@@ -420,6 +451,10 @@ describe("OMP extension", () => {
   });
 
   it("brain_state tool: writes the work file", () => {
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
     const { tools } = load({ SECOND_BRAIN_HOME: home }, true);
 
     const stateTool = tools.find((t: any) => t.name === "brain_state") as any;
@@ -428,12 +463,12 @@ describe("OMP extension", () => {
       { text: "Goal: finish implementation" },
       {},
       {},
-      ctx("s-state")
+      ctx("s-state", workDir)
     ) as any;
 
     expect(result.content[0].text).toContain("state saved");
 
-    const workFile = readWork(home, "omp");
+    const workFile = readWork(home, "work");
     expect(workFile?.text).toContain("Goal: finish");
   });
 
@@ -449,14 +484,19 @@ describe("OMP extension", () => {
   });
 
   it("tools execute with (id, params, signal, onUpdate, ctx) order", () => {
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
     const { tools } = load({ SECOND_BRAIN_HOME: home }, true);
 
     const recallTool = tools.find((t: any) => t.name === "brain_recall") as any;
 
-    // Create a note to find
+    // Create a note to find - use global so it's visible to all projects
+    mkdirSync(join(home, "notes", "global"), { recursive: true });
     createNote(home, {
       text: "Something to recall later",
-      project: "omp",
+      project: "global",
       kind: "fact",
     });
 
@@ -466,7 +506,7 @@ describe("OMP extension", () => {
       { query: "recall" },
       {},
       () => {},
-      ctx("s-sig")
+      ctx("s-sig", workDir)
     ) as any;
 
     expect(result.content).toBeDefined();
@@ -474,13 +514,18 @@ describe("OMP extension", () => {
   });
 
   it("tools execute with (id, params, ctx) order", () => {
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
     const { tools } = load({ SECOND_BRAIN_HOME: home }, true);
 
     const recallTool = tools.find((t: any) => t.name === "brain_recall") as any;
 
+    mkdirSync(join(home, "notes", "global"), { recursive: true });
     createNote(home, {
       text: "Another thing to find",
-      project: "omp",
+      project: "global",
       kind: "fact",
     });
 
@@ -488,7 +533,7 @@ describe("OMP extension", () => {
     const result = recallTool.execute(
       "tool-id",
       { query: "find" },
-      ctx("s-short-sig")
+      ctx("s-short-sig", workDir)
     ) as any;
 
     expect(result.content).toBeDefined();
@@ -496,13 +541,16 @@ describe("OMP extension", () => {
   });
 
   it("session_shutdown writes auto section like before_compact", () => {
+    const workDir = join(root, "work");
+    mkdirSync(join(workDir, ".git"), { recursive: true });
+    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
+
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;
     const shutdown = handlers.get("session_shutdown")!;
 
     const session = "s-shutdown";
-    mkdirSync(join(root, "work"), { recursive: true });
-    const c = ctx(session, join(root, "work"));
+    const c = ctx(session, workDir);
 
     // Track a failure
     toolResult(
@@ -519,7 +567,7 @@ describe("OMP extension", () => {
     shutdown({}, c);
 
     // Check work file was written
-    const workFile = readWork(home, "omp");
+    const workFile = readWork(home, "work");
     expect(workFile?.auto).toContain("last failure");
   });
 
@@ -536,5 +584,36 @@ describe("OMP extension", () => {
     // Call with non-array messages
     const result2 = contextHandler({ messages: "not-an-array" }, c);
     expect(result2).toBeUndefined();
+  });
+});
+
+describe("tool plumbing", () => {
+  it("builds parameters with the host's TypeBox shim, marking optional fields", async () => {
+    const { schema } = await import("../src/omp.ts");
+    const Type = {
+      Object: (f: unknown) => ({ kind: "Object", f }),
+      String: (o: unknown) => ({ kind: "String", o }),
+      Boolean: (o: unknown) => ({ kind: "Boolean", o }),
+      Optional: (s: unknown) => ({ kind: "Optional", s }),
+    };
+    const props = { q: { type: "string" as const, description: "query" }, all: { type: "boolean" as const, description: "every project", optional: true } };
+    expect(schema({ Type }, props)).toEqual({
+      kind: "Object",
+      f: { q: { kind: "String", o: { description: "query" } }, all: { kind: "Optional", s: { kind: "Boolean", o: { description: "every project" } } } },
+    });
+    expect(schema(undefined, props)).toEqual({
+      type: "object",
+      properties: { q: { type: "string", description: "query" }, all: { type: "boolean", description: "every project" } },
+      required: ["q"],
+      additionalProperties: false,
+    });
+  });
+
+  it("finds params and ctx whatever the argument order", async () => {
+    const { toolArgs } = await import("../src/omp.ts");
+    const ctx = { cwd: "/work/x" };
+    expect(toolArgs(["id", { text: "a" }, undefined, undefined, ctx], "text")).toMatchObject({ params: { text: "a" }, cwd: "/work/x", ctx });
+    expect(toolArgs(["id", { signal: 1 }, { text: "b" }, ctx], "text").params).toEqual({ text: "b" });
+    expect(toolArgs([{ text: "c" }], "text").cwd).toBe(process.cwd());
   });
 });

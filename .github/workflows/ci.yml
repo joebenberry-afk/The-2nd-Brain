@@ -1,4 +1,5 @@
-# Deterministic gates on every push (V3 redesign, D7): lint, types, the V3 core and memory
+# Deterministic gates on every push. `v4` is the product (brain/); `core` and `omp-extension`
+# keep the V3/legacy runtime green until it is retired. V3 redesign, D7: lint, types, the V3 core and memory
 # tests, and the frozen S2 retrieval sets against the committed corpus seed. The full legacy
 # suite runs on the Windows machine; several legacy tests are Windows-only (see CLAUDE.md).
 name: ci
@@ -11,6 +12,34 @@ permissions:
   contents: read
 
 jobs:
+  v4:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node: ["22", "24"]
+    defaults:
+      run:
+        working-directory: brain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci --no-audit --no-fund
+      - name: Lint, types, tests (incl. the frozen recall eval on the committed notes)
+        run: |
+          npx eslint src test
+          npx tsc --noEmit
+          npx vitest run
+      - name: The brain command runs from the checkout under Node and Bun
+        env:
+          SECOND_BRAIN_HOME: ${{ github.workspace }}
+        run: |
+          node bin/brain.mjs check
+          bun bin/brain.mjs card --project second-brain
+
   core:
     runs-on: ubuntu-latest
     timeout-minutes: 15
