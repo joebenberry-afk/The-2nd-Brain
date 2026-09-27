@@ -76,7 +76,7 @@ describe("notes", () => {
 
   it("reads V3-style inline lists and single quotes", () => {
     const text = "---\nid: n-9\ntags: [a, 'b c']\nkind: fact\n---\nBody";
-    expect(parseNote(text, "/x", "p", false).tags).toEqual(["a", "b c"]);
+    expect(parseNote(text, "/x", "p", false).tags).toEqual(["a", "b-c"]);
     expect(readFileSync).toBeDefined();
   });
 });

@@ -40,6 +40,16 @@ export function slug(value: string): string {
   return s || "default";
 }
 
+/** A tag as stored and compared: trimmed, lower-case, spaces as "-" ("TypeScript" → "typescript", "c++" stays). */
+export function tagKey(tag: string): string {
+  return tag.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+/** Normalized, de-duplicated tags, in first-seen order. */
+export function tagList(tags: readonly string[]): string[] {
+  return [...new Set(tags.map(tagKey).filter(Boolean))];
+}
+
 /** Random id with a prefix, e.g. n-3f9a2c1b7d. */
 export function randomId(prefix: string): string {
   return `${prefix}-${randomBytes(5).toString("hex")}`;

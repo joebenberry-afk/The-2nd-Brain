@@ -11,7 +11,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { scrub } from "./scrub.ts";
-import { nowIso, randomId, writeAtomic } from "./util.ts";
+import { nowIso, randomId, tagList, writeAtomic } from "./util.ts";
 
 export const GLOBAL = "global";
 export const KINDS = ["note", "fact", "decision", "gotcha", "procedure"] as const;
@@ -151,7 +151,7 @@ export function parseNote(text: string, path: string, project: string, isPrivate
     private: isPrivate,
     at: asScalar(fields.get("at")) ?? "1970-01-01T00:00:00Z",
     source: asScalar(fields.get("source")) ?? "user",
-    tags: asList(fields.get("tags")),
+    tags: tagList(asList(fields.get("tags"))),
     errors: asList(fields.get("errors")),
     evidence: asList(fields.get("evidence")),
     tested: asScalar(fields.get("tested")) === "true",
@@ -291,7 +291,7 @@ export function createNote(home: string, input: NewNote): Note {
     private: input.private ?? false,
     at: nowIso(),
     source: input.source ?? "agent",
-    tags: input.tags ?? [],
+    tags: tagList(input.tags ?? []),
     errors: (input.errors ?? []).map(clean),
     evidence: input.evidence ?? [],
     tested: input.tested ?? false,

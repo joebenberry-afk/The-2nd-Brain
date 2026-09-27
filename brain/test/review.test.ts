@@ -379,7 +379,7 @@ describe("seventh review", () => {
     const note = createNote(home, { text: "pip install stalls behind proxy", project: "demo", errors: ["Downloading 50%\rProxyError"], tags: ["a b"], tested: true });
     const { notes, errors } = loadNotes(home);
     expect(errors).toEqual([]);
-    expect(notes[0]).toMatchObject({ id: note.id, errors: ["Downloading 50% ProxyError"], tags: ["a b"] });
+    expect(notes[0]).toMatchObject({ id: note.id, errors: ["Downloading 50% ProxyError"], tags: ["a-b"] });
   });
 
   it("a global note the project cannot see is not a duplicate", async () => {
@@ -416,5 +416,46 @@ describe("eighth review", () => {
     expect(scrub(`password='ab"cd ef'`).text).toBe(`password='***'`);
     expect(scrub(`password="ab\\"cd" next`).text).toBe(`password="***" next`);
     expect(scrub(`password: it's-secret rest`).text).toBe("password: *** rest");
+  });
+});
+
+describe("ninth review", () => {
+  it("tags compare case-insensitively wherever they are written", async () => {
+    const home = tmp();
+    const repoDir = join(tmp(), "ts-app");
+    mkdirSync(join(repoDir, ".git"), { recursive: true });
+    writeFileSync(join(repoDir, "tsconfig.json"), "{}");
+    const out: string[] = [];
+    await main(["note", "Prefer strict null checks", "--global", "--tag", "TypeScript", "--tag", "C++"], { env: { SECOND_BRAIN_HOME: home }, cwd: repoDir, out: (s) => out.push(s), err: (s) => out.push(s) });
+    expect(loadNotes(home).notes[0]?.tags).toEqual(["typescript", "c++"]);
+    const project = resolveProject(home, repoDir, {});
+    expect(recall(loadNotes(home).notes, "strict null checks", { project }).length).toBe(1);
+  });
+
+  it("resolves a working-state conflict for a project with a non-Latin name", async () => {
+    const { sync } = await import("../src/sync.ts");
+    const root = tmp();
+    const bare = join(root, "remote.git");
+    mkdirSync(bare);
+    git(bare, "init", "-q", "--bare");
+    git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+    const a = join(root, "a");
+    mkdirSync(a);
+    git(a, "init", "-q", "-b", "main");
+    git(a, "commit", "-q", "--allow-empty", "-m", "init");
+    git(a, "remote", "add", "origin", bare);
+    git(a, "push", "-q", "-u", "origin", "main");
+    git(root, "clone", "-q", bare, "b");
+    const b = join(root, "b");
+    const work = (at: string, text: string) => `---\nat: ${at}\n---\n\n${text}\n`;
+    for (const clone of [a, b]) mkdirSync(join(clone, "work"), { recursive: true });
+    writeFileSync(join(a, "work", "проект.md"), work("2026-09-27T09:00:00Z", "base"));
+    sync(a);
+    sync(b);
+    writeFileSync(join(a, "work", "проект.md"), work("2026-09-27T10:00:00Z", "older from A"));
+    sync(a);
+    writeFileSync(join(b, "work", "проект.md"), work("2026-09-27T11:00:00Z", "newer from B"));
+    expect(sync(b)).toMatchObject({ pulled: true, pushed: true });
+    expect(readFileSync(join(b, "work", "проект.md"), "utf8")).toContain("newer from B");
   });
 });

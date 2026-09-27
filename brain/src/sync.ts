@@ -4,7 +4,7 @@ import { existsSync, writeFileSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
-import { nowIso, slug } from "./util.ts";
+import { nowIso, tagKey } from "./util.ts";
 
 export class SyncError extends Error {}
 
@@ -151,7 +151,8 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
 }
 
 function git(home: string, ...args: string[]): { status: number | null; stdout: string } {
-  const r = spawnSync("git", ["-C", home, ...args], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true" } });
+  // core.quotePath=false: non-ASCII paths (work/проект.md) come back as they are, not escaped
+  const r = spawnSync("git", ["-c", "core.quotePath=false", "-C", home, ...args], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true" } });
   return { status: r.status, stdout: r.stdout ?? "" };
 }
 
@@ -174,7 +175,7 @@ function stampOf(text: string): string {
 function resolveWorkConflicts(home: string): boolean {
   for (let round = 0; round < 50 && rebaseInProgress(home); round++) {
     // Paths relative to the home, which may be a subdirectory of the repository
-    const conflicted = git(home, "diff", "--name-only", "--relative", "--diff-filter=U").stdout.split("\n").filter(Boolean);
+    const conflicted = git(home, "diff", "--name-only", "--relative", "--diff-filter=U", "-z").stdout.split("\0").filter(Boolean);
     if (!conflicted.length || !conflicted.every((f) => f.startsWith("work/"))) return false;
     for (const file of conflicted) {
       const upstream = git(home, "show", `:2:./${file}`);
@@ -205,7 +206,7 @@ export function shareNote(home: string, id: string, tag: string): Note {
     throw new SyncError("retired notes cannot be shared");
   }
 
-  const normalizedTag = slug(tag);
+  const normalizedTag = tagKey(tag);
   let updated = note;
 
   // If the note is project-scoped, move it to global

@@ -1,7 +1,7 @@
 /** MVP kits (Agent Skills format). */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { estimateTokens, writeAtomic, slug } from "./util.ts";
+import { estimateTokens, slug, tagList, writeAtomic } from "./util.ts";
 import { parseFrontmatter, type Note, isActive } from "./notes.ts";
 import type { Project } from "./project.ts";
 
@@ -51,7 +51,7 @@ export function loadKits(home: string): Kit[] {
       const tagsRaw = fields.get("tags");
       let tags: string[] = [];
       if (Array.isArray(tagsRaw)) {
-        tags = tagsRaw.filter((t): t is string => typeof t === "string");
+        tags = tagList(tagsRaw.filter((t): t is string => typeof t === "string"));
       }
 
       kits.push({
@@ -165,7 +165,7 @@ export function draftKit(
   lines.push(`description: "MVP kit drafted from ${project}: stack, scaffold steps, gotchas. Edit before use."`);
   if (tags && tags.length) {
     lines.push("tags:");
-    for (const tag of tags) {
+    for (const tag of tagList(tags)) {
       lines.push(`  - ${tag}`);
     }
   }

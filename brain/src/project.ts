@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
-import { slug } from "./util.ts";
+import { slug, tagList } from "./util.ts";
 
 export interface Project {
   id: string;
@@ -144,7 +144,7 @@ function canonical(projects: Record<string, ProjectEntry>, derived: string): str
 
 function tagsOf(entry: ProjectEntry | undefined, root: string | null = null): string[] {
   const declared = Array.isArray(entry?.tags) ? entry.tags.filter((t): t is string => typeof t === "string") : [];
-  return [...new Set([...declared, ...inferTags(root)])];
+  return tagList([...declared, ...inferTags(root)]);
 }
 
 /**
