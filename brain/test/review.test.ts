@@ -347,3 +347,28 @@ it("resolves a working-state conflict in a nested Brain home", async () => {
   expect(sync(join(b, "home"))).toMatchObject({ pulled: true, pushed: true });
   expect(readFileSync(join(b, "home", "work", "demo.md"), "utf8")).toContain("newer from B");
 });
+
+describe("sixth review: credentials by key name, URL and header", () => {
+  it("masks every credential shape", async () => {
+    const { scrub } = await import("../src/scrub.ts");
+    const masked: [string, string][] = [
+      ["aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws_secret_access_key = ***"],
+      ['secret_key = "abc def ghi"', 'secret_key = "***"'],
+      ["private_key: hunter22", "private_key: ***"],
+      ["clientSecret=abcdef12345", "clientSecret=***"],
+      ["PGPASSWORD='my pass phrase' psql", "PGPASSWORD='***' psql"],
+      ["redis://:supersecret@host:6379", "redis://:***@host:6379"],
+      ["curl --user=alice:s3cretpw https://x", "curl --user=alice:*** https://x"],
+      ["Authorization: Basic dXNlcjpwYXNzd29yZA==", "Authorization: Basic ***"],
+      ["Authorization: Token abcdef123456", "Authorization: Token ***"],
+    ];
+    for (const [input, expected] of masked) expect(scrub(input, { longRuns: false }).text, input).toBe(expected);
+  });
+
+  it("leaves look-alikes alone", async () => {
+    const { scrub } = await import("../src/scrub.ts");
+    for (const text of ["secretary: Bob", "key_count: 5", "sort key: name", "cache_key=build-123-abc", "KEYBOARD_LAYOUT=us", "OLDPWD=/home/me", "https://github.com/o/r.git", "Error: something failed"]) {
+      expect(scrub(text), text).toEqual({ text, scrubbed: false });
+    }
+  });
+});
