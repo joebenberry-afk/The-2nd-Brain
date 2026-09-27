@@ -10,7 +10,7 @@ import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { draftKit, findKit, kitsDir, loadKits } from "./kits.ts";
 import { createNote, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, retireNote, saveNote, type Kind } from "./notes.ts";
-import { gitRoot, loadProjects, resolveProject, type Project } from "./project.ts";
+import { gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { answer } from "./search.ts";
 import { shareNote, sync } from "./sync.ts";
 import { logUse, stats, type UseKind } from "./telemetry.ts";
@@ -384,9 +384,7 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
     io.err("brain: no Brain home (set SECOND_BRAIN_HOME)");
     return 2;
   }
-  const project: Project = opts.project
-    ? { id: opts.project, tags: loadProjects(home)[opts.project]?.tags ?? [], root: null }
-    : resolveProject(home, io.cwd, io.env);
+  const project: Project = opts.project ? projectById(home, opts.project, io.cwd) : resolveProject(home, io.cwd, io.env);
   try {
     return run({ home, project, args, opts, io, started });
   } catch (error) {

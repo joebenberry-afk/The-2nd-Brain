@@ -448,7 +448,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
         if (fix) {
           const fixText = renderFix(fix);
-          const contentArray = Array.isArray(content) ? content : [];
+          const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
           const resultContent = [...contentArray, { type: "text", text: fixText }];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key });
           return { content: resultContent };

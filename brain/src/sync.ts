@@ -34,22 +34,20 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     }
   }
 
-  // Build pathspecs with exclude for private notes
+  // Build pathspecs with exclude for private notes. With no Brain path on disk there is nothing to
+  // commit — and an exclude-only pathspec would mean "everything else", so it is never used.
   const pathspecs = [...existingPaths, ":(exclude,glob)notes/*/private/**"];
+  const stage = existingPaths.length > 0;
 
-  // Stage the files with pathspecs
-  const addResult = spawnSync("git", ["-C", home, "add", "-A", "--", ...pathspecs], {
-    encoding: "utf8",
-  });
-  if (addResult.status !== 0) {
-    throw new SyncError(`Failed to stage files: ${addResult.stderr}`);
+  let hasChanges = false;
+  if (stage) {
+    const addResult = spawnSync("git", ["-C", home, "add", "-A", "--", ...pathspecs], { encoding: "utf8" });
+    if (addResult.status !== 0) throw new SyncError(`Failed to stage files: ${addResult.stderr}`);
+    // Staged changes within the Brain paths only
+    const diffResult = spawnSync("git", ["-C", home, "diff", "--cached", "--quiet", "--", ...pathspecs], { encoding: "utf8" });
+    hasChanges = diffResult.status === 1;
+    if (diffResult.status !== 0 && diffResult.status !== 1) throw new SyncError(`git diff failed: ${diffResult.stderr}`);
   }
-
-  // Check if there are staged changes (check only the allowed paths)
-  const diffResult = spawnSync("git", ["-C", home, "diff", "--cached", "--quiet", "--", ...pathspecs], {
-    encoding: "utf8",
-  });
-  const hasChanges = diffResult.status !== 0;
 
   let committed = false;
   if (hasChanges) {
@@ -115,7 +113,7 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     encoding: "utf8",
   });
 
-  if (pullResult.status !== 0 && !resolveWorkConflicts(home)) {
+  if (pullResult.status !== 0 && !(rebaseInProgress(home) && resolveWorkConflicts(home))) {
     spawnSync("git", ["-C", home, "rebase", "--abort"], { encoding: "utf8" });
     throw new SyncError(pullResult.stderr.slice(0, 500));
   }

@@ -271,3 +271,20 @@ describe("sync resolves working-state conflicts by recency (regression)", () => 
     expect(readFileSync(join(b, "work", "demo.md"), "utf8")).toContain("from A, newer");
   });
 });
+
+describe("sync failure modes (review regressions)", () => {
+  it("a pull that fails without stopping a rebase is an error, not a success", () => {
+    const { a } = pairRepos();
+    createNote(a, { text: "local note", project: "demo" });
+    gitCmd(a, "remote", "set-url", "origin", join(tmp(), "gone.git"));
+    expect(() => sync(a, { push: false })).toThrow(SyncError);
+  });
+
+  it("never stages anything outside the Brain paths, even when none of them exists yet", () => {
+    const { a } = pairRepos();
+    writeFileSync(join(a, "unrelated.txt"), "not brain data\n");
+    const result = sync(a, { push: false });
+    expect(result.committed).toBe(false);
+    expect(gitCmd(a, "status", "--porcelain")).toBe("?? unrelated.txt\n");
+  });
+});

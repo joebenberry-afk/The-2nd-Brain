@@ -118,12 +118,13 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
   const existingProjects = loadProjects(toHome);
 
   // Process V3 records
-  const recordDirs = [join(fromHome, "records"), join(fromHome, "records", "private")];
+  const recordDirs: [string, boolean][] = [
+    [join(fromHome, "records"), false],
+    [join(fromHome, "records", "private"), true],
+  ];
 
-  for (const recordDir of recordDirs) {
+  for (const [recordDir, isPrivate] of recordDirs) {
     if (!existsSync(recordDir)) continue;
-
-    const isPrivate = recordDir.includes("private");
 
     for (const file of readdirSync(recordDir)) {
       if (!file.endsWith(".md")) continue;

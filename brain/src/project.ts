@@ -135,10 +135,22 @@ function tagsOf(entry: ProjectEntry | undefined, root: string | null = null): st
   return [...new Set([...declared, ...inferTags(root)])];
 }
 
+/**
+ * A project named explicitly (BRAIN_PROJECT, --project): slugged like every derived id — so it
+ * can never leave notes/ or work/ — and mapped through aliases.
+ */
+export function projectById(home: string, id: string, cwd: string): Project {
+  const projects = loadProjects(home);
+  const derived = slug(id);
+  const canonicalId = canonical(projects, derived === GLOBAL ? "global-project" : derived);
+  const root = gitRoot(cwd);
+  return { id: canonicalId, tags: tagsOf(projects[canonicalId], root), root };
+}
+
 export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Project {
   const projects = loadProjects(home);
   const explicit = env.BRAIN_PROJECT?.trim();
-  if (explicit) return { id: explicit, tags: tagsOf(projects[explicit], gitRoot(cwd)), root: gitRoot(cwd) };
+  if (explicit) return projectById(home, explicit, cwd);
 
   const here = normalizePath(resolve(cwd));
   let best: { len: number; id: string } | null = null;

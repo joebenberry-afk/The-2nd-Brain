@@ -346,20 +346,39 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
       continue;
     }
     const offset = cursor[fileName] ?? 0;
-    if (offset < bytes.length) {
+    // Only complete lines: a line still being appended is read next time.
+    const end = bytes.lastIndexOf(0x0a) + 1;
+    if (offset < end) {
       const events: ToolEvent[] = [];
-      for (const line of bytes.subarray(offset).toString("utf8").split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          events.push(JSON.parse(line) as ToolEvent);
-        } catch {
-          // a torn or foreign line is skipped
+      const starts: number[] = [];
+      let at = offset;
+      while (at < end) {
+        const next = bytes.indexOf(0x0a, at) + 1;
+        const line = bytes.subarray(at, next).toString("utf8").trim();
+        if (line) {
+          try {
+            events.push(JSON.parse(line) as ToolEvent);
+            starts.push(at);
+          } catch {
+            // a foreign line is skipped
+          }
         }
+        at = next;
       }
+      // In a live log (written within the hour), a failure whose next 6 events have not all arrived
+      // may still be fixed: the cursor waits on it. A quiet log's session is over: nothing waits.
+      let live = false;
+      try {
+        live = now.getTime() - statSync(filePath).mtimeMs < 3_600_000;
+      } catch {
+        // unknown: treat as over
+      }
+      let waiting: number | undefined;
       for (let i = 0; i < events.length; i++) {
         const failed = events[i];
         if (!failed || failed.ok !== false || !failed.command || !failed.error) continue;
         const prog = program(failed.command);
+        let paired = false;
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
           const fixed = events[j];
           if (!fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command) continue;
@@ -368,7 +387,8 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
           const fixedCmd = scrub(fixed.command).text;
           const error = scrub(failed.error).text;
           const short = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 60);
-          const sig = errorSignature(error).slice(0, 60);
+          // The signature is matched against future raw errors: only credentials are masked in it.
+          const sig = errorSignature(scrub(failed.error, { longRuns: false }).text).slice(0, 60);
           const head = cutToTokens(`${prog}: ${short(failedCmd)} fails (${sig}); ${short(fixedCmd)} works`, 50);
           propose(home, seen, {
             id: randomId("p"),
@@ -381,15 +401,17 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
             source: "capture",
             evidence: [`events:${fileName}#${i}-${j}`],
           }, proposals);
+          paired = true;
           i = j;
           break;
         }
+        if (live && !paired && waiting === undefined && i + 6 >= events.length) waiting = starts[i];
       }
-      cursor[fileName] = bytes.length;
+      cursor[fileName] = waiting ?? end;
     }
     try {
       const old = now.getTime() - statSync(filePath).mtimeMs > EVENT_RETENTION_DAYS * 86_400_000;
-      if (old && (cursor[fileName] ?? 0) >= bytes.length) {
+      if (old && (cursor[fileName] ?? 0) >= bytes.lastIndexOf(0x0a) + 1) {
         rmSync(filePath);
         delete cursor[fileName];
       }
@@ -410,7 +432,10 @@ export function scanCommits(home: string, repoRoot: string, project: string, not
   const cursor = readJson<Record<string, string>>(cursorFile, {});
   const last = cursor[repoRoot];
   const range = last ? [`${last}..HEAD`] : ["-50"];
-  const result = spawnSync("git", ["-C", repoRoot, "log", ...range, "--format=%H%x00%B%x1e"], { encoding: "utf8", timeout: 30_000 });
+  const log = (r: string[]) => spawnSync("git", ["-C", repoRoot, "log", ...r, "--format=%H%x00%B%x1e"], { encoding: "utf8", timeout: 30_000 });
+  let result = log(range);
+  // A cursor git no longer knows (history rewritten, fresh clone): start over; dedupe keeps it quiet.
+  if (result.status !== 0 && last) result = log(["-50"]);
   if (result.status !== 0 || !result.stdout) return [];
 
   const commits = result.stdout
@@ -619,7 +644,8 @@ export function findFix(
 ): Note | null {
   if (!errorText.trim()) return null;
 
-  const haystack = errorText.toLowerCase();
+  const scrubbed = scrub(errorText).text;
+  const haystack = `${errorText}\n${scrubbed}`.toLowerCase();
   let best: { len: number; id: string; note: Note } | null = null;
 
   for (const note of notes) {
@@ -634,7 +660,7 @@ export function findFix(
         const regexText = pattern.slice(3).trim();
         try {
           const regex = new RegExp(regexText, "i");
-          if (regex.test(errorText)) {
+          if (regex.test(errorText) || regex.test(scrubbed)) {
             matchLen = regexText.length;
           }
         } catch {

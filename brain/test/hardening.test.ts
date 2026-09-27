@@ -19,7 +19,7 @@ describe("secrets never reach notes or working state", () => {
   it("masks credentials in note bodies and error patterns but keeps commit SHAs", () => {
     const home = tmp();
     const note = createNote(home, {
-      text: `Deploy key rotated\n\nOld token=abc123 and ghp_${"x".repeat(30)} were in the log; fixed in ${SHA}.`,
+      text: `Deploy key rotated\n\nOld token=abc123def456 and ghp_${"x".repeat(30)} were in the log; fixed in ${SHA}.`,
       project: "demo",
       errors: ["Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig rejected"],
     });
@@ -38,6 +38,20 @@ describe("secrets never reach notes or working state", () => {
     const work = readFileSync(join(home, "work", "demo.md"), "utf8");
     expect(work).not.toMatch(/sk-a{30}|hunter2|t{40}/);
     expect(readWork(home, "demo")?.text).toContain("Goal: ship.");
+  });
+
+  it("leaves ordinary words, paths and parser errors alone", () => {
+    for (const text of [
+      "Use the disk-usage-analyzer-config-v2 for this",
+      "task-runner-configuration-file",
+      "open /home/runner/work/myproject/myproject/package.json",
+      "C:/Users/me/Documents/The-Second-Brain/brain/src/omp.ts",
+      "SyntaxError: Unexpected token: } at line 3",
+    ]) {
+      expect(scrub(text)).toEqual({ text, scrubbed: false });
+    }
+    expect(scrub("key sk-proj-abc123def456ghi789jkl012").text).toBe("key ***");
+    expect(scrub("aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZyE=").text).toBe("***");
   });
 
   it("the long-run rule stays on for captured output", () => {
