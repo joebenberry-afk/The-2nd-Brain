@@ -226,6 +226,14 @@ installed V3/V2 runtime until the installer runs in P2, and that installer is re
 | P5 | built | git sync (private excluded by pathspec; slashed branches); `brain hook claude-code` |
 | P6 | waiting | after ≥ 1 week of daily use on the owner's machine |
 
+Hardening pass (2026-09-27, "perfect it without a live test"): secrets masked on every write;
+recall by note id and a retired-answer history line; duplicate notes refused; tools registered
+first and guarded (a host that rejects them keeps the card and fixes); stack tags inferred from
+root manifests; project aliases; the 70 SZ-tool notes re-homed out of global; token cache and a
+single scoring pass (5,000 notes: warm recall 67 ms); installer `-Copy` fallback and a real
+PowerShell + Bun round-trip test. Index trigger: build an inverted index only when a real corpus
+passes ~2,000 notes or warm recall exceeds 50 ms.
+
 Next on the owner's machine: `brain/README.md` §1–2 (install, then the four checks), then a
 week of use and `brain stats`.
 

@@ -136,12 +136,40 @@ export interface RecallOptions {
 
 export const RELATIVE_FLOOR = 0.5;
 
-/** Recall over notes with BM25 ranking. */
-export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[] {
-  const q = tokens(query);
-  if (!q.length) return [];
+/** FTS5 unicode61-style tokens: NFKD, marks removed, lower-cased runs of letters and digits. */
+function scoreTokenize(text: string): string[] {
+  return text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
 
-  const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
+/**
+ * Tokenizing is most of a search's cost, and the same notes are searched again and again (the
+ * OMP process lives for the session; one answer searches twice). Keyed by the full column text,
+ * so an edited note is never served stale tokens; cleared wholesale when it grows large.
+ */
+const TOKEN_CACHE = new Map<string, string[][]>();
+const TOKEN_CACHE_MAX = 20_000;
+
+function columnTokens(...columns: string[]): string[][] {
+  const key = columns.join("\u0000");
+  let cols = TOKEN_CACHE.get(key);
+  if (!cols) {
+    if (TOKEN_CACHE.size >= TOKEN_CACHE_MAX) TOKEN_CACHE.clear();
+    cols = columns.map(scoreTokenize);
+    TOKEN_CACHE.set(key, cols);
+  }
+  return cols;
+}
+
+/** The scored query: its tokens and the 200 best candidates, before any filter. */
+export interface Scored {
+  q: string[];
+  candidates: { note: Note; score: number; words: string }[];
+}
+
+/** BM25 over the whole corpus (IDF is corpus-wide, like the V3 index): the expensive half of recall. */
+export function scoreQuery(notes: Note[], query: string): Scored {
+  const q = tokens(query);
+  if (!q.length) return { q, candidates: [] };
 
   // Build FTS columns for every note
   interface Row {
@@ -161,17 +189,13 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
   }));
 
   // Tokenize for BM25 (unicode61 compatible: every length counts), once per row
-  const scoreTokenize = (text: string): string[] => {
-    const normalized = text.normalize("NFKD").replace(/\p{M}/gu, "");
-    return normalized.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-  };
 
   // counts[row][term][column] = tokens in that column starting with the term
   const D: number[] = [];
   const counts: number[][][] = [];
   const present = q.map(() => 0);
   for (const row of rows) {
-    const cols = [row.id, row.title, row.terms, row.body].map(scoreTokenize);
+    const cols = columnTokens(row.id, row.title, row.terms, row.body);
     D.push(cols.reduce((sum, t) => sum + t.length, 0));
     counts.push(
       q.map((term, ti) => {
@@ -219,18 +243,23 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
   });
   candidates.splice(200);
 
-  // Apply filters
+  return { q, candidates: candidates.map(({ row, score }) => ({ note: row.note, score, words: `${row.title} ${row.terms} ${row.body}` })) };
+}
+
+/** The cheap half of recall: visibility, history, the match rule, the relative floor, the limit. */
+export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
+  const q = scored.q;
+  const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
   const hits: Hit[] = [];
-  for (const candidate of candidates) {
-    const { row, score } = candidate;
+  for (const { note, score, words: text } of scored.candidates) {
     // Visibility filter
-    if (!opts.all && !visibleTo(row.note, opts.project)) continue;
+    if (!opts.all && !visibleTo(note, opts.project)) continue;
 
     // Retired filter
-    if (!opts.history && row.note.retired) continue;
+    if (!opts.history && note.retired) continue;
 
     // Match rule: need enough matched tokens
-    const allText = `${row.title} ${row.terms} ${row.body}`.toLowerCase();
+    const allText = text.toLowerCase();
     const words = allText.match(/[a-z0-9]{3,}/g) ?? [];
     const matched: string[] = [];
     for (const term of q) {
@@ -242,7 +271,7 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
     const minMatched = q.length <= 2 ? 1 : 2;
     if (matched.length < minMatched) continue;
 
-    hits.push({ note: row.note, score, matched });
+    hits.push({ note, score, matched });
   }
 
   // Relative floor
@@ -256,6 +285,12 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
 
   return hits.slice(0, limit);
 }
+
+/** Recall over notes with BM25 ranking. */
+export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[] {
+  return filterHits(scoreQuery(notes, query), opts);
+}
+
 
 /** Render a hit as a single line of at most `max` chars (default 240). */
 export function renderHit(hit: Hit, max = 240): string {
@@ -326,11 +361,12 @@ export function answer(notes: Note[], query: string, opts: RecallOptions): strin
     const meta = [note.kind, note.tested ? "tested" : "", note.retired ? `retired ${note.retired.slice(0, 10)}` : "", note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
     return cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS);
   }
-  const hits = recall(notes, query, opts);
+  const scored = scoreQuery(notes, query);
+  const hits = filterHits(scored, opts);
   if (opts.history) return renderHits(hits);
   // A retired note that answers better than anything current is the truth the agent needs:
   // "that changed on <date>" (and what replaced it), not an unrelated current note.
-  const retired = recall(notes, query, { ...opts, history: true, limit: 10 }).find((h) => h.note.retired);
+  const retired = filterHits(scored, { ...opts, history: true, limit: 10 }).find((h) => h.note.retired);
   const lines = hits.length ? renderHits(hits) : "";
   if (retired && (!hits.length || retired.score > (hits[0]?.score ?? 0))) {
     return [lines, renderHit(retired)].filter(Boolean).join("\n");

@@ -17,6 +17,13 @@ The installer (every step reversible):
   `~/.omp/agent/extensions-disabled/` so memory is not pushed twice;
 - writes `~/.omp/agent/extensions/second-brain-v4/index.ts`, a one-line loader that imports
   `brain/src/omp.ts` from the checkout — `git pull` plus an OMP restart is the whole update.
+  If OMP does not load it (check 1 below shows no card), run `.\scripts\install-v4.ps1 -Copy`:
+  a self-contained copy of `brain/src`, the layout the live-qualified legacy extension used
+  (re-run it after each `git pull`);
+- ends with `brain check` as a self-test.
+
+The installer and uninstaller are exercised by `test/install.test.ts` (PowerShell 7, and Bun
+loading the installed extension) wherever `pwsh` is available — including CI.
 
 No `npm install` is needed to run it (no runtime dependencies); `npm ci` in `brain/` is only for
 tests.
@@ -30,14 +37,19 @@ memories, bring them over through V3 first, then convert (existing ids are skipp
 brain convert --from .                                                     # records/ → notes/
 ```
 
-Open a new terminal, then:
+Open a **new terminal** (it picks up PATH and `SECOND_BRAIN_HOME`), then:
 
 ```powershell
 brain check     # notes: N (A active) · projects: P · kits: K — exit 0
 brain card      # what a session in this checkout will see
 ```
 
-Restart OMP.
+Restart OMP from that new terminal.
+
+**Other projects' notes.** A project's id comes from its git remote or folder name. If a repo on
+this machine resolves to a different id than its notes use (`brain card` in it shows nothing you
+expected), add the id as an alias in `projects.json`, e.g. the SZ-tool notes live under `sztool`
+with aliases `sz-tool`, `sz-tools`, `sztools`. `brain move <id> --to <project>` re-homes one note.
 
 ## 2. Verify in the first sessions
 
