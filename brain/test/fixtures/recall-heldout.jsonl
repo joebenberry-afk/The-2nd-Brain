@@ -1,0 +1,18 @@
+{"id": "H01", "category": "memory_short", "prompt": "Why do bare python launches break on this machine?", "expect": ["mem-b67de5057f76"]}
+{"id": "H02", "category": "memory_short", "prompt": "Does the Claude Code Stop hook fire per turn or per session?", "expect": ["mem-bde4dc4aee9e"]}
+{"id": "H03", "category": "memory_project", "prompt": "After restoring the SQLite database, what has to happen to the wal and shm files?", "expect": ["mem-29557f93448f"]}
+{"id": "H04", "category": "memory_short", "prompt": "How deep can RLM child recursion go?", "expect": ["mem-d2f7df353130"]}
+{"id": "H05", "category": "memory_short", "prompt": "What replaced the two worker cap?", "expect": ["mem-f745bcb2eff2"]}
+{"id": "H06", "category": "memory_imperative", "prompt": "Check the Antigravity hook contract before you edit the adapter.", "expect": ["mem-79d7c4fd9876"]}
+{"id": "H07", "category": "memory_long_mixed", "prompt": "Keep the answer short, do not run tests, and only list files if you really need to. Explain why OMP compaction was cancelled on 2026-09-13 and name the cause.", "expect": ["mem-b7011ab797ac"]}
+{"id": "H08", "category": "memory_project", "prompt": "Prime print-mode runs behave oddly with environment variables; remind me what the daemon does with its startup env.", "expect": ["mem-b0d6cc3de0ab"]}
+{"id": "H09", "category": "no_benefit_direct", "prompt": "Reply with only the word READY.", "expect": []}
+{"id": "H10", "category": "no_benefit_direct", "prompt": "Convert 3 miles to kilometers.", "expect": []}
+{"id": "H11", "category": "no_benefit_format", "prompt": "Format this list as a markdown table: apples 3, pears 5.", "expect": []}
+{"id": "H12", "category": "no_benefit_direct", "prompt": "Write a haiku about autumn rain.", "expect": []}
+{"id": "H13", "category": "no_benefit_format", "prompt": "Sort these numbers ascending and print them on one line: 9, 2, 7, 4.", "expect": []}
+{"id": "H14", "category": "no_benefit_overlap", "prompt": "Use a Python context manager to open a file and read its first line.", "expect": []}
+{"id": "H15", "category": "no_benefit_overlap", "prompt": "Summarize the plot of Hamlet in two sentences without using any tools.", "expect": []}
+{"id": "H16", "category": "no_benefit_overlap", "prompt": "What is the capital of Australia? Reply in one word, no session notes.", "expect": []}
+{"id": "H17", "category": "wrong_project", "prompt": "What base delay and factor does the retry helper use?", "expect": []}
+{"id": "H18", "category": "stale_archived", "prompt": "How many traditional flavors does Neapolitan pizza have?", "expect": []}

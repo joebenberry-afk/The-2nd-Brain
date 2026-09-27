@@ -80,3 +80,7 @@ Desktop.ini
 outputs/reports/
 
 .coverage
+
+# V4: per-machine CLI shim and private notes never leave the machine
+/brain.cmd
+notes/*/private/

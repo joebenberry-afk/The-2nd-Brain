@@ -1,0 +1,28 @@
+{"id": "D01", "category": "no_benefit_overlap", "prompt": "Reply with exactly: NB-OK-17. Do not use any tools.", "expect": []}
+{"id": "D02", "category": "memory_short", "prompt": "In what order should database migrations be applied?", "expect": ["mem-a8d221e64549"]}
+{"id": "D03", "category": "memory_long_mixed", "prompt": "Answer from your current context only; do not read files or run shell commands. Question: in Second Brain, in what order should database migrations be applied? If your context contains a Second Brain memory packet, quote every memory id it lists (ids look like mem-xxxxxxxxxxxx). Then call the task tool exactly once with agent 'sonic' and the task 'Reply with exactly: CHILD-OK-391. Do no other work.' Call no tool other than task, plus hub only if you must wait for the child's result. Finish with exactly one line: RESULT <memory ids or NONE> CHILD <child reply or NONE>", "expect": ["mem-a8d221e64549"]}
+{"id": "D04", "category": "memory_imperative", "prompt": "Apply the database migrations in the right order for schema 28.", "expect": ["mem-a8d221e64549"]}
+{"id": "D05", "category": "memory_long_irrelevant_hit", "prompt": "Do not use any tools and do not read files; answer from memory only, keep it to one line, no markdown. Tell me in what order the database migrations should be applied.", "expect": ["mem-a8d221e64549"]}
+{"id": "D06", "category": "no_benefit_direct", "prompt": "Translate 'good morning' into French.", "expect": []}
+{"id": "D07", "category": "no_benefit_overlap", "prompt": "Rename the local variable tmp to buffer in this snippet: tmp = 1; print(tmp)", "expect": []}
+{"id": "D08", "category": "no_benefit_format", "prompt": "Summarize this paragraph in one sentence: the cat sat on the mat and slept.", "expect": []}
+{"id": "D09", "category": "memory_short", "prompt": "Which OMP version introduced advisor.maxNotesPerUpdate?", "expect": ["mem-5ee4c7712fa3"]}
+{"id": "D10", "category": "no_benefit_overlap", "prompt": "List three generic best practices for writing shell commands.", "expect": []}
+{"id": "D11", "category": "memory_sessions", "prompt": "What does OMP 18.1.15 document about JSONL conversation trees and resume?", "expect": ["mem-812f9bb08444"]}
+{"id": "D12", "category": "memory_recursion", "prompt": "Why is RLM child recursion blocked?", "expect": ["mem-d2f7df353130"]}
+{"id": "D13", "category": "memory_fanout", "prompt": "What replaced the hard two-worker cap?", "expect": ["mem-f745bcb2eff2"]}
+{"id": "D14", "category": "memory_long_imperative", "prompt": "Without reading any files, tell me what the migration ordering rule is.", "expect": ["mem-a8d221e64549"]}
+{"id": "D15", "category": "no_benefit_format", "prompt": "Format the answer as a markdown table with three columns and no bullet points.", "expect": []}
+{"id": "D16", "category": "no_benefit_summarize", "prompt": "Summarize the paragraph above in two sentences.", "expect": []}
+{"id": "D17", "category": "no_benefit_rewrite", "prompt": "Rewrite this sentence in the passive voice: the cat sat on the mat.", "expect": []}
+{"id": "D18", "category": "no_benefit_math", "prompt": "What is 17 times 23?", "expect": []}
+{"id": "D19", "category": "no_benefit_echo", "prompt": "Reply with exactly: OK-42", "expect": []}
+{"id": "D20", "category": "wrong_project", "prompt": "What delay and factor does the brain-pilot-demo retry helper use?", "expect": [], "forbid": ["mem-f9b4deb601eb"]}
+{"id": "D21", "category": "archived_memory", "prompt": "What is the migration ordering rule?", "expect": ["mem-a8d221e64549"], "forbid": ["mem-621006a63d2d"]}
+{"id": "D22", "category": "memory_restore", "prompt": "How do I restore a database backup without leaving stale files?", "expect": ["mem-29557f93448f"]}
+{"id": "D23", "category": "memory_antigravity", "prompt": "Which memory records that the Antigravity hook contract is authoritative?", "expect": ["mem-79d7c4fd9876"]}
+{"id": "D24", "category": "memory_wal_restore", "prompt": "Which memory says a restore must not leave stale -wal files?", "expect": ["mem-29557f93448f"]}
+{"id": "D25", "category": "no_benefit_single_term", "prompt": "In one sentence, what is a Python dict? Reply with one sentence.", "expect": [], "note": "VG-N06 shape: the row's whole match is one mid-frequency headline term ('python', df 9), and the request's other content terms ('dict', 'sentence') are not in the corpus at all, so the row cannot explain them either."}
+{"id": "D26", "category": "no_benefit_single_term", "prompt": "Define the term 'migration' in one sentence.", "expect": [], "note": "Same guard with an in-vocabulary term: 'migration' (df 5) is a headline word of the migration memory, but a definition request is not answered by the ordering rule and its other content terms are unexplained."}
+{"id": "D27", "category": "memory_single_term_rare", "prompt": "How do I clear PYTHONHOME?", "expect": ["mem-b67de5057f76"], "note": "The other direction: one matched term, but 'pythonhome' (df 1) names a single memory's own subject, so the row is still evidence even though the request's 'clear' is unexplained."}
+{"id": "D28", "category": "memory_single_term_bare", "prompt": "Migration?", "expect": ["mem-a8d221e64549"], "note": "Second single-term clause: a bare topic word has no other content term to leave unexplained, so a mid-frequency headline term (df 5) is enough."}
