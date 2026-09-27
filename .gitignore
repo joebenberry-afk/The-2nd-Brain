@@ -83,4 +83,5 @@ outputs/reports/
 
 # V4: per-machine CLI shim and private notes never leave the machine
 /brain.cmd
+/brain/bin/brain.cmd
 notes/*/private/

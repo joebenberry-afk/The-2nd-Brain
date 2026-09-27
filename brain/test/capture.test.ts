@@ -80,8 +80,9 @@ describe("capture.program", () => {
     expect(program("time python")).toBe("python");
   });
 
-  it("strips .exe on Windows", () => {
-    expect(program("cmd.exe /c dir")).toBe("cmd");
+  it("strips .exe on Windows, and looks through cmd /c", () => {
+    expect(program("C:\\Windows\\System32\\where.exe git")).toBe("where");
+    expect(program("cmd.exe /c dir")).toBe("dir");
   });
 
   it("returns empty string for empty command", () => {

@@ -4,7 +4,9 @@
 
 .DESCRIPTION
   - Finds a runtime: Node >= 22.18 (runs TypeScript directly) or Bun.
-  - Writes <SourceRoot>\brain.cmd and adds <SourceRoot> to the user PATH (once; -NoPath skips).
+  - Writes brain\bin\brain.cmd next to the committed sh shim brain\bin\brain (Git Bash, where
+    Claude Code runs hooks) and adds brain\bin to the user PATH (once; -NoPath skips). The PATH is
+    edited as stored, so entries like %USERPROFILE%\... keep expanding.
   - Sets the user variable SECOND_BRAIN_HOME to <SourceRoot> when it is unset (-NoEnv skips).
   - Parks older Brain extensions (second-brain, second-brain-v3) in ..\extensions-disabled\ so
     memory is not pushed twice (undo: uninstall-v4.ps1 -Restore).
@@ -30,6 +32,19 @@ function Write-Utf8NoBom([string]$Path, [string]$Text) {
     [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+# The user PATH as stored (REG_EXPAND_SZ): [Environment]::GetEnvironmentVariable would expand
+# %VARS% and SetEnvironmentVariable would write them back frozen.
+function Get-UserPath {
+    $raw = (Get-Item "HKCU:\Environment").GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    return @(($raw -split ";") | Where-Object { $_ })
+}
+function Set-UserPath([string[]]$Parts) {
+    Set-ItemProperty -Path "HKCU:\Environment" -Name Path -Value ($Parts -join ";") -Type ExpandString
+    # SetEnvironmentVariable announces the change, so new terminals see the new PATH.
+    [Environment]::SetEnvironmentVariable("SECOND_BRAIN_PATH_CHANGED", "1", "User")
+    [Environment]::SetEnvironmentVariable("SECOND_BRAIN_PATH_CHANGED", $null, "User")
+}
+
 if (-not $SourceRoot) { $SourceRoot = Split-Path $PSScriptRoot -Parent }
 $SourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
 if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path (Join-Path $HOME ".omp") "agent/extensions" }
@@ -47,14 +62,16 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 if (-not $Runtime -and (Get-Command bun -ErrorAction SilentlyContinue)) { $Runtime = "bun" }
 if (-not $Runtime) { throw "Need Node >= 22.18 or Bun on PATH." }
 
-# 2. brain.cmd + PATH
-Write-Utf8NoBom (Join-Path $SourceRoot "brain.cmd") "@$Runtime `"%~dp0brain\bin\brain.mjs`" %*`r`n"
+# 2. brain.cmd + PATH (brain\bin also holds the sh shim `brain` for Git Bash)
+$BinDir = Join-Path (Join-Path $SourceRoot "brain") "bin"
+Write-Utf8NoBom (Join-Path $BinDir "brain.cmd") "@$Runtime `"%~dp0brain.mjs`" %*`r`n"
+$oldShim = Join-Path $SourceRoot "brain.cmd"   # written by earlier versions of this script
+if (Test-Path $oldShim) { Remove-Item -Force $oldShim }
 if (-not $NoPath) {
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $parts = @(($userPath -split ";") | Where-Object { $_ })
-    if ($parts -notcontains $SourceRoot) {
-        [Environment]::SetEnvironmentVariable("Path", (($parts + $SourceRoot) -join ";"), "User")
-        Write-Host "Added $SourceRoot to the user PATH (new terminals pick it up)."
+    $parts = @(Get-UserPath | Where-Object { $_.TrimEnd("\") -ne $SourceRoot })
+    if (@($parts | Where-Object { $_.TrimEnd("\") -eq $BinDir }).Count -eq 0) {
+        Set-UserPath ($parts + $BinDir)
+        Write-Host "Added $BinDir to the user PATH (new terminals pick it up)."
     }
 }
 
@@ -73,11 +90,12 @@ if (-not $BrainHome) {
 
 # 4. Park older extensions
 $Disabled = Join-Path (Split-Path $ExtensionsDir -Parent) "extensions-disabled"
+$Stamp = Get-Date -Format "yyyyMMdd-HHmmss"   # one stamp for everything parked now: -Restore brings back the set
 foreach ($name in @("second-brain", "second-brain-v3")) {
     $old = Join-Path $ExtensionsDir $name
     if (Test-Path $old) {
         New-Item -ItemType Directory -Force -Path $Disabled | Out-Null
-        $parked = Join-Path $Disabled ("$name-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+        $parked = Join-Path $Disabled "$name-$Stamp"
         Move-Item $old $parked
         Write-Host "Parked $name at $parked"
     }

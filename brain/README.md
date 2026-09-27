@@ -10,8 +10,9 @@ git switch claude/new-session-nro2r6
 ```
 
 The installer (every step reversible):
-- picks the runtime — Node ≥ 22.18, else Bun — and writes `brain.cmd` in the checkout, which it
-  adds to your user PATH (`-NoPath` skips that);
+- picks the runtime — Node ≥ 22.18, else Bun — and writes `brain\bin\brain.cmd` next to the
+  committed `brain\bin\brain` shim (Git Bash, where Claude Code runs hooks, needs that one), then
+  adds `brain\bin` to your user PATH, keeping `%VAR%` entries intact (`-NoPath` skips that);
 - sets `SECOND_BRAIN_HOME` to the checkout when it is unset;
 - parks the V2 (`second-brain`) and V3 (`second-brain-v3`) OMP extensions in
   `~/.omp/agent/extensions-disabled/` so memory is not pushed twice;
@@ -89,7 +90,7 @@ source `compact`, so the card — and the working state — comes back.
 .\scripts\uninstall-v4.ps1 -Restore      # removes the V4 extension, restores the parked one
 ```
 
-Restart OMP. `-RemovePath` also takes the checkout off your PATH. Notes, kits and working state
+Restart OMP. `-RemovePath` also takes `brain\bin` off your PATH. Notes, kits and working state
 stay as files; nothing in the V2/V3 stores was changed by V4.
 
 ## 5. The files (edit them by hand when you like)

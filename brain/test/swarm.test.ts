@@ -644,3 +644,29 @@ describe("batch 3: privacy and security", () => {
     expect(resolveProject(home, dir, {}).id).toBe("global-project");
   });
 });
+
+describe("batch 4: Windows command shapes", () => {
+  it("pairs by the program that ran, however Windows or a notebook spells it", () => {
+    expect(program('"C:/Program Files/Git/cmd/git.exe" push origin main')).toBe("git");
+    expect(program('"C:/Program Files/nodejs/npm.cmd" test')).toBe("npm");
+    expect(program("$env:PYTHONHOME = $null; python -m second_brain doctor")).toBe("python");
+    expect(program('& "C:\\Python311\\python.exe" -m pytest')).toBe("python");
+    expect(program("cmd /c npm test")).toBe("npm");
+    expect(program("%%bash\ngit push origin main")).toBe("git");
+    expect(program("!pip install pandas")).toBe("pip");
+  });
+
+  it("never pairs two Python cells as a failed command and its fix", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state", "events"), { recursive: true });
+    const line = (o: object) => JSON.stringify({ v: 1, at: "2026-09-27T10:00:00Z", session: "s", cwd: "", tool: "ipython", ...o }) + "\n";
+    writeFileSync(
+      join(home, "state", "events", "s.jsonl"),
+      line({ command: "import pandas as pd", ok: false, error: "ModuleNotFoundError: No module named 'pandas'" }) +
+        line({ command: "import os", ok: true }) +
+        line({ command: "%%bash\ngit push origin main", ok: false, error: "error: failed to push some refs" }) +
+        line({ command: "%%bash\ngit push --set-upstream origin main", ok: true }),
+    );
+    expect(scanEvents(home, []).map((p) => p.text.split("\n")[0])).toEqual([expect.stringMatching(/^git: /)]);
+  });
+});

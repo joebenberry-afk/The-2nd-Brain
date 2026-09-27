@@ -14,7 +14,7 @@ const which = (cmd: string): string | undefined =>
   spawnSync(process.platform === "win32" ? "where" : "which", [cmd], { encoding: "utf8" }).stdout.split(/\r?\n/)[0]?.trim() || undefined;
 const PWSH = process.env.PWSH || which("pwsh");
 const BUN = which("bun");
-const shim = join(PACKAGE_HOME, "brain.cmd");
+const shim = join(PACKAGE_HOME, "brain", "bin", "brain.cmd");
 const shimExisted = existsSync(shim);
 
 function ps(script: string, ...args: string[]): { status: number | null; out: string } {
@@ -53,10 +53,12 @@ describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
     expect(install.status, install.out).toBe(0);
     expect(install.out).toMatch(/notes: \d+ \(\d+ active\)/);
     expect(readdirSync(extensions)).toEqual(["second-brain-v4"]);
+    // Parked as one set (one stamp), so -Restore brings back both
+    expect(new Set(readdirSync(join(root, "extensions-disabled")).map((name) => name.slice(-15))).size).toBe(1);
     const loader = readFileSync(join(extensions, "second-brain-v4", "index.ts"));
     expect(loader.subarray(0, 2).toString()).toBe("//");
     expect(loader.toString()).toContain(`export { default } from "${join(PACKAGE_HOME, "brain", "src", "omp.ts").replace(/\\/g, "/")}";`);
-    expect(readFileSync(shim, "utf8")).toMatch(/^@(node|bun) "%~dp0brain\\bin\\brain\.mjs" %\*/);
+    expect(readFileSync(shim, "utf8")).toMatch(/^@(node|bun) "%~dp0brain\.mjs" %\*\r\n$/);
     if (BUN) expect(bunLoads(extensions)).toBe("before_agent_start,context,session_before_branch,session_before_switch,session_branch,session_compact,session_shutdown,session_switch,tool_result|brain_recall,brain_note,brain_state");
 
     const copy = ps("install-v4.ps1", "-ExtensionsDir", extensions, "-NoPath", "-NoEnv", "-Copy");
@@ -70,5 +72,15 @@ describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
     expect(undo.status, undo.out).toBe(0);
     expect(readdirSync(extensions).sort()).toEqual(["second-brain", "second-brain-v3"]);
     expect(readFileSync(join(extensions, "second-brain-v3", "index.ts"), "utf8")).toBe("// second-brain-v3\n");
+  });
+});
+
+describe("the sh shim for Git Bash and POSIX shells", () => {
+  it("runs the CLI, and is committed executable with LF endings", () => {
+    const shimSh = join(PACKAGE_HOME, "brain", "bin", "brain");
+    const r = spawnSync("sh", [shimSh, "help"], { encoding: "utf8" });
+    expect(r.stdout).toContain("brain recall");
+    expect(readFileSync(shimSh, "utf8")).not.toContain("\r");
+    expect(spawnSync("git", ["-C", PACKAGE_HOME, "ls-files", "-s", "brain/bin/brain"], { encoding: "utf8" }).stdout).toMatch(/^100755 /);
   });
 });

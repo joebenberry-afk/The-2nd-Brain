@@ -1,0 +1,8 @@
+#!/bin/sh
+# `brain` for sh and Git Bash (Claude Code runs its hooks and its Bash tool there on Windows, where
+# brain.cmd is not found). Node >= 22.18 runs the TypeScript sources directly; otherwise Bun.
+dir=$(dirname "$0")
+case "$(node --version 2>/dev/null)" in
+  v22.1[89].* | v22.[2-9][0-9].* | v2[3-9].* | v[3-9][0-9].*) exec node "$dir/brain.mjs" "$@" ;;
+esac
+exec bun "$dir/brain.mjs" "$@"

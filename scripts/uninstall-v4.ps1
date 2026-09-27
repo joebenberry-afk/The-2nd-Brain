@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
   Remove the Second Brain V4 OMP extension; with -Restore, bring back the most recently parked
-  older extension (second-brain or second-brain-v3). -RemovePath takes the checkout off the user
-  PATH. Notes, kits and working state are untouched. Works with Windows PowerShell 5.1 and 7.
+  older extension (second-brain or second-brain-v3). -RemovePath takes brain\bin (and the checkout,
+  where earlier versions put brain.cmd) off the user PATH, keeping every other entry as stored.
+  Notes, kits and working state are untouched. Works with Windows PowerShell 5.1 and 7.
 #>
 [CmdletBinding()]
 param(
@@ -41,8 +42,13 @@ if ($Restore) {
 }
 
 if ($RemovePath) {
-    $parts = @(([Environment]::GetEnvironmentVariable("Path", "User") -split ";") | Where-Object { $_ -and $_ -ne $SourceRoot })
-    [Environment]::SetEnvironmentVariable("Path", ($parts -join ";"), "User")
-    Write-Host "Removed $SourceRoot from the user PATH"
+    # Edited as stored (REG_EXPAND_SZ), so entries like %USERPROFILE%\... keep expanding.
+    $BinDir = Join-Path (Join-Path $SourceRoot "brain") "bin"
+    $raw = (Get-Item "HKCU:\Environment").GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $parts = @(($raw -split ";") | Where-Object { $_ -and $_.TrimEnd("\") -ne $SourceRoot -and $_.TrimEnd("\") -ne $BinDir })
+    Set-ItemProperty -Path "HKCU:\Environment" -Name Path -Value ($parts -join ";") -Type ExpandString
+    [Environment]::SetEnvironmentVariable("SECOND_BRAIN_PATH_CHANGED", "1", "User")
+    [Environment]::SetEnvironmentVariable("SECOND_BRAIN_PATH_CHANGED", $null, "User")
+    Write-Host "Removed $BinDir from the user PATH"
 }
 Write-Host "Restart OMP."

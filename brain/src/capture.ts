@@ -190,29 +190,36 @@ export function toolEventFrom(
 }
 
 /**
- * Extract the first real word of a shell command.
- * Skip VAR=value assignments, sudo, env, time; take basename; strip .exe on Windows.
+ * The program a shell command ran: its first real word, lower-cased, without folders or a Windows
+ * extension (.exe .cmd .bat .ps1 .com). Skipped: `cd X &&`-style segments, VAR=value and PowerShell
+ * `$env:X = …` assignments, wrappers (sudo, env and its options, time, `cmd /c`), PowerShell's
+ * call operator `&`, and a notebook's `%%bash` line or `!` shell escape. Quoted paths are one word.
  */
 export function program(command: string): string {
+  const text = command.trim().replace(/^%%\w+[^\n]*\n/, "").replace(/^!/, "");
   // The last segment of "cd X && …", "pushd X; …" is what ran.
-  const segments = command.split(/&&|\|\||;/).map((s) => s.trim()).filter(Boolean);
-  const main = segments.find((s) => !/^(cd|pushd|popd|set|export|source|\.)(\s|$)/.test(s)) ?? segments.at(-1) ?? "";
-  const parts = main.split(/\s+/);
+  const segments = text.split(/&&|\|\||;|\n/).map((s) => s.trim()).filter(Boolean);
+  const skip = (s: string) => /^(cd|pushd|popd|set|export|source|\.)(\s|$)/i.test(s) || /^\$[\w:]+\s*=/.test(s);
+  const main = segments.find((s) => !skip(s)) ?? segments.at(-1) ?? "";
+  const parts = [...main.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i] as string;
-    if (!part) continue;
+    if (!part || part === "&") continue;
     // VAR=value assignments
-    if (part.includes("=") && !part.startsWith("-")) continue;
-    // Wrappers, and env's own options (env -u NAME, env -i)
-    if (["sudo", "env", "time", "nice", "nohup", "exec"].includes(part)) {
-      while (parts[i + 1]?.startsWith("-")) i += /^-(u|C|S)$/.test(parts[i + 1] as string) ? 2 : 1;
+    if (part.includes("=") && !part.startsWith("-") && !part.includes("/") && !part.includes("\\")) continue;
+    // Wrappers, and their own options (env -u NAME, env -i, cmd /c)
+    if (["sudo", "env", "time", "nice", "nohup", "exec", "cmd", "cmd.exe"].includes(part.toLowerCase())) {
+      while (/^[-/]/.test(parts[i + 1] ?? "")) i += /^-(u|C|S)$/.test(parts[i + 1] as string) ? 2 : 1;
       continue;
     }
-    const prog = part.replace(/\\/g, "/").split("/").pop() ?? "";
-    return prog.toLowerCase().endsWith(".exe") ? prog.slice(0, -4) : prog;
+    const prog = (part.replace(/\\/g, "/").split("/").pop() ?? "").toLowerCase();
+    return prog.replace(/\.(exe|cmd|bat|ps1|com)$/, "");
   }
   return "";
 }
+
+/** Tools that run code cells (python, ipython, a notebook, a JS REPL): their "command" is code, not a shell command. */
+const CODE_TOOL = /python|notebook|repl|jupyter|^js$|javascript|eval/i;
 
 /**
  * Extract error signature: first line with error keywords, else first non-empty line.
@@ -438,7 +445,10 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
       for (let i = 0; i < events.length; i++) {
         const failed = events[i];
         if (!failed || failed.ok !== false || !failed.command || !failed.error) continue;
+        // Two code cells are not a failed command and its fix, unless they are shell cells.
+        if (CODE_TOOL.test(failed.tool) && !/^(%%(bash|sh|cmd|powershell|pwsh)\b|!)/.test(failed.command.trim())) continue;
         const prog = program(failed.command);
+        if (!prog) continue;
         let paired = false;
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
           const fixed = events[j];
