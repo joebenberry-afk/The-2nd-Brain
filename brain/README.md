@@ -15,10 +15,10 @@ The installer (every step reversible):
 - parks the V2 (`second-brain`) and V3 (`second-brain-v3`) OMP extensions in
   `~/.omp/agent/extensions-disabled/` so memory is not pushed twice;
 - writes `~/.omp/agent/extensions/second-brain-v4/index.ts`, a one-line loader that imports
-  `brain/src/omp.ts` from the checkout — `git pull` plus an OMP restart is the whole update.
+  `brain/src/omp.ts` from the checkout — `git pull` plus an OMP restart is the whole update
+  (verified live on OMP 18.3.5; a running session keeps the code it started with).
   If OMP does not load it (check 1 below shows no card), run `.\scripts\install-v4.ps1 -Copy`:
-  a self-contained copy of `brain/src`, the layout the live-qualified legacy extension used
-  (re-run it after each `git pull`);
+  a self-contained copy of `brain/src` (re-run it after each `git pull`);
 - ends with `brain check` as a self-test.
 
 The installer and uninstaller are exercised by `test/install.test.ts` (PowerShell 7, and Bun
@@ -38,24 +38,33 @@ Restart OMP from that new terminal.
 
 **Other projects' notes.** A project's id comes from its git remote or folder name. If a repo on
 this machine resolves to a different id than its notes use (`brain card` in it shows nothing you
-expected), add the id as an alias in `projects.json`, e.g. the SZ-tool notes live under `sztool`
-with aliases `sz-tool`, `sz-tools`, `sztools`. `brain move <id> --to <project>` re-homes one note.
+expected), add its `remote` or the id as an alias in `projects.json` — e.g. the SZ-tool notes
+live under `sztool`, which lists the SZ-Agent-Toolkit remote. `brain move <id> --to <project>`
+re-homes one note. A recall that finds nothing here but something elsewhere says so:
+`no match here; N related in other projects (--all)`.
 
 ## 2. Verify in the first sessions
 
-1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message;
-   later prompts add nothing. `brain stats` shows one `card` per session.
+1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message
+   (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt, matching
+   kits); later prompts add nothing. Subagents get a card without the working state and cannot
+   overwrite it with `brain_state`. `brain stats` shows one `card` per session, main and sub apart.
 2. **Working state.** Ask the agent to set the plan (`brain_state`). Then force a compaction
    (`/compact`) and ask "where are we?": the answer should give goal and next step without
-   re-reading files. `work/<project>.md` now also has an `## auto` section (files edited, last
-   failure, last ask).
-3. **Known fix.** Run a command that fails with an error some tested note names (e.g. a bare
-   `python` with a broken `PYTHONHOME` on this machine): the failed result ends with
-   `Brain (advisory): … [id]`.
-4. **Learning.** After a few sessions, `brain review` lists failed→fixed commands and
-   `Brain-Decision:` / `Brain-Gotcha:` commit trailers as proposals; `brain accept <id>` makes a note.
-5. **Weekly.** `brain stats --days 7`: which moments fired and what they cost. Anything never used
-   for a week gets removed (plan rule 1).
+   re-reading files. Compaction re-injects only the working state (≤ 150 tokens: Goal and Next
+   first). Files edited, the last failure and the last ask are kept locally in
+   `state/work/<project>.auto.md`, never synced.
+3. **Known fix.** Run something that fails with an error a tested note names — e.g. an OMP edit
+   without a `[path#tag]` header (`notes/global/` holds fixes taken from logged OMP failures): the
+   failed result ends with `Brain: … [id]`.
+4. **Learning.** After a few sessions, `brain review` lists, with their full bodies, failed
+   commands that later succeeded as retries (same program and arguments, flags or a preparatory
+   step added — `npm test` → `npm ci && npm test`), plus `Brain-Decision:` / `Brain-Gotcha:`
+   commit trailers; `brain accept <id>` makes a note. A pair is `tested` only when the failed
+   command itself succeeded afterwards. Exploration (grep, ls, cat …) is never proposed.
+5. **Weekly.** `brain stats --days 7`: which moments fired and what they cost, main vs subagent
+   cards, recall hit rate, and the five most frequent errors no note fixes yet — write notes for
+   those. Anything never used for a week gets removed (plan rule 1).
 
 ## 3. Claude Code (optional)
 
@@ -71,7 +80,8 @@ In `~/.claude/settings.json` (or a project's `.claude/settings.json`):
 ```
 
 The hook fails open (`{}`, exit 0). After compaction Claude Code fires `SessionStart` with
-source `compact`, so the card — and the working state — comes back.
+source `compact`; the hook then returns only the bounded working state. This checkout's own
+`.claude/settings.json` calls `bash brain/bin/brain`, which picks Node or Bun.
 
 ## 4. Roll back
 
@@ -109,10 +119,11 @@ Why and how, in as much detail as helps.
 ```
 
 Retiring keeps the file (`retired:`, `replaced_by:`); `brain retire <id> [--by <new id>]` writes
-both sides. A working state, `work/<project>.md`, is free text under a one-line frontmatter
-(`at:`), followed by an `## auto` section the extension maintains. A kit,
-`kits/<name>/SKILL.md`, is an Agent Skill (`name`, `description`, optional `tags`). Projects
-need nothing; `projects.json` adds `paths`, `remote`, `aliases` and `tags`:
+both sides. A working state, `work/<project>.md`, is the agent's plan as free text under a
+one-line frontmatter (`at:`); an `## auto` section left by older versions is shown until the next
+`brain_state` drops it. A kit, `kits/<name>/SKILL.md`, is an Agent Skill (`name`, `description`,
+optional `tags`); `brain recall "kit <name>"` returns its path. Projects need nothing;
+`projects.json` adds `paths`, `remote`, `aliases` and `tags`:
 
 ```json
 { "projects": { "sztool": { "aliases": ["sz-tool", "sz-tools"], "tags": ["sparking-zero"] } } }

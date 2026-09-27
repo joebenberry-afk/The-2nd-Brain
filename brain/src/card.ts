@@ -34,16 +34,20 @@ export function cardCandidates(notes: Note[], project: Project): Note[] {
   });
 }
 
-/** Prompt relevance first, then working-state relevance and the static tested/kind/recency rank. */
-export function rankForCard(notes: Note[], candidates: Note[], project: Project, workText: string, now: Date, prompt = ""): Note[] {
+/**
+ * Prompt relevance first, then working-state relevance and the static tested/kind/recency rank.
+ * Relevance is scored over the candidates alone: cheaper than the whole corpus, and notes the
+ * card can never show cannot take the top-10 relevance slots.
+ */
+export function rankForCard(candidates: Note[], project: Project, workText: string, now: Date, prompt = ""): Note[] {
   const relevance = new Map<string, number>();
   if (workText.trim()) {
-    const hits = recall(notes, workText, { project, limit: 10 });
+    const hits = recall(candidates, workText, { project, limit: 10 });
     const top = hits[0]?.score ?? 0;
     for (const hit of hits) if (top > 0) relevance.set(hit.note.id, hit.score / top);
   }
   const promptScores = new Map(prompt.trim()
-    ? recall(notes, prompt, { project, limit: candidates.length }).map((hit) => [hit.note.id, hit.score])
+    ? recall(candidates, prompt, { project, limit: candidates.length }).map((hit) => [hit.note.id, hit.score])
     : []);
   const score = (n: Note): number => {
     const age = (now.getTime() - Date.parse(n.at)) / DAY_MS;
@@ -117,7 +121,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const work = opts.subagent ? null : readWork(home, project.id);
   const resume = resumeText(work);
   const candidates = cardCandidates(notes, project);
-  const ranked = rankForCard(notes, candidates, project, work?.text ?? "", now, opts.prompt);
+  const ranked = rankForCard(candidates, project, work?.text ?? "", now, opts.prompt);
   const allKits = opts.subagent ? [] : loadKits(home);
   const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
   const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);

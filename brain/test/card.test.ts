@@ -45,9 +45,9 @@ describe("card", () => {
       createNote(home, { text: "tested gotcha about builds", project: "demo", kind: "gotcha", tested: true }),
       createNote(home, { text: "token refresh bug lives in auth middleware", project: "demo", kind: "fact" }),
     ];
-    const plain = rankForCard(notes, notes, project, "", NOW).map((n) => n.body);
+    const plain = rankForCard(notes, project, "", NOW).map((n) => n.body);
     expect(plain[0]).toBe("tested gotcha about builds");
-    const focused = rankForCard(notes, notes, project, "fixing token refresh in the auth middleware", NOW).map((n) => n.body);
+    const focused = rankForCard(notes, project, "fixing token refresh in the auth middleware", NOW).map((n) => n.body);
     expect(focused[0]).toBe("token refresh bug lives in auth middleware");
   });
 

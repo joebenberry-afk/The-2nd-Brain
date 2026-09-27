@@ -220,7 +220,7 @@ installed V3/V2 runtime until the installer runs in P2, and that installer is re
 |---|---|---|
 | P0 | done, except the `v2-archive` tag (moved to P6) | plan accepted; decisions in §7 |
 | P1 | done | 120 notes converted, 0 errors; recall = V3 exactly (dev 13/15, held-out 7/8, `test/eval.test.ts`), 4 ms/query; card 169 tokens in ~6 ms |
-| P2 | built, **live run pending** | `omp.ts`: card on turn 1, frozen resume card at index 0 of every call after compaction (fallback on the next prompt), tools with the host's TypeBox shim; simulated session in `test/omp.test.ts` |
+| P2 | **live on OMP 18.3.5** (2026-09-27: card delivered, tools mounted, telemetry rows) | `omp.ts`: card on turn 1, bounded resume after the last `compactionSummary` of every call after compaction, tools with the host's TypeBox shim and read/write approval tiers; simulated session in `test/omp.test.ts`. A live `/compact` producing a `resume` row is still to be observed |
 | P3 | built | capture → review → accept round trip; known fix ≤ 80 tokens on a failed tool result |
 | P4 | built, first kits written | `kits/omp-extension`, `kits/node-ts-cli`; card lists kits (all of them on a new project) |
 | P5 | built | git sync (private excluded by pathspec; slashed branches); `brain hook claude-code` |
@@ -234,8 +234,19 @@ single scoring pass (5,000 notes: warm recall 67 ms); installer `-Copy` fallback
 PowerShell + Bun round-trip test. Index trigger: build an inverted index only when a real corpus
 passes ~2,000 notes or warm recall exceeds 50 ms.
 
-Next on the owner's machine: `brain/README.md` §1–2 (install, then the four checks), then a
-week of use and `brain stats`.
+Swarm rounds 5–6 (2026-09-27, live evidence): compaction re-injected 399 tokens → now only the
+working state, ≤ 150; subagents no longer overwrite the parent's plan (host `ctx.agent.kind`);
+auto observations moved to local `state/work/` (no race, failed commands off git); card lines
+complete or skipped, ranked by the first prompt, "verify" framing dropped; proposals only for
+real retries of the failed command (today's 17 live proposals were all noise); seeded
+`notes/global` known fixes from logged OMP failures; privacy scrubs for URL paths, PEM tails,
+credential flags and evidence; sync conflicts outside a nested home; `brain stats` reports
+sub/main cards, recall hit rate and unmatched errors.
+
+Next on the owner's machine: restart OMP (running sessions keep the old code), `/compact` once
+and check `brain stats` for a `resume` row, then a week of use. Owner decisions pending from the
+review: prompt-time push if voluntary `brain_recall`/`brain_state` use stays near zero, and
+seeding the plan from OMP's compaction summary when the agent never wrote one.
 
 ## 7. Owner decisions needed before P1
 
