@@ -46,6 +46,13 @@ export function normalizeRemote(url: string): string {
   return text.toLowerCase();
 }
 
+/** Same repository: equal remotes, or the same `owner/repo` behind a different host (mirror, proxy). */
+function sameRepo(a: string, b: string): boolean {
+  if (a === b) return true;
+  const tail = (s: string) => s.split("/").slice(-2).join("/");
+  return a.split("/").length >= 3 && b.split("/").length >= 3 && tail(a) === tail(b);
+}
+
 export function loadProjects(home: string): Record<string, ProjectEntry> {
   try {
     const data: unknown = JSON.parse(readFileSync(join(home, "projects.json"), "utf8"));
@@ -115,7 +122,7 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
   if (remote) {
     const key = normalizeRemote(remote);
     for (const [id, entry] of Object.entries(projects)) {
-      if (typeof entry.remote === "string" && normalizeRemote(entry.remote) === key) {
+      if (typeof entry.remote === "string" && sameRepo(normalizeRemote(entry.remote), key)) {
         return { id, tags: tagsOf(entry), root };
       }
     }

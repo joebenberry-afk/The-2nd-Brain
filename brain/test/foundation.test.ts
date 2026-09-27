@@ -126,3 +126,14 @@ describe("util", () => {
     expect(slug("***")).toBe("default");
   });
 });
+
+describe("project remote matching through a proxy or mirror", () => {
+  it("matches owner/repo when the host differs", () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-"));
+    const repo = mkdtempSync(join(tmpdir(), "brain-"));
+    mkdirSync(join(repo, ".git"));
+    writeFileSync(join(repo, ".git", "config"), '[remote "origin"]\n\turl = http://proxy@127.0.0.1:9/git/Owner/Repo\n');
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { mine: { remote: "https://github.com/owner/repo" } } }));
+    expect(resolveProject(home, repo, {}).id).toBe("mine");
+  });
+});

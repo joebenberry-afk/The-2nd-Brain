@@ -1,0 +1,12 @@
+---
+id: mem-75ef9bf9e33f
+kind: fact
+at: 2026-08-28T22:43:52.919966+00:00
+source: convert
+evidence:
+  - DBSZ Telemetry/SZ-CPU-Lab/.superpowers/sdd/Sparking_Zero_Telemetry_OMP_Resume_Plan/progress.md
+---
+
+T1 PRODUCTION INTEGRATION COMPLETE: promotion gate passed, live in production
+
+T1 production integration is complete. Player trial (post-fix): blast_committed fired exactly once for a real Kefla Blast, current_blast_id 2 to 3, side=1/team_slot=0/character_key=kefla/reflected_combo_slot_name=BlastSkill1/source=current_blast_id_increment. Resource confirmation: Kefla Ki 29926.6 to 1644.7, delta about -28282, matching Blast Skill 1's roughly 3-bar cost. Zero queue drops, zero sequence gaps. Legacy blast_used and raw blast_callback_diagnostic both fired normally, unaffected. CPU trial: user set CPU strategy to Beam-type Blast focused and the CPU acted autonomously. blast_committed fired exactly once for a real CPU Blast, current_blast_id 0 to 1, side=2/team_slot=0/character_key=hit/reflected_combo_slot_name=BlastSkill1/source=current_blast_id_increment. Resource confirmation: Hit Ki 45153.3 to 15153.3, delta exactly -30000, precisely matching Blast Skill 1's cost. Zero queue drops, zero sequence gaps. Legacy blast_used and raw blast_callback_diagnostic both fired normally for the CPU side too. T1 PRODUCTION PROMOTION GATE PASSED: every genuine Blast commitment produces exactly one blast_committed semantic event (player and CPU both confirmed); callback artifacts produce zero semantic events; actor/side/team_slot/form are correct in both trials; match/swap/transformation lifecycle is correct; archived regression evidence plus live canary both pass. current_blast_id N-to-N+1 edge cardinality, scoped SIDE+TEAM_SLOT, is now live in production as the blast_committed semantic event, running alongside the fully-intact legacy blast_used path -- no consumer migration (analytics.py, live_state.py) has been performed yet; that remains a separate, explicit, reversible future step. The one real bug found during this integration (an erroneous per-poll reset call that wiped the SIDE+TEAM_SLOT tracker state on every poll tick instead of only at genuine match/session boundaries) was diagnosed via three live-canary iterations and fixed, covered by a new regression test verified to fail on the bug and pass on the fix. Fully documented in docs/T1_PRODUCTION_DEPENDENCY_MAP.md section 9. Final deployed runtime_bundle_id: sha256:185aea548e79e3ee4ebb21202d7fe4f0bf3ba5c5934a936bb22ada2337208089.

@@ -25,6 +25,8 @@ export const CARD_NOTES = 5;
 
 const KIND_WEIGHT: Record<string, number> = { gotcha: 3, decision: 3, procedure: 2, fact: 1, note: 1 };
 const DAY_MS = 86_400_000;
+/** A note about the current work outranks a tested gotcha about something else. */
+const RELEVANCE_WEIGHT = 6;
 
 export interface CardOptions {
   /** The host exposes the brain_* tools (OMP); otherwise the card names the CLI. */
@@ -52,7 +54,7 @@ export function rankForCard(notes: Note[], candidates: Note[], project: Project,
   const score = (n: Note): number => {
     const age = (now.getTime() - Date.parse(n.at)) / DAY_MS;
     const recent = age <= 14 ? 2 : age <= 60 ? 1 : 0;
-    return (n.tested ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent + 4 * (relevance.get(n.id) ?? 0);
+    return (n.tested ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
   };
   const scored = candidates.map((n) => ({ n, s: score(n) }));
   scored.sort((a, b) => b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));
