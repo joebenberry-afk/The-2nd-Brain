@@ -30,6 +30,13 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   // key=value / key: value — the key is kept, the value masked. The key may end a longer name
   // (DB_PASSWORD, client_secret, access_token, GITHUB_TOKEN). Passwords, secrets and API keys at
   // any length; a token only when its value looks like one (so "Unexpected token: }" stays).
+  // Credentials in URLs and curl: https://user:***@host, curl -u user:***
+  result = result.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi, "$1***@");
+  result = result.replace(/((?:^|\s)(?:-u|--user)\s+[^\s:]+:)\S+/g, "$1***");
+
+  // A quoted value is masked whole, spaces included: "password": "***", PGPASSWORD='***'.
+  result = result.replace(/(password|passwd|pwd|secret|api[_-]?key|token)(["']?\s*[=:]\s*)(["'])(?!\*\*\*\3)[^"'\n]*\3/gi, "$1$2$3***$3");
+
   // Quoted keys and values (JSON, YAML) keep their quotes: "password": "***".
   result = result.replace(/(password|passwd|pwd|secret|api[_-]?key)(["']?\s*[=:]\s*["']?)([^\s,;"'}]+)/gi, "$1$2***");
   result = result.replace(/(token)(["']?\s*[=:]\s*["']?)(?=[^\s,;"'}]*[A-Za-z0-9]{8})([^\s,;"'}]+)/gi, "$1$2***");

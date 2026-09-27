@@ -236,3 +236,57 @@ describe("third review", () => {
     for (const prefix of ["ghp", "gho", "ghu", "ghs", "ghr"]) expect(scrub(`${prefix}_${"A1b2".repeat(9)}`).text).toBe("***");
   });
 });
+
+describe("fourth review", () => {
+  it("kits never include private notes", async () => {
+    const { draftKit } = await import("../src/kits.ts");
+    const home = tmp();
+    createNote(home, { text: "Public stack decision", project: "demo", kind: "decision" });
+    createNote(home, { text: "Private vendor pricing decision", project: "demo", kind: "decision", private: true });
+    const kit = draftKit(home, "k", "demo", loadNotes(home).notes);
+    expect(kit.body).toContain("Public stack decision");
+    expect(kit.body).not.toContain("Private vendor pricing");
+  });
+
+  it("sync commits the working state even when notes/ holds only private notes", async () => {
+    const { sync } = await import("../src/sync.ts");
+    const home = tmp();
+    git(home, "init", "-q");
+    writeFileSync(join(home, ".gitignore"), "notes/*/private/\n");
+    git(home, "add", ".gitignore");
+    git(home, "commit", "-q", "-m", "init");
+    createNote(home, { text: "only private", project: "demo", private: true });
+    mkdirSync(join(home, "work"));
+    writeFileSync(join(home, "work", "demo.md"), "---\nat: 2026-09-27T10:00:00Z\n---\n\nGoal: x\n");
+    mkdirSync(join(home, "kits"));
+    const result = sync(home, { push: false });
+    expect(result.committed).toBe(true);
+    expect(git(home, "show", "--name-only", "--format=", "HEAD").stdout.trim()).toBe("work/demo.md");
+  });
+
+  it("masks whole quoted secrets and URL / curl credentials", async () => {
+    const { scrub } = await import("../src/scrub.ts");
+    expect(scrub('{"password": "correct horse battery staple", "user": "me"}').text).toBe('{"password": "***", "user": "me"}');
+    expect(scrub("PGPASSWORD='my pass phrase' psql").text).toBe("PGPASSWORD='***' psql");
+    expect(scrub("git clone https://joe:s3cretPass@github.com/o/r.git").text).toBe("git clone https://joe:***@github.com/o/r.git");
+    expect(scrub("curl -u admin:hunter2 https://x").text).toBe("curl -u admin:*** https://x");
+  });
+
+  it("gives non-Latin project names their own ids", async () => {
+    const { slug } = await import("../src/util.ts");
+    expect(slug("日本語")).toBe("日本語");
+    expect(slug("проект")).toBe("проект");
+    expect(slug("日本語")).not.toBe(slug("проект"));
+    expect(slug("Café Tools")).toBe("cafe-tools");
+  });
+
+  it("a re-edited file becomes the most recent edit", () => {
+    const home = tmp();
+    const handlers = new Map<string, (e: unknown, c: unknown) => unknown>();
+    secondBrain({ on: (e, h) => void handlers.set(e, h) }, { SECOND_BRAIN_HOME: home });
+    const ctx = { cwd: home, sessionManager: { getSessionId: () => "s" } };
+    for (const path of ["a.ts", "b.ts", "a.ts"]) handlers.get("tool_result")?.({ toolName: "edit", input: { path }, isError: false, content: [] }, ctx);
+    handlers.get("session_before_compact")?.({}, ctx);
+    expect(readFileSync(join(home, "work", `${resolveProject(home, home, {}).id}.md`), "utf8")).toContain("- edited: b.ts, a.ts\n");
+  });
+});

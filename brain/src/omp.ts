@@ -422,13 +422,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         // Check if path is inside project.root; if so, make it relative
         const normalizedPath = displayPath(path, project.root, cwd);
 
-        // Keep last 20 unique edited paths
-        if (!state.edited.includes(normalizedPath)) {
-          state.edited.push(normalizedPath);
-          if (state.edited.length > 20) {
-            state.edited.shift();
-          }
-        }
+        // The last 20 distinct files, most recently edited last
+        state.edited = [...state.edited.filter((f) => f !== normalizedPath), normalizedPath].slice(-20);
       }
 
       // Track last failure

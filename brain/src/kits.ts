@@ -94,7 +94,8 @@ export function draftKit(
   }
 
   // Filter to active notes in this project
-  const projectNotes = notes.filter((n) => n.project === project && isActive(n));
+  // Kits are synced and shared: private notes never go into one.
+  const projectNotes = notes.filter((n) => n.project === project && isActive(n) && !n.private);
 
   // Collect notes by kind
   const decisions = projectNotes

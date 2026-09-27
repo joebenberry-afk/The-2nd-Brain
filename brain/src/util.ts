@@ -21,13 +21,21 @@ export function nowIso(date: Date = new Date()): string {
   return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-/** Lowercase slug: runs of anything but [a-z0-9] become "-"; at most 64 chars. */
+/**
+ * Lowercase slug: accents removed, runs of anything but letters and digits (of any script) become
+ * "-", at most 64 characters. "The 2nd Brain!" → "the-2nd-brain", "Café" → "cafe", "проект" stays.
+ */
 export function slug(value: string): string {
-  const s = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+  const s = Array.from(
+    value
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "-")
+      .replace(/^-+|-+$/g, ""),
+  )
     .slice(0, 64)
+    .join("")
     .replace(/-+$/g, "");
   return s || "default";
 }
