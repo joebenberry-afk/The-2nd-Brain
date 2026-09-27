@@ -326,5 +326,14 @@ export function answer(notes: Note[], query: string, opts: RecallOptions): strin
     const meta = [note.kind, note.tested ? "tested" : "", note.retired ? `retired ${note.retired.slice(0, 10)}` : "", note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
     return cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS);
   }
-  return renderHits(recall(notes, query, opts));
+  const hits = recall(notes, query, opts);
+  if (opts.history) return renderHits(hits);
+  // A retired note that answers better than anything current is the truth the agent needs:
+  // "that changed on <date>" (and what replaced it), not an unrelated current note.
+  const retired = recall(notes, query, { ...opts, history: true, limit: 10 }).find((h) => h.note.retired);
+  const lines = hits.length ? renderHits(hits) : "";
+  if (retired && (!hits.length || retired.score > (hits[0]?.score ?? 0))) {
+    return [lines, renderHit(retired)].filter(Boolean).join("\n");
+  }
+  return lines || "no match";
 }

@@ -60,7 +60,8 @@ describe("brain cli", () => {
     expect((await run(["tested", id], io)).out).toBe(`tested ${id}`);
     expect((await run(["recall", "migration", "order"], io)).out).toContain("[procedure, tested]");
     expect((await run(["retire", id], io)).out).toBe(`retired ${id}`);
-    expect((await run(["recall", "migration", "order"], io)).out).toBe("no match");
+    // nothing current answers any more, so the retired note shows as history
+    expect((await run(["recall", "migration", "order"], io)).out).toMatch(new RegExp(`^${id} \\[procedure, tested\\] Migrations apply in numeric order \\(retired \\d{4}-\\d{2}-\\d{2}\\)`));
     expect((await run(["recall", "migration", "order", "--history"], io)).out).toContain("retired");
   });
 
@@ -228,5 +229,17 @@ describe("bin/brain.mjs", () => {
     const r = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "help"], { encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("brain recall");
+  });
+});
+
+describe("brain move", () => {
+  it("re-homes a note to another project or to global", async () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-move-"));
+    const io = { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: home };
+    const id = (await run(["note", "Telemetry resets per launch"], io)).out.replace("saved ", "");
+    expect((await run(["move", id, "--to", "SZ Tool"], io)).out).toBe(`moved ${id} to sz-tool`);
+    expect(loadNotes(home).notes[0]).toMatchObject({ id, project: "sz-tool" });
+    expect((await run(["move", id], io)).code).toBe(1);
+    expect((await run(["move", "n-nope", "--to", "x"], io)).code).toBe(1);
   });
 });

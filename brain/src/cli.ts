@@ -13,7 +13,7 @@ import { gitRoot, loadProjects, resolveProject, type Project } from "./project.t
 import { answer } from "./search.ts";
 import { shareNote, sync } from "./sync.ts";
 import { logUse, stats, type UseKind } from "./telemetry.ts";
-import { estimateTokens, findHome } from "./util.ts";
+import { estimateTokens, findHome, slug } from "./util.ts";
 import { readWork, resumeText, writeWork } from "./work.ts";
 
 export interface Io {
@@ -32,7 +32,7 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain recall <query…|note id> [--all] [--history] [-n N]
   brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--global|--private]
   brain state [<text…>]                        show or replace the working state
-  brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T
+  brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
   brain review · accept <pid>… · reject <pid>…
   brain kit list · kit show <name> · kit new <name> [--from <project>] [--tag T]…
   brain sync [--no-push] [-m <message>]
@@ -59,6 +59,7 @@ const OPTIONS = {
   message: { type: "string", short: "m" },
   days: { type: "string" },
   from: { type: "string" },
+  to: { type: "string" },
   "dry-run": { type: "boolean" },
 } as const;
 
@@ -181,6 +182,16 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     if (!note) throw new Error(`no note ${id}`);
     saveNote(c.home, { ...note, tested: true });
     c.io.out(`tested ${id}`);
+    return 0;
+  },
+
+  move(c) {
+    const id = need(c.args[0], "a note id");
+    const to = slug(need(c.opts.to, "--to <project|global>"));
+    const note = findNote(loadNotes(c.home).notes, id);
+    if (!note) throw new Error(`no note ${id}`);
+    saveNote(c.home, { ...note, project: to });
+    c.io.out(`moved ${id} to ${to}`);
     return 0;
   },
 

@@ -149,6 +149,13 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   }
 
   const sessions = new Map<string, SessionState>();
+  const on = (event: string, handler: (event: unknown, ctx: unknown) => unknown): void => {
+    try {
+      pi.on(event, handler);
+    } catch {
+      // an event this host version does not know: that moment is simply not covered
+    }
+  };
 
   // Helper to get or create session state
   function getSession(key: string): SessionState {
@@ -160,8 +167,105 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     return state;
   }
 
+  // Tools: one argument each; descriptions stay short because they cost tokens in every context.
+  let toolsOn = false;
+  if (typeof pi.registerTool === "function" && env.BRAIN_TOOLS !== "off") {
+    const register = (definition: unknown): void => {
+      try {
+        pi.registerTool?.(definition);
+        toolsOn = true;
+      } catch {
+        // a host that rejects the definition keeps the card, the fixes and the CLI
+      }
+    };
+    const tool = (
+      name: string,
+      label: string,
+      description: string,
+      props: Record<string, Param>,
+      run: (params: Json, cwd: string, session: string) => { text: string; kind: UseKind; project: string },
+    ) => ({
+      name,
+      label,
+      description,
+      parameters: schema(pi.typebox, props),
+      execute(...args: unknown[]) {
+        const started = performance.now();
+        try {
+          const required = Object.keys(props).find((k) => !props[k]?.optional) ?? "";
+          const { params, cwd, ctx } = toolArgs(args, required);
+          const session = sessionKey(ctx);
+          const result = run(params, cwd, session);
+          logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session });
+          return { content: [{ type: "text", text: result.text }], details: {} };
+        } catch (error) {
+          return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
+        }
+      },
+    });
+
+    register(
+      tool(
+        "brain_recall",
+        "Brain recall",
+        'Search long-term memory from earlier sessions and projects: up to 3 answers, or "no match". Pass a note id to read that note in full.',
+        { query: { type: "string", description: "a question, keywords, or a note id" }, all: { type: "boolean", description: "search every project", optional: true } },
+        (params, cwd) => {
+          const query = requireString(params.query, "query");
+          const project = resolveProject(home, cwd, env);
+          return { text: answer(loadNotes(home).notes, query, { project, all: params.all === true }), kind: "recall", project: project.id };
+        },
+      ),
+    );
+    register(
+      tool(
+        "brain_note",
+        "Brain note",
+        "Save a durable learning for future sessions (decision, gotcha, procedure or fact). First line is the headline.",
+        {
+          text: { type: "string", description: "the learning; first line is the headline" },
+          kind: { type: "string", description: `one of ${KINDS.join(", ")}`, optional: true },
+          error: { type: "string", description: "the error message this fixes", optional: true },
+          tested: { type: "boolean", description: "you verified it works", optional: true },
+          global: { type: "boolean", description: "useful beyond this project", optional: true },
+        },
+        (params, cwd) => {
+          const text = requireString(params.text, "text");
+          const kind = typeof params.kind === "string" && (KINDS as readonly string[]).includes(params.kind) ? (params.kind as Kind) : "note";
+          const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
+          const project = resolveProject(home, cwd, env);
+          const scope = params.global === true ? GLOBAL : project.id;
+          const same = findSameHeadline(loadNotes(home).notes, text, scope);
+          if (same) return { text: `already noted ${same.id}`, kind: "note", project: project.id };
+          const note = createNote(home, {
+            text,
+            project: scope,
+            kind,
+            errors: error ? [error] : [],
+            tested: params.tested === true,
+            source: "agent",
+          });
+          return { text: `saved ${note.id}`, kind: "note", project: project.id };
+        },
+      ),
+    );
+    register(
+      tool(
+        "brain_state",
+        "Brain state",
+        "Replace this project's working state (goal, done, next, watch out) so work resumes after compaction or in the next session. Update it when the plan changes; under 120 words.",
+        { text: { type: "string", description: "goal, done, next, watch out" } },
+        (params, cwd) => {
+          const project = resolveProject(home, cwd, env);
+          const work = writeWork(home, project.id, requireString(params.text, "text"));
+          return { text: `state saved (${estimateTokens(work.text)} tokens)`, kind: "state", project: project.id };
+        },
+      ),
+    );
+  }
+
   // Handle before_agent_start
-  pi.on("before_agent_start", (event, ctx) => {
+  on("before_agent_start", (event, ctx) => {
     try {
       const started = performance.now();
       const key = sessionKey(ctx);
@@ -188,7 +292,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!state.carded && !state.resumeSeen) {
         const { notes } = loadNotes(home);
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-        const cardContent = renderCard(home, notes, project, { tools: typeof pi.registerTool === "function" });
+        const cardContent = renderCard(home, notes, project, { tools: toolsOn });
 
         if (cardContent) {
           state.carded = true;
@@ -210,7 +314,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   });
 
   // Handle context (before every LLM call, after compaction)
-  pi.on("context", (event, ctx) => {
+  on("context", (event, ctx) => {
     try {
       const key = sessionKey(ctx);
       const state = getSession(key);
@@ -241,7 +345,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   });
 
   // Handle session_before_compact
-  pi.on("session_before_compact", (_event, ctx) => {
+  on("session_before_compact", (_event, ctx) => {
     try {
       const key = sessionKey(ctx);
       const state = getSession(key);
@@ -263,7 +367,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   });
 
   // Handle session_compact
-  pi.on("session_compact", (_event, ctx) => {
+  on("session_compact", (_event, ctx) => {
     try {
       const started = performance.now();
       const key = sessionKey(ctx);
@@ -272,7 +376,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // Build fresh card and freeze as resume
       const { notes } = loadNotes(home);
       const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-      const cardContent = renderCard(home, notes, project, { tools: typeof pi.registerTool === "function" });
+      const cardContent = renderCard(home, notes, project, { tools: toolsOn });
 
       if (cardContent) {
         const now = Date.now();
@@ -290,7 +394,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   });
 
   // Handle tool_result
-  pi.on("tool_result", (event, ctx) => {
+  on("tool_result", (event, ctx) => {
     try {
       const started = performance.now();
       const key = sessionKey(ctx);
@@ -358,7 +462,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   });
 
   // Handle session_shutdown
-  pi.on("session_shutdown", (_event, ctx) => {
+  on("session_shutdown", (_event, ctx) => {
     try {
       const key = sessionKey(ctx);
       const state = getSession(key);
@@ -380,91 +484,4 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     }
   });
 
-  // Tools: one argument each; descriptions stay short because they cost tokens in every context.
-  if (typeof pi.registerTool === "function" && env.BRAIN_TOOLS !== "off") {
-    const tool = (
-      name: string,
-      label: string,
-      description: string,
-      props: Record<string, Param>,
-      run: (params: Json, cwd: string, session: string) => { text: string; kind: UseKind; project: string },
-    ) => ({
-      name,
-      label,
-      description,
-      parameters: schema(pi.typebox, props),
-      execute(...args: unknown[]) {
-        const started = performance.now();
-        try {
-          const required = Object.keys(props).find((k) => !props[k]?.optional) ?? "";
-          const { params, cwd, ctx } = toolArgs(args, required);
-          const session = sessionKey(ctx);
-          const result = run(params, cwd, session);
-          logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session });
-          return { content: [{ type: "text", text: result.text }], details: {} };
-        } catch (error) {
-          return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
-        }
-      },
-    });
-
-    pi.registerTool(
-      tool(
-        "brain_recall",
-        "Brain recall",
-        'Search long-term memory from earlier sessions and projects: up to 3 answers, or "no match". Pass a note id to read that note in full.',
-        { query: { type: "string", description: "a question, keywords, or a note id" }, all: { type: "boolean", description: "search every project", optional: true } },
-        (params, cwd) => {
-          const query = requireString(params.query, "query");
-          const project = resolveProject(home, cwd, env);
-          return { text: answer(loadNotes(home).notes, query, { project, all: params.all === true }), kind: "recall", project: project.id };
-        },
-      ),
-    );
-    pi.registerTool(
-      tool(
-        "brain_note",
-        "Brain note",
-        "Save a durable learning for future sessions (decision, gotcha, procedure or fact). First line is the headline.",
-        {
-          text: { type: "string", description: "the learning; first line is the headline" },
-          kind: { type: "string", description: `one of ${KINDS.join(", ")}`, optional: true },
-          error: { type: "string", description: "the error message this fixes", optional: true },
-          tested: { type: "boolean", description: "you verified it works", optional: true },
-          global: { type: "boolean", description: "useful beyond this project", optional: true },
-        },
-        (params, cwd) => {
-          const text = requireString(params.text, "text");
-          const kind = typeof params.kind === "string" && (KINDS as readonly string[]).includes(params.kind) ? (params.kind as Kind) : "note";
-          const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
-          const project = resolveProject(home, cwd, env);
-          const scope = params.global === true ? GLOBAL : project.id;
-          const same = findSameHeadline(loadNotes(home).notes, text, scope);
-          if (same) return { text: `already noted ${same.id}`, kind: "note", project: project.id };
-          const note = createNote(home, {
-            text,
-            project: scope,
-            kind,
-            errors: error ? [error] : [],
-            tested: params.tested === true,
-            source: "agent",
-          });
-          return { text: `saved ${note.id}`, kind: "note", project: project.id };
-        },
-      ),
-    );
-    pi.registerTool(
-      tool(
-        "brain_state",
-        "Brain state",
-        "Replace this project's working state (goal, done, next, watch out) so work resumes after compaction or in the next session. Update it when the plan changes; under 120 words.",
-        { text: { type: "string", description: "goal, done, next, watch out" } },
-        (params, cwd) => {
-          const project = resolveProject(home, cwd, env);
-          const work = writeWork(home, project.id, requireString(params.text, "text"));
-          return { text: `state saved (${estimateTokens(work.text)} tokens)`, kind: "state", project: project.id };
-        },
-      ),
-    );
-  }
 }

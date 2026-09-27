@@ -4,10 +4,11 @@
  * adds aliases (extra paths, a remote) and tags:
  *
  *   { "projects": { "second-brain": { "paths": ["C:/work/brain"], "remote": "github.com/o/r",
- *                                     "tags": ["typescript", "omp"] } } }
+ *                                     "tags": ["typescript", "omp"], "aliases": ["the-2nd-brain"] } } }
  *
  * Resolution: BRAIN_PROJECT → projects.json path (longest prefix) → projects.json remote →
- * git remote repo name → git root folder name → cwd folder name.
+ * git remote repo name → git root folder name → cwd folder name. Tags are the declared ones plus
+ * the stack implied by manifest files at the root (package.json → node, pyproject.toml → python, …).
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -25,6 +26,8 @@ export interface ProjectEntry {
   paths?: string[];
   remote?: string;
   tags?: string[];
+  /** Other ids this project resolves from (a renamed repo, a fork, another folder name). */
+  aliases?: string[];
 }
 
 /** Comparable path: forward slashes, no trailing slash, case-folded for Windows paths. */
@@ -95,14 +98,47 @@ export function gitRemote(root: string): string | null {
   }
 }
 
-function tagsOf(entry: ProjectEntry | undefined): string[] {
-  return Array.isArray(entry?.tags) ? entry.tags.filter((t): t is string => typeof t === "string") : [];
+/** Stack tags implied by files at the project root, so shared notes and kits find projects without setup. */
+const MARKERS: ReadonlyArray<readonly [string, string]> = [
+  ["package.json", "node"],
+  ["tsconfig.json", "typescript"],
+  ["pyproject.toml", "python"],
+  ["requirements.txt", "python"],
+  ["setup.py", "python"],
+  ["Cargo.toml", "rust"],
+  ["go.mod", "go"],
+  ["pom.xml", "java"],
+  ["build.gradle", "java"],
+  ["build.gradle.kts", "java"],
+  ["Gemfile", "ruby"],
+  ["composer.json", "php"],
+  ["deno.json", "deno"],
+  ["pubspec.yaml", "dart"],
+];
+
+export function inferTags(root: string | null): string[] {
+  if (!root) return [];
+  const tags = new Set<string>();
+  for (const [file, tag] of MARKERS) if (existsSync(join(root, file))) tags.add(tag);
+  return [...tags];
+}
+
+/** The declared id a derived id belongs to: itself, or the project that lists it as an alias. */
+function canonical(projects: Record<string, ProjectEntry>, derived: string): string {
+  if (projects[derived]) return derived;
+  const owner = Object.entries(projects).find(([, e]) => Array.isArray(e.aliases) && e.aliases.includes(derived));
+  return owner ? owner[0] : derived;
+}
+
+function tagsOf(entry: ProjectEntry | undefined, root: string | null = null): string[] {
+  const declared = Array.isArray(entry?.tags) ? entry.tags.filter((t): t is string => typeof t === "string") : [];
+  return [...new Set([...declared, ...inferTags(root)])];
 }
 
 export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Project {
   const projects = loadProjects(home);
   const explicit = env.BRAIN_PROJECT?.trim();
-  if (explicit) return { id: explicit, tags: tagsOf(projects[explicit]), root: null };
+  if (explicit) return { id: explicit, tags: tagsOf(projects[explicit], gitRoot(cwd)), root: gitRoot(cwd) };
 
   const here = normalizePath(resolve(cwd));
   let best: { len: number; id: string } | null = null;
@@ -116,22 +152,23 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
     }
   }
   const root = gitRoot(cwd);
-  if (best) return { id: best.id, tags: tagsOf(projects[best.id]), root: root ?? resolve(cwd) };
+  if (best) return { id: best.id, tags: tagsOf(projects[best.id], root ?? resolve(cwd)), root: root ?? resolve(cwd) };
 
   const remote = root ? gitRemote(root) : null;
   if (remote) {
     const key = normalizeRemote(remote);
     for (const [id, entry] of Object.entries(projects)) {
       if (typeof entry.remote === "string" && sameRepo(normalizeRemote(entry.remote), key)) {
-        return { id, tags: tagsOf(entry), root };
+        return { id, tags: tagsOf(entry, root), root };
       }
     }
-    const name = key.split("/").pop() ?? "";
-    const id = slug(name);
-    return { id: id === GLOBAL ? "global-project" : id, tags: tagsOf(projects[id]), root };
+    const derived = slug(key.split("/").pop() ?? "");
+    const id = canonical(projects, derived === GLOBAL ? "global-project" : derived);
+    return { id, tags: tagsOf(projects[id], root), root };
   }
-  const id = slug(basename(root ?? resolve(cwd)));
-  return { id: id === GLOBAL ? "global-project" : id, tags: tagsOf(projects[id]), root: root ?? resolve(cwd) };
+  const derived = slug(basename(root ?? resolve(cwd)));
+  const id = canonical(projects, derived === GLOBAL ? "global-project" : derived);
+  return { id, tags: tagsOf(projects[id], root ?? resolve(cwd)), root: root ?? resolve(cwd) };
 }
 
 /**

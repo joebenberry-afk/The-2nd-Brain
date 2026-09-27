@@ -137,3 +137,32 @@ describe("project remote matching through a proxy or mirror", () => {
     expect(resolveProject(home, repo, {}).id).toBe("mine");
   });
 });
+
+describe("inferred project tags", () => {
+  it("adds the stack implied by root manifest files to declared tags", () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-"));
+    const repo = join(mkdtempSync(join(tmpdir(), "brain-")), "web-app");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}");
+    writeFileSync(join(repo, "tsconfig.json"), "{}");
+    mkdirSync(join(repo, "sub"));
+    expect(resolveProject(home, join(repo, "sub"), {})).toMatchObject({ id: "web-app", tags: ["node", "typescript"] });
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { "web-app": { tags: ["frontend", "node"] } } }));
+    expect(resolveProject(home, repo, {}).tags).toEqual(["frontend", "node", "typescript"]);
+    expect(visibleTo({ ...sample(), project: "global", tags: ["typescript"] }, resolveProject(home, repo, {}))).toBe(true);
+  });
+});
+
+describe("project aliases", () => {
+  it("maps a derived id (remote name or folder) to the project that lists it as an alias", () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-"));
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { sztool: { aliases: ["sz-tool", "sz-tools"], tags: ["sparking-zero"] } } }));
+    const folder = join(mkdtempSync(join(tmpdir(), "brain-")), "SZ-Tools");
+    mkdirSync(folder);
+    expect(resolveProject(home, folder, {})).toMatchObject({ id: "sztool", tags: ["sparking-zero"] });
+    const repo = mkdtempSync(join(tmpdir(), "brain-"));
+    mkdirSync(join(repo, ".git"));
+    writeFileSync(join(repo, ".git", "config"), '[remote "origin"]\n\turl = git@github.com:me/SZ_Tool.git\n');
+    expect(resolveProject(home, repo, {}).id).toBe("sztool");
+  });
+});

@@ -95,20 +95,7 @@ describe("work", () => {
     const formatted = formatAuto({
       edited: ["a", "b", "c", "a", "d", "e", "a", "f", "g", "h", "i", "j"],
     });
-    expect(formatted).toContain("- edited:");
-    const line = formatted.split("\n")[0];
-    expect(line).toBeDefined();
-    // "j" has the highest last-occurrence index, so it should be last
-    if (line) {
-      const parts = line.split(": ");
-      const itemsStr = parts[1];
-      if (itemsStr) {
-        const items = itemsStr.split(", ");
-        expect(items).toHaveLength(8);
-        expect(items[items.length - 1]).toBe("j");
-        expect(items[0]).toBe("d");
-      }
-    }
+    expect(formatted.split("\n")[0]).toBe("- edited: d, e, a, f, g, h, i, j");
   });
 
   it("formatAuto: failure collapsed and cut to 200 chars", () => {

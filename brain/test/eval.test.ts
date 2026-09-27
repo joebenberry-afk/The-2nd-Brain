@@ -51,6 +51,16 @@ describe.skipIf(!hasNotes)("recall eval on the frozen S2 cases", () => {
     expect(result.hits).toBeGreaterThanOrEqual(7);
   });
 
+  it("never returns a forbidden note: other projects' notes, archived duplicates", () => {
+    const { notes } = loadNotes(PACKAGE_HOME);
+    const guarded = [...cases("recall-dev.jsonl"), ...cases("recall-heldout.jsonl")].filter((c) => c.forbid?.length);
+    expect(guarded.length).toBeGreaterThan(0);
+    for (const c of guarded) {
+      const ids = recall(notes, c.prompt, { project }).map((h) => h.note.id);
+      expect(ids.filter((id) => c.forbid?.includes(id)), c.id).toEqual([]);
+    }
+  });
+
   it("answers in at most 3 lines and stays fast on the whole corpus", () => {
     const { notes } = loadNotes(PACKAGE_HOME);
     const started = performance.now();

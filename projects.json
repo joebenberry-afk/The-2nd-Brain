@@ -19,6 +19,20 @@
         "typescript",
         "omp",
         "node"
+      ],
+      "aliases": [
+        "the-2nd-brain",
+        "the-second-brain"
+      ]
+    },
+    "sztool": {
+      "aliases": [
+        "sz-tool",
+        "sz-tools",
+        "sztools"
+      ],
+      "tags": [
+        "sparking-zero"
       ]
     }
   }

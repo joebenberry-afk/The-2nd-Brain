@@ -79,36 +79,20 @@ describe("search", () => {
     const hits1 = recall(corpus, "apple", { project, all: true, limit: 10 });
     const hits2 = recall(corpus, "rare", { project, all: true, limit: 10 });
 
-    // "apple" is in 3/4 notes, so IDF is low; "rare" is in 1/4, so IDF is high
-    // When both match, "rare" should score much higher
-    if (hits1.length && hits2.length) {
-      const rareHit = hits2.find((h) => h.note.id === "n-4");
-      const appleHit = hits1.find((h) => h.note.id === "n-1");
-      if (rareHit && appleHit) {
-        expect(rareHit.score).toBeGreaterThan(appleHit.score * 0.5);
-      }
-    }
+    // "apple" is in 3 of 4 notes → IDF clamps to 1e-6; "rare" is in 1 of 4 → IDF ≈ 0.85
+    const rareHit = hits2.find((h) => h.note.id === "n-4");
+    const appleHit = hits1.find((h) => h.note.id === "n-1");
+    expect(rareHit).toBeDefined();
+    expect(appleHit).toBeDefined();
+    expect(rareHit?.score ?? 0).toBeGreaterThan((appleHit?.score ?? 0) * 1000);
   });
 
-  it("hand-computed BM25 on a 3-note corpus", () => {
-    // Verify a single known case
+  it("every note containing the term scores above zero", () => {
     const project = { id: "test", tags: [], root: null };
     const corpus = [note("n-1", { body: "test word" }), note("n-2", { body: "test" }), note("n-3", { body: "word" })];
-
     const hits = recall(corpus, "test", { project, all: true });
-    expect(hits).toHaveLength(2);
-
-    // Both should have score > 0 since they match
-    expect(hits[0]).toBeDefined();
-    expect(hits[1]).toBeDefined();
-    if (hits[0] && hits[1]) {
-      expect(hits[0].score).toBeGreaterThan(0);
-      expect(hits[1].score).toBeGreaterThan(0);
-    }
-
-    // n-1 has "test" in body, n-2 also has just "test"
-    // Exact BM25 value depends on document length normalization
-    // Both should score, but ordering depends on frequency
+    expect(hits.map((h) => h.note.id).sort()).toEqual(["n-1", "n-2"]);
+    for (const hit of hits) expect(hit.score).toBeGreaterThan(0);
   });
 
   it("match rule: 3-token query needs 2 matches, 1-2 token needs 1 match", () => {

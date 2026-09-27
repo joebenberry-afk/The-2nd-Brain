@@ -102,3 +102,20 @@ describe("displayPath", () => {
     expect(displayPath("x\\y.ts", null, "/w")).toBe("x/y.ts");
   });
 });
+
+describe("answer shows a retired note that fits better than anything current", () => {
+  it("adds the retired note as a history line, and only when it outranks current hits", async () => {
+    const { retireNote } = await import("../src/notes.ts");
+    const home = tmp();
+    const old = createNote(home, { text: "Hard cap of two workers per session", project: "demo", kind: "decision" });
+    const next = createNote(home, { text: "Adaptive fan-out sizes worker pools", project: "demo", kind: "decision" });
+    createNote(home, { text: "Session logs rotate daily", project: "demo" });
+    retireNote(home, old.id, next.id);
+    const { notes } = loadNotes(home);
+    const text = answer(notes, "two workers cap", { project });
+    expect(text).toContain(`${old.id} [decision] Hard cap of two workers per session (retired`);
+    expect(text).toContain(`replaced by ${next.id}`);
+    expect(answer(notes, "adaptive fan-out worker pools", { project })).not.toContain("retired");
+    expect(answer(notes, "two workers cap", { project, history: true }).split("\n")[0]).toContain(old.id);
+  });
+});

@@ -50,13 +50,9 @@ const ctx = (session: string, cwd = join(root, "work")) => ({
 });
 
 describe("OMP extension", () => {
-  it("registers nothing without a home (no SECOND_BRAIN_HOME, no local notes dir)", () => {
-    // Create a completely isolated temp home with no notes dir
-    mkdtempSync(join(tmpdir(), "omp-isolated-"));
-    // When no home is found, the function returns early without throwing
+  it("falls back to its own checkout as the home when SECOND_BRAIN_HOME is unset", () => {
     const { handlers } = load({}, false);
-    // Handlers will still be created because the repo root has notes/, but function doesn't throw
-    expect(handlers.size).toBeGreaterThanOrEqual(0);
+    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "context", "session_before_compact", "session_compact", "session_shutdown", "tool_result"]);
   });
 
   it("registers handlers even when home is empty (no notes)", () => {
@@ -615,5 +611,46 @@ describe("tool plumbing", () => {
     expect(toolArgs(["id", { text: "a" }, undefined, undefined, ctx], "text")).toMatchObject({ params: { text: "a" }, cwd: "/work/x", ctx });
     expect(toolArgs(["id", { signal: 1 }, { text: "b" }, ctx], "text").params).toEqual({ text: "b" });
     expect(toolArgs([{ text: "c" }], "text").cwd).toBe(process.cwd());
+  });
+});
+
+describe("OMP extension under a hostile or limited host", () => {
+  function host(opts: { rejectTools?: boolean; unknownEvents?: string[] }) {
+    const handlers = new Map<string, Handler>();
+    const pi: HostLike = {
+      on: (name, handler) => {
+        if (opts.unknownEvents?.includes(name)) throw new Error(`unknown event ${name}`);
+        handlers.set(name, handler);
+      },
+      registerTool: () => {
+        if (opts.rejectTools) throw new Error("schema rejected");
+      },
+    };
+    return { pi, handlers };
+  }
+
+  it("keeps working when the host rejects the tools, and the card then names the CLI", () => {
+    const h = mkdtempSync(join(tmpdir(), "omp-h-"));
+    createNote(h, { text: "A decision", project: "work", kind: "decision" });
+    const { pi, handlers } = host({ rejectTools: true });
+    expect(() => secondBrain(pi, { SECOND_BRAIN_HOME: h })).not.toThrow();
+    const card = handlers.get("before_agent_start")?.({ prompt: "x" }, ctx("s")) as { message: { content: string } };
+    expect(card.message.content).toContain('brain recall "<query>"');
+    expect(card.message.content).not.toContain("brain_recall(");
+  });
+
+  it("names the CLI when tools are switched off", () => {
+    const h = mkdtempSync(join(tmpdir(), "omp-h-"));
+    createNote(h, { text: "A decision", project: "work", kind: "decision" });
+    const { pi, handlers } = host({});
+    secondBrain(pi, { SECOND_BRAIN_HOME: h, BRAIN_TOOLS: "off" });
+    const card = handlers.get("before_agent_start")?.({ prompt: "x" }, ctx("s")) as { message: { content: string } };
+    expect(card.message.content).toContain('brain recall "<query>"');
+  });
+
+  it("survives a host that does not know some events", () => {
+    const { pi, handlers } = host({ unknownEvents: ["context", "session_compact"] });
+    expect(() => secondBrain(pi, { SECOND_BRAIN_HOME: home })).not.toThrow();
+    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "session_before_compact", "session_shutdown", "tool_result"]);
   });
 });
