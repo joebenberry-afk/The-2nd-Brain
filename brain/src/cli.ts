@@ -8,9 +8,9 @@ import { acceptProposal, appendEvent, findFix, listProposals, rejectProposal, re
 import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { draftKit, findKit, loadKits } from "./kits.ts";
-import { createNote, findNote, GLOBAL, headline, KINDS, loadNotes, retireNote, saveNote, type Kind } from "./notes.ts";
+import { createNote, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, retireNote, saveNote, type Kind } from "./notes.ts";
 import { gitRoot, loadProjects, resolveProject, type Project } from "./project.ts";
-import { recall, renderHit } from "./search.ts";
+import { answer } from "./search.ts";
 import { shareNote, sync } from "./sync.ts";
 import { logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
@@ -29,7 +29,7 @@ class UsageError extends Error {}
 const USAGE = `brain — agent memory that survives compaction (V4)
 
   brain card                                   start card for this directory's project
-  brain recall <query…> [--all] [--history] [-n N]
+  brain recall <query…|note id> [--all] [--history] [-n N]
   brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--global|--private]
   brain state [<text…>]                        show or replace the working state
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T
@@ -111,13 +111,12 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
 
   recall(c) {
     const query = need(c.args.join(" "), "a query");
-    const hits = recall(loadNotes(c.home).notes, query, {
+    const text = answer(loadNotes(c.home).notes, query, {
       project: c.project,
       all: c.opts.all === true,
       history: c.opts.history === true,
       limit: positiveInt(c.opts.limit, 3),
     });
-    const text = hits.length ? hits.map(renderHit).join("\n") : "no match";
     c.io.out(text);
     use(c, "recall", text);
     return 0;
@@ -128,9 +127,15 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const kind = c.opts.kind ?? "note";
     if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
     if (c.opts.global && c.opts.private) throw new UsageError("--global and --private exclude each other");
+    const scope = c.opts.global ? GLOBAL : c.project.id;
+    const same = findSameHeadline(loadNotes(c.home).notes, text, scope);
+    if (same) {
+      c.io.out(`already noted ${same.id}`);
+      return 0;
+    }
     const note = createNote(c.home, {
       text,
-      project: c.opts.global ? GLOBAL : c.project.id,
+      project: scope,
       kind: kind as Kind,
       tags: c.opts.tag ?? [],
       errors: c.opts.error ?? [],

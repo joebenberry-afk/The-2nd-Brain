@@ -8,6 +8,24 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/cloud-session-setup.sh\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/brain/bin/brain.mjs\" hook claude-code 2>/dev/null || echo \"{}\""
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/brain/bin/brain.mjs\" hook claude-code 2>/dev/null || echo \"{}\""
+          }
+        ]
       }
     ]
   }

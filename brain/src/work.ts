@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cutToTokens, nowIso, writeAtomic } from "./util.ts";
 import { parseFrontmatter } from "./notes.ts";
+import { scrub } from "./scrub.ts";
 
 export const WORK_BUDGET = 150;
 export const AUTO_BUDGET = 80;
@@ -77,7 +78,7 @@ export function readWork(home: string, project: string): Work | null {
 
 /** Write work text (agent text, drops auto section). Throws WorkError on empty text. */
 export function writeWork(home: string, project: string, text: string): Work {
-  const trimmed = text.trim();
+  const trimmed = scrub(text, { longRuns: false }).text.trim();
   if (!trimmed) throw new WorkError("empty work text");
 
   const cut = cutToTokens(trimmed, WORK_BUDGET);
@@ -99,6 +100,11 @@ export function writeWork(home: string, project: string, text: string): Work {
 
 /** Format auto fields as lines. */
 export function formatAuto(fields: AutoFields): string {
+  fields = {
+    edited: fields.edited,
+    failure: fields.failure && scrub(fields.failure).text,
+    ask: fields.ask && scrub(fields.ask, { longRuns: false }).text,
+  };
   const lines: string[] = [];
 
   // Edited: last 8 unique in last-occurrence order

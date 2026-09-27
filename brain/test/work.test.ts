@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,7 +23,7 @@ describe("work", () => {
     const home = tmp();
     mkdirSync(join(home, "work"), { recursive: true });
     const badFile = join(home, "work", "p.md");
-    require("node:fs").writeFileSync(badFile, "no frontmatter");
+    writeFileSync(badFile, "no frontmatter");
     const work = readWork(home, "p");
     expect(work).toBeNull();
   });

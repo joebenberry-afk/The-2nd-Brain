@@ -2,6 +2,7 @@
 import { headline, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
+import { cutToTokens } from "./util.ts";
 
 export const STOPWORDS = new Set([
   "the",
@@ -256,8 +257,8 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
   return hits.slice(0, limit);
 }
 
-/** Render a hit as a single line ≤ 240 chars. */
-export function renderHit(hit: Hit): string {
+/** Render a hit as a single line of at most `max` chars (default 240). */
+export function renderHit(hit: Hit, max = 240): string {
   const { note } = hit;
   const h = headline(note);
   const tested = note.tested ? ", tested" : "";
@@ -282,17 +283,17 @@ export function renderHit(hit: Hit): string {
     : `${h}${retiredMarker}`;
   const fullLine = `${idAndKind} ${headlineAndRetired}`;
 
-  // Cut to 240 chars, being careful not to cut the retired marker
-  if (fullLine.length <= 240) return fullLine;
+  // Cut to max chars, being careful not to cut the retired marker
+  if (fullLine.length <= max) return fullLine;
 
   const head = idAndKind + " " + h + retiredMarker;
   const remainder = rest ? ` — ${rest}` : "";
 
-  if ((head + remainder).length <= 240) return head + remainder;
+  if ((head + remainder).length <= max) return head + remainder;
 
-  const remaining = 240 - head.length - 1;
+  const remaining = max - head.length - 1;
   if (remaining <= 0) {
-    return head.slice(0, 237) + "…";
+    return head.slice(0, max - 3) + "…";
   }
 
   if (!remainder) {
@@ -301,4 +302,29 @@ export function renderHit(hit: Hit): string {
 
   const cut = remainder.slice(0, remaining).trimEnd();
   return head + cut + "…";
+}
+
+/** Longest first answer: most questions are settled by the top hit, so it gets room to say it. */
+export const FIRST_HIT_CHARS = 600;
+/** A note read in full by id is cut to this many tokens. */
+export const FULL_NOTE_TOKENS = 600;
+
+/** Hits as answer lines: the first up to FIRST_HIT_CHARS, the rest up to 240; "no match" when empty. */
+export function renderHits(hits: Hit[]): string {
+  if (!hits.length) return "no match";
+  return hits.map((hit, i) => renderHit(hit, i === 0 ? FIRST_HIT_CHARS : 240)).join("\n");
+}
+
+/**
+ * One call answers: a note id returns that note in full (cut to FULL_NOTE_TOKENS); anything else is
+ * a search. `opts` as for `recall`.
+ */
+export function answer(notes: Note[], query: string, opts: RecallOptions): string {
+  const id = query.trim();
+  const note = /^[a-z]+-[0-9a-f]{6,}$/.test(id) ? notes.find((n) => n.id === id) : undefined;
+  if (note && (opts.all || visibleTo(note, opts.project))) {
+    const meta = [note.kind, note.tested ? "tested" : "", note.retired ? `retired ${note.retired.slice(0, 10)}` : "", note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
+    return cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS);
+  }
+  return renderHits(recall(notes, query, opts));
 }

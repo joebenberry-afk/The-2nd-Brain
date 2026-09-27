@@ -10,3 +10,10 @@ docs/intake/m00-evidence/** -text
 docs/intake/m00-evidence/* -text
 # The V3 requirements baseline ships its own SHA256SUMS.txt.
 docs/intake/Second_Brain_V3_Requirements_2026-09-24/** -text
+# V4 data and code: LF on every machine, so notes and working state written on Windows and Linux
+# never churn each other.
+notes/** text eol=lf
+kits/** text eol=lf
+work/** text eol=lf
+brain/** text eol=lf
+projects.json text eol=lf

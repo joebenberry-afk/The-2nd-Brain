@@ -14,7 +14,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { scrub } from "./scrub.ts";
 import { cutToTokens, estimateTokens, nowIso, randomId, writeAtomic } from "./util.ts";
+
+export { scrub };
 import {
   GLOBAL,
   type Kind,
@@ -163,46 +166,6 @@ export function toolEventFrom(
 }
 
 /**
- * Replace secret-looking values with ***, return (text, scrubbed).
- * Cover: GitHub tokens, sk-*, xox*, AWS/Google tokens, Bearer, password=value, long hex/base64.
- */
-export function scrub(text: string): { text: string; scrubbed: boolean } {
-  const original = text;
-  let result = text;
-
-  // GitHub tokens
-  result = result.replace(/ghp_[A-Za-z0-9_]+/g, "***");
-  result = result.replace(/gho_[A-Za-z0-9_]+/g, "***");
-  result = result.replace(/github_pat_[A-Za-z0-9_]+/g, "***");
-
-  // OpenAI/Slack tokens
-  result = result.replace(/sk-[A-Za-z0-9_\-.]{20,}/g, "***");
-  result = result.replace(/xox[baprs]-[A-Za-z0-9_]+/g, "***");
-
-  // AWS and Google tokens
-  result = result.replace(/AKIA[0-9A-Z]{16}/g, "***");
-  result = result.replace(/AIza[0-9A-Za-z_-]{35}/g, "***");
-
-  // Bearer tokens
-  result = result.replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, "Bearer ***");
-
-  // Password/secret/token patterns (key kept, value masked)
-  result = result.replace(
-    /(password|passwd|secret|token|api[_-]?key)\s*([=:])\s*([^\s]+)/gi,
-    "$1$2 ***"
-  );
-
-  // Long base64/hex runs (≥40 chars)
-  result = result.replace(/[A-Fa-f0-9]{40,}/g, "***");
-  result = result.replace(
-    /[A-Za-z0-9+/]{40,}={0,2}/g,
-    (match) => (match.includes("=") || match.length >= 40 ? "***" : match)
-  );
-
-  return { text: result, scrubbed: result !== original };
-}
-
-/**
  * Extract the first real word of a shell command.
  * Skip VAR=value assignments, sudo, env, time; take basename; strip .exe on Windows.
  */
@@ -316,425 +279,168 @@ export function appendEvent(
   }
 }
 
-/**
- * Scan event logs from cursor, pair failures with fixes, create proposals.
- * Rule: pair a failure with first later event within 6 events where:
- * - tool matches, ok is true, command is set
- * - program() is equal and command differs
- * Dedupe case-insensitive against active notes, inbox, and rejected.
- * Prune files older than EVENT_RETENTION_DAYS only when fully processed.
- */
-export function scanEvents(
-  home: string,
-  notes: Note[],
-  opts?: { now?: Date }
-): Proposal[] {
-  const now = opts?.now ?? new Date();
-  const nowTime = now.getTime();
+/** What must not be proposed again: active notes, pending proposals, rejected ones (lower-cased). */
+interface Seen {
+  headlines: Set<string>;
+  errors: Set<string>;
+}
 
+function readJson<T>(path: string, fallback: T): T {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function seenBefore(home: string, notes: Note[]): Seen {
+  const seen: Seen = { headlines: new Set(), errors: new Set() };
+  const add = (headlineText: string, errors: string[]) => {
+    seen.headlines.add(headlineText.toLowerCase());
+    for (const e of errors) seen.errors.add(e.toLowerCase());
+  };
+  for (const note of notes) if (isActive(note)) add(headline(note), note.errors);
+  for (const p of listProposals(home)) add(headline({ body: p.text }), p.errors);
+  const rejected = readJson<{ signatures?: string[]; texts?: string[] }>(join(home, "state", "rejected.json"), {});
+  for (const text of rejected.texts ?? []) seen.headlines.add(text.toLowerCase());
+  for (const sig of rejected.signatures ?? []) seen.errors.add(sig.toLowerCase());
+  return seen;
+}
+
+/** Record a new proposal unless it repeats something seen; returns whether it was kept. */
+function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[]): boolean {
+  const head = headline({ body: proposal.text }).toLowerCase();
+  if (seen.headlines.has(head) || proposal.errors.some((e) => seen.errors.has(e.toLowerCase()))) return false;
+  seen.headlines.add(head);
+  for (const e of proposal.errors) seen.errors.add(e.toLowerCase());
+  saveProposal(home, proposal);
+  out.push(proposal);
+  return true;
+}
+
+/**
+ * Turn new tool events into proposals: a failure followed, within 6 events of the same log, by a
+ * successful different command of the same program and tool is a failed→fixed pair. The cursor
+ * (`state/capture-cursor.json`) makes each event count once; fully processed logs older than
+ * EVENT_RETENTION_DAYS are deleted.
+ */
+export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): Proposal[] {
+  const now = opts?.now ?? new Date();
   const dir = eventsDir(home);
   if (!existsSync(dir)) return [];
-
-  const cursorFile = join(dir, ".cursor.json");
-  let cursor: Record<string, number> = {};
-  try {
-    cursor = JSON.parse(readFileSync(cursorFile, "utf8"));
-  } catch {
-    // No cursor yet
-  }
-
-  // Collect existing headlines and error sigs for dedup
-  const activeHeadlines = new Set<string>();
-  const activeErrors = new Set<string>();
-  for (const note of notes) {
-    if (isActive(note)) {
-      activeHeadlines.add(headline(note).toLowerCase());
-      for (const err of note.errors) {
-        activeErrors.add(err.toLowerCase());
-      }
-    }
-  }
-
-  // Load rejected
-  const rejectedFile = join(home, "state", "rejected.json");
-  let rejected: { signatures: string[]; texts: string[] } = {
-    signatures: [],
-    texts: [],
-  };
-  try {
-    rejected = JSON.parse(readFileSync(rejectedFile, "utf8"));
-  } catch {
-    // No rejected file yet
-  }
-  const rejectedTexts = new Set(
-    rejected.texts.map((t) => t.toLowerCase())
-  );
-  const rejectedSigs = new Set(
-    rejected.signatures.map((s) => s.toLowerCase())
-  );
-
-  // Load inbox proposals
-  const inboxDir = join(home, "state", "inbox");
-  const inboxHeadlines = new Set<string>();
-  const inboxErrors = new Set<string>();
-  if (existsSync(inboxDir)) {
-    for (const name of readdirSync(inboxDir)) {
-      if (!name.endsWith(".json")) continue;
-      try {
-        const prop = JSON.parse(
-          readFileSync(join(inboxDir, name), "utf8")
-        ) as Proposal;
-        inboxHeadlines.add(headline({ body: prop.text }).toLowerCase());
-        for (const err of prop.errors) {
-          inboxErrors.add(err.toLowerCase());
-        }
-      } catch {
-        // Skip malformed
-      }
-    }
-  }
-
+  const cursorFile = join(home, "state", "capture-cursor.json");
+  const cursor = readJson<Record<string, number>>(cursorFile, {});
+  const seen = seenBefore(home, notes);
   const proposals: Proposal[] = [];
 
-  // Process each event file
-  const eventFiles = readdirSync(dir)
-    .filter((n) => n.endsWith(".jsonl"))
-    .sort();
-
-  const filesToPrune: string[] = [];
-
-  for (const fileName of eventFiles) {
+  for (const fileName of readdirSync(dir).filter((n) => n.endsWith(".jsonl")).sort()) {
     const filePath = join(dir, fileName);
-    let fileContent: Buffer;
+    let bytes: Buffer;
     try {
-      fileContent = readFileSync(filePath);
+      bytes = readFileSync(filePath);
     } catch {
       continue;
     }
-
     const offset = cursor[fileName] ?? 0;
-    if (offset >= fileContent.length) continue;
-
-    const newContent = fileContent.slice(offset).toString("utf8");
-    const lines = newContent.split("\n");
-    const events: ToolEvent[] = [];
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const evt = JSON.parse(line) as ToolEvent;
-        events.push(evt);
-      } catch {
-        // Skip malformed
+    if (offset < bytes.length) {
+      const events: ToolEvent[] = [];
+      for (const line of bytes.subarray(offset).toString("utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          events.push(JSON.parse(line) as ToolEvent);
+        } catch {
+          // a torn or foreign line is skipped
+        }
       }
-    }
-
-    // Find failure→fix pairs
-    let i = 0;
-    while (i < events.length) {
-      const eventI = events[i];
-      if (!eventI) {
-        i += 1;
-        continue;
-      }
-
-      if (eventI.ok === false && eventI.command && eventI.error) {
-        const progI = program(eventI.command);
-        const toolI = eventI.tool;
-        const cmdI = eventI.command;
-        const errorI = eventI.error;
-
-        // Look for fix within next 6 events
-        let found = false;
+      for (let i = 0; i < events.length; i++) {
+        const failed = events[i];
+        if (!failed || failed.ok !== false || !failed.command || !failed.error) continue;
+        const prog = program(failed.command);
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
-          const eventJ = events[j];
-          if (!eventJ) continue;
-          const progJ = program(eventJ.command ?? "");
-
-          if (
-            eventJ.tool === toolI &&
-            eventJ.ok === true &&
-            eventJ.command &&
-            progJ === progI &&
-            eventJ.command !== cmdI
-          ) {
-            // Found a pair
-            const cmdJ = eventJ.command;
-
-            // Scrub
-            const { text: cmdIClean } = scrub(cmdI);
-            const { text: cmdJClean } = scrub(cmdJ);
-            const { text: errorClean } = scrub(errorI);
-
-            // Build headline
-            const cmdIShort = cmdIClean.split(/\s+/).join(" ").slice(0, 60);
-            const cmdJShort = cmdJClean.split(/\s+/).join(" ").slice(0, 60);
-            const sig = errorSignature(errorClean).slice(0, 60);
-            const hl = `${progI}: ${cmdIShort} fails (${sig}); ${cmdJShort} works`;
-            const hlCut = cutToTokens(hl, 50);
-
-            // Check for duplicates (case-insensitive)
-            const hlLower = hlCut.toLowerCase();
-            if (
-              activeHeadlines.has(hlLower) ||
-              inboxHeadlines.has(hlLower) ||
-              rejectedTexts.has(hlLower)
-            ) {
-              i = j;
-              found = true;
-              break;
-            }
-
-            if (sig && (activeErrors.has(sig.toLowerCase()) ||
-              inboxErrors.has(sig.toLowerCase()) ||
-              rejectedSigs.has(sig.toLowerCase()))) {
-              i = j;
-              found = true;
-              break;
-            }
-
-            // Resolve project
-            const projectId = eventI.cwd ? resolveProject(home, eventI.cwd).id : GLOBAL;
-
-            // Build full text
-            const text =
-              `${hlCut}\n\n${cmdIClean}\n\n${cmdJClean}\n\nError: ${errorClean}`.slice(
-                0,
-                800
-              );
-
-            const proposal: Proposal = {
-              id: randomId("p"),
-              at: nowIso(),
-              project: projectId,
-              kind: "gotcha",
-              text,
-              errors: sig ? [sig] : [],
-              tested: true,
-              source: "capture",
-              evidence: [`events:${fileName}#${i}-${j}`],
-            };
-
-            saveProposal(home, proposal);
-            proposals.push(proposal);
-
-            // Update dedup sets
-            activeHeadlines.add(hlLower);
-            if (sig) activeErrors.add(sig.toLowerCase());
-
-            i = j;
-            found = true;
-            break;
-          }
+          const fixed = events[j];
+          if (!fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command) continue;
+          if (program(fixed.command) !== prog || fixed.command === failed.command) continue;
+          const failedCmd = scrub(failed.command).text;
+          const fixedCmd = scrub(fixed.command).text;
+          const error = scrub(failed.error).text;
+          const short = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 60);
+          const sig = errorSignature(error).slice(0, 60);
+          const head = cutToTokens(`${prog}: ${short(failedCmd)} fails (${sig}); ${short(fixedCmd)} works`, 50);
+          propose(home, seen, {
+            id: randomId("p"),
+            at: nowIso(now),
+            project: failed.cwd ? resolveProject(home, failed.cwd).id : GLOBAL,
+            kind: "gotcha",
+            text: `${head}\n\n${failedCmd}\n\n${fixedCmd}\n\nError: ${error}`.slice(0, 800),
+            errors: sig ? [sig] : [],
+            tested: true,
+            source: "capture",
+            evidence: [`events:${fileName}#${i}-${j}`],
+          }, proposals);
+          i = j;
+          break;
         }
-
-        if (!found) {
-          i += 1;
-        }
-      } else {
-        i += 1;
       }
+      cursor[fileName] = bytes.length;
     }
-
-    // Update cursor
-    cursor[fileName] = fileContent.length;
-
-    // Mark for pruning if fully processed and old
-    if (cursor[fileName] >= fileContent.length) {
-      try {
-        const stat = statSync(filePath);
-        const fileAge = nowTime - stat.mtimeMs;
-        const retentionMs = EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-        if (fileAge > retentionMs) {
-          filesToPrune.push(fileName);
-        }
-      } catch {
-        // Ignore stat errors
-      }
-    }
-  }
-
-  // Prune old files
-  for (const fileName of filesToPrune) {
     try {
-      rmSync(join(dir, fileName));
-      delete cursor[fileName];
+      const old = now.getTime() - statSync(filePath).mtimeMs > EVENT_RETENTION_DAYS * 86_400_000;
+      if (old && (cursor[fileName] ?? 0) >= bytes.length) {
+        rmSync(filePath);
+        delete cursor[fileName];
+      }
     } catch {
-      // Ignore
+      // pruning is best effort
     }
   }
-
-  // Write cursor
-  try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(cursorFile, JSON.stringify(cursor), "utf8");
-  } catch {
-    // Ignore
-  }
-
+  writeAtomic(cursorFile, JSON.stringify(cursor));
   return proposals;
 }
 
 /**
- * Scan git commits for Brain-Decision and Brain-Gotcha trailers.
- * Use cursor to read only new commits (exclusive).
+ * Proposals from `Brain-Decision:` / `Brain-Gotcha:` commit trailers in `repoRoot`, from the
+ * last seen commit (`state/git-cursor.json`) or, the first time, the last 50 commits.
  */
-export function scanCommits(
-  home: string,
-  repoRoot: string,
-  project: string,
-  notes: Note[]
-): Proposal[] {
-  const dir = eventsDir(home);
-  const cursorFile = join(dir, ".git-cursor.json");
-
-  // Load cursor
-  let cursor: Record<string, string> = {};
-  try {
-    cursor = JSON.parse(readFileSync(cursorFile, "utf8"));
-  } catch {
-    // No cursor yet
-  }
-
-  // Run git log
-  const args = ["log"];
-  const lastSha = cursor[repoRoot];
-  if (lastSha) {
-    args.push(`${lastSha}..HEAD`);
-  } else {
-    args.push("-50");
-  }
-  args.push("--format=%H%x00%B%x1e");
-
-  const result = spawnSync("git", ["-C", repoRoot, ...args], {
-    encoding: "utf8",
-    timeout: 30000,
-  });
-
+export function scanCommits(home: string, repoRoot: string, project: string, notes: Note[]): Proposal[] {
+  const cursorFile = join(home, "state", "git-cursor.json");
+  const cursor = readJson<Record<string, string>>(cursorFile, {});
+  const last = cursor[repoRoot];
+  const range = last ? [`${last}..HEAD`] : ["-50"];
+  const result = spawnSync("git", ["-C", repoRoot, "log", ...range, "--format=%H%x00%B%x1e"], { encoding: "utf8", timeout: 30_000 });
   if (result.status !== 0 || !result.stdout) return [];
 
-  // Collect headlines and errors for dedup
-  const activeHeadlines = new Set<string>();
-  const activeErrors = new Set<string>();
-  for (const note of notes) {
-    if (isActive(note)) {
-      activeHeadlines.add(headline(note).toLowerCase());
-      for (const err of note.errors) {
-        activeErrors.add(err.toLowerCase());
-      }
-    }
-  }
-
-  // Load rejected
-  const rejectedFile = join(home, "state", "rejected.json");
-  let rejected: { signatures: string[]; texts: string[] } = {
-    signatures: [],
-    texts: [],
-  };
-  try {
-    rejected = JSON.parse(readFileSync(rejectedFile, "utf8"));
-  } catch {
-    // No rejected file yet
-  }
-  const rejectedTexts = new Set(
-    rejected.texts.map((t) => t.toLowerCase())
-  );
-
-  // Load inbox proposals
-  const inboxDir = join(home, "state", "inbox");
-  const inboxHeadlines = new Set<string>();
-  if (existsSync(inboxDir)) {
-    for (const name of readdirSync(inboxDir)) {
-      if (!name.endsWith(".json")) continue;
-      try {
-        const prop = JSON.parse(
-          readFileSync(join(inboxDir, name), "utf8")
-        ) as Proposal;
-        inboxHeadlines.add(headline({ body: prop.text }).toLowerCase());
-      } catch {
-        // Skip malformed
-      }
-    }
-  }
-
+  const commits = result.stdout
+    .split("\x1e")
+    .map((part) => {
+      const nul = part.indexOf("\x00");
+      return nul < 0 ? null : { sha: part.slice(0, nul).trim(), body: part.slice(nul + 1) };
+    })
+    .filter((c): c is { sha: string; body: string } => c !== null && /^[0-9a-f]{40}$/i.test(c.sha))
+    .reverse(); // oldest first
+  const seen = seenBefore(home, notes);
   const proposals: Proposal[] = [];
-
-  // Parse commits: split by \x1e (last commit ends with it)
-  // Format is %H%x00%B%x1e: sha, null byte, body, record separator
-  const commits: Array<{ sha: string; body: string }> = [];
-  for (const part of result.stdout.split("\x1e")) {
-    if (!part.trim()) continue;
-    const nullIndex = part.indexOf("\x00");
-    if (nullIndex < 0) continue;
-    const sha = part.slice(0, nullIndex).trim();
-    const body = part.slice(nullIndex + 1);
-    if (sha && sha.match(/^[0-9a-f]{40}$/i)) {
-      commits.push({ sha, body });
+  for (const { sha, body } of commits) {
+    for (const match of body.matchAll(/^Brain-(Decision|Gotcha):\s*(.+)$/gim)) {
+      const text = cutToTokens(scrub((match[2] ?? "").trim()).text, 200);
+      if (!text) continue;
+      propose(home, seen, {
+        id: randomId("p"),
+        at: nowIso(),
+        project,
+        kind: (match[1] ?? "").toLowerCase() === "decision" ? "decision" : "gotcha",
+        text,
+        errors: [],
+        tested: false,
+        source: "commit",
+        evidence: [`commit:${sha.slice(0, 12)}`],
+      }, proposals);
     }
   }
-
-  // Process in reverse (oldest to newest)
-  for (const { sha, body } of commits.reverse()) {
-    // Look for trailers (case-insensitive)
-    for (const trailerType of ["Brain-Decision", "Brain-Gotcha"]) {
-      const pattern = new RegExp(`^${trailerType}:\\s*(.+)$`, "gmiu");
-      for (const match of body.matchAll(pattern)) {
-        const text = (match[1] ?? "").trim();
-        if (!text) continue;
-
-        // Scrub
-        const { text: textClean } = scrub(text);
-        const textCut = cutToTokens(textClean, 200);
-
-        // Check for duplicates
-        const textLower = textCut.toLowerCase();
-        if (
-          activeHeadlines.has(textLower) ||
-          inboxHeadlines.has(textLower) ||
-          rejectedTexts.has(textLower)
-        ) {
-          continue;
-        }
-
-        // Determine kind
-        const kind: Kind =
-          trailerType.toLowerCase() === "brain-decision"
-            ? "decision"
-            : "gotcha";
-
-        const proposal: Proposal = {
-          id: randomId("p"),
-          at: nowIso(),
-          project,
-          kind,
-          text: textCut,
-          errors: [],
-          tested: false,
-          source: "commit",
-          evidence: [`commit:${sha.slice(0, 12)}`],
-        };
-
-        saveProposal(home, proposal);
-        proposals.push(proposal);
-        activeHeadlines.add(textLower);
-      }
-    }
+  const newest = commits.at(-1);
+  if (newest) {
+    cursor[repoRoot] = newest.sha;
+    writeAtomic(cursorFile, JSON.stringify(cursor));
   }
-
-  // Update cursor to HEAD
-  if (commits.length > 0) {
-    const lastCommit = commits[commits.length - 1];
-    if (lastCommit) {
-      cursor[repoRoot] = lastCommit.sha;
-    }
-    try {
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(cursorFile, JSON.stringify(cursor), "utf8");
-    } catch {
-      // Ignore
-    }
-  }
-
   return proposals;
 }
 

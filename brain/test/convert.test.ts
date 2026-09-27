@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { PACKAGE_HOME } from "../src/util.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -428,18 +429,9 @@ git_remote = "https://github.com/owner/new"
     expect(notes).toHaveLength(0);
   });
 
-  it("converts against real /home/user/The-2nd-Brain and writes 120 notes", () => {
-    const brainHome = "/home/user/The-2nd-Brain";
+  it("converts the repository's own V3 records: 120 notes, no errors", () => {
+    const brainHome = PACKAGE_HOME;
     const to = tmp();
-
-    // Check if the real brain exists
-    const recordsDir = join(brainHome, "records");
-    if (!require("node:fs").existsSync(recordsDir)) {
-      // Skip if brain doesn't exist
-      expect(true).toBe(true);
-      return;
-    }
-
     const report = convertV3(brainHome, to);
     expect(report.errors).toHaveLength(0);
     expect(report.written).toBe(120);

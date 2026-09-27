@@ -10,6 +10,7 @@
  */
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { scrub } from "./scrub.ts";
 import { nowIso, randomId, writeAtomic } from "./util.ts";
 
 export const GLOBAL = "global";
@@ -273,9 +274,10 @@ export interface NewNote {
   replaces?: string;
 }
 
-/** Create and save a new note. `text` becomes the body (first line = headline). */
+/** Create and save a new note. `text` becomes the body (first line = headline); secrets are masked. */
 export function createNote(home: string, input: NewNote): Note {
-  const body = input.text.trim();
+  const clean = (s: string) => scrub(s, { longRuns: false }).text;
+  const body = clean(input.text.trim());
   if (!body) throw new NoteError("empty note");
   const note: Note = {
     id: randomId("n"),
@@ -285,7 +287,7 @@ export function createNote(home: string, input: NewNote): Note {
     at: nowIso(),
     source: input.source ?? "agent",
     tags: input.tags ?? [],
-    errors: input.errors ?? [],
+    errors: (input.errors ?? []).map(clean),
     evidence: input.evidence ?? [],
     tested: input.tested ?? false,
     replaces: input.replaces,
@@ -308,4 +310,12 @@ export function retireNote(home: string, id: string, by?: string): Note {
     saveNote(home, { ...next, replaces: id });
   }
   return saveNote(home, { ...note, retired: nowIso(), replacedBy: by });
+}
+
+/** An active note in `project` (or global) whose headline equals the headline of `text`, ignoring case and spacing. */
+export function findSameHeadline(notes: Note[], text: string, project: string): Note | undefined {
+  const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const wanted = key(headline({ body: text }));
+  if (!wanted) return undefined;
+  return notes.find((n) => !n.retired && (n.project === project || n.project === GLOBAL) && key(headline(n)) === wanted);
 }

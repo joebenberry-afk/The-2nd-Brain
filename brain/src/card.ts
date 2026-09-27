@@ -13,7 +13,7 @@
  * Nothing to say → "" (the host adds nothing).
  */
 import { pendingCount } from "./capture.ts";
-import { kitsFor, loadKits, type Kit } from "./kits.ts";
+import { kitsDir, kitsFor, loadKits, type Kit } from "./kits.ts";
 import { GLOBAL, headline, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { recall } from "./search.ts";
@@ -65,12 +65,11 @@ function noteLine(n: Note): string {
   return `- [${n.kind}${n.tested ? ", tested" : ""}] ${headline(n)} (${n.id})`;
 }
 
-function kitsLine(kits: Kit[], fresh: boolean): string {
+function kitsLine(kits: Kit[], fresh: boolean, home: string): string {
   if (!kits.length) return "";
   const names = kits.slice(0, 5).map((k) => k.name).join(", ");
-  return fresh
-    ? `New project? MVP kits: ${names} → \`brain kit show <name>\``
-    : `Kits for this kind of project: ${names} → \`brain kit show <name>\``;
+  const where = `read ${kitsDir(home).replace(/\\/g, "/")}/<name>/SKILL.md`;
+  return fresh ? `New project? MVP kits: ${names} → ${where}` : `Kits for this kind of project: ${names} → ${where}`;
 }
 
 function footer(tools: boolean): string {
@@ -93,7 +92,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   if (!resume && !ranked.length && !kits.length && !pending) return "";
 
   const head = `Brain · ${project.id} — advisory memory, verify before relying on it`;
-  const tail = [kitsLine(kits, fresh), pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", footer(opts.tools === true)].filter(Boolean);
+  const tail = [kitsLine(kits, fresh, home), pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", footer(opts.tools === true)].filter(Boolean);
   const lines = [head];
   const fits = (extra: string[]): boolean => estimateTokens([...lines, ...extra, ...tail].join("\n")) <= CARD_BUDGET;
   if (resume && fits([resume])) lines.push(resume);

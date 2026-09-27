@@ -1,9 +1,5 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -222,9 +218,9 @@ describe("capture.appendEvent", () => {
       }
     );
     const dir = eventsDir(home);
-    const files = require("fs").readdirSync(dir);
+    const files = readdirSync(dir);
     expect(files.length).toBe(1);
-    const content = readFileSync(join(dir, files[0]), "utf8");
+    const content = readFileSync(join(dir, files[0] as string), "utf8");
     const line = JSON.parse(content.trim()) as ToolEvent;
     expect(line.v).toBe(1);
     expect(line.tool).toBe("bash");
@@ -245,8 +241,8 @@ describe("capture.appendEvent", () => {
       }
     );
     const dir = eventsDir(home);
-    const files = require("fs").readdirSync(dir);
-    const content = readFileSync(join(dir, files[0]), "utf8");
+    const files = readdirSync(dir);
+    const content = readFileSync(join(dir, files[0] as string), "utf8");
     const line = JSON.parse(content.trim()) as ToolEvent;
     expect(line.command).not.toContain("secret123");
   });
@@ -272,13 +268,13 @@ describe("capture.appendEvent", () => {
     const large = "x".repeat(5 * 1024 * 1024);
     writeFileSync(file, large);
 
-    const sizeBeforeAppend = require("fs").statSync(file).size;
+    const sizeBeforeAppend = statSync(file).size;
 
     // Try to append
     appendEvent(home, "test", "/cwd", { tool: "bash", ok: true });
 
     // File should not have grown
-    const sizeAfterAppend = require("fs").statSync(file).size;
+    const sizeAfterAppend = statSync(file).size;
     expect(sizeAfterAppend).toBe(sizeBeforeAppend);
   });
 });
@@ -446,14 +442,14 @@ describe("capture.scanEvents", () => {
 
     // Set file mtime to old date
     const oldDate = new Date("2000-01-01").getTime();
-    require("fs").utimesSync(oldFile, oldDate / 1000, oldDate / 1000);
+    utimesSync(oldFile, oldDate / 1000, oldDate / 1000);
 
     // First scan: should prune when fully processed
     const now = new Date("2026-10-20");
     scanEvents(home, [], { now });
 
     // File should be deleted
-    expect(require("fs").existsSync(oldFile)).toBe(false);
+    expect(existsSync(oldFile)).toBe(false);
   });
 
   it("updates cursor after processing", () => {
@@ -476,9 +472,7 @@ describe("capture.scanEvents", () => {
 
     scanEvents(home, []);
 
-    const cursorFile = join(dir, ".cursor.json");
-    expect(require("fs").existsSync(cursorFile)).toBe(true);
-    const cursor = JSON.parse(readFileSync(cursorFile, "utf8"));
+    const cursor = JSON.parse(readFileSync(join(home, "state", "capture-cursor.json"), "utf8"));
     expect(cursor["session1.jsonl"]).toBeGreaterThan(0);
   });
 
@@ -516,22 +510,22 @@ describe("capture.scanCommits", () => {
     mkdirSync(join(repo, ".git"));
 
     // Initialize git repo
-    require("child_process").spawnSync("git", ["-C", repo, "init"], {
+    spawnSync("git", ["-C", repo, "init"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "config", "user.email", "test@test.com"], {
+    spawnSync("git", ["-C", repo, "config", "user.email", "test@test.com"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "config", "user.name", "Test User"], {
+    spawnSync("git", ["-C", repo, "config", "user.name", "Test User"], {
       stdio: "ignore",
     });
 
     // Create a commit with trailer
     writeFileSync(join(repo, "file.txt"), "content");
-    require("child_process").spawnSync("git", ["-C", repo, "add", "file.txt"], {
+    spawnSync("git", ["-C", repo, "add", "file.txt"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "commit", "-m", "Test\n\nBrain-Gotcha: found a bug"], {
+    spawnSync("git", ["-C", repo, "commit", "-m", "Test\n\nBrain-Gotcha: found a bug"], {
       stdio: "ignore",
     });
 
@@ -548,21 +542,21 @@ describe("capture.scanCommits", () => {
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(repo, ".git"));
 
-    require("child_process").spawnSync("git", ["-C", repo, "init"], {
+    spawnSync("git", ["-C", repo, "init"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "config", "user.email", "test@test.com"], {
+    spawnSync("git", ["-C", repo, "config", "user.email", "test@test.com"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "config", "user.name", "Test User"], {
+    spawnSync("git", ["-C", repo, "config", "user.name", "Test User"], {
       stdio: "ignore",
     });
 
     writeFileSync(join(repo, "file.txt"), "content");
-    require("child_process").spawnSync("git", ["-C", repo, "add", "file.txt"], {
+    spawnSync("git", ["-C", repo, "add", "file.txt"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "commit", "-m", "Test\n\nBrain-Decision: use async"], {
+    spawnSync("git", ["-C", repo, "commit", "-m", "Test\n\nBrain-Decision: use async"], {
       stdio: "ignore",
     });
 
@@ -578,21 +572,21 @@ describe("capture.scanCommits", () => {
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(repo, ".git"));
 
-    require("child_process").spawnSync("git", ["-C", repo, "init"], {
+    spawnSync("git", ["-C", repo, "init"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "config", "user.email", "test@test.com"], {
+    spawnSync("git", ["-C", repo, "config", "user.email", "test@test.com"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "config", "user.name", "Test User"], {
+    spawnSync("git", ["-C", repo, "config", "user.name", "Test User"], {
       stdio: "ignore",
     });
 
     writeFileSync(join(repo, "file.txt"), "content");
-    require("child_process").spawnSync("git", ["-C", repo, "add", "file.txt"], {
+    spawnSync("git", ["-C", repo, "add", "file.txt"], {
       stdio: "ignore",
     });
-    require("child_process").spawnSync("git", ["-C", repo, "commit", "-m", "First\n\nBrain-Gotcha: bug1"], {
+    spawnSync("git", ["-C", repo, "commit", "-m", "First\n\nBrain-Gotcha: bug1"], {
       stdio: "ignore",
     });
 
@@ -676,7 +670,7 @@ describe("capture.acceptProposal", () => {
     expect(note.kind).toBe("gotcha");
     expect(note.source).toBe("capture");
     expect(note.errors).toContain("error pattern");
-    expect(!require("fs").existsSync(join(dir, "p-1.json"))).toBe(true);
+    expect(!existsSync(join(dir, "p-1.json"))).toBe(true);
   });
 
   it("throws for unknown proposal", () => {
@@ -708,7 +702,7 @@ describe("capture.rejectProposal", () => {
     rejectProposal(home, "p-1");
 
     const rejectedFile = join(home, "state", "rejected.json");
-    expect(require("fs").existsSync(rejectedFile)).toBe(true);
+    expect(existsSync(rejectedFile)).toBe(true);
     const rejected = JSON.parse(readFileSync(rejectedFile, "utf8"));
     expect(rejected.texts).toContain("this is a false alarm");
     expect(rejected.signatures).toContain("pattern1");
@@ -917,9 +911,8 @@ describe("capture.findFix", () => {
       tested: true,
     });
 
-    const fs = require("fs");
     const retiredNote = { ...created, retired: "2026-09-27T10:00:00Z" };
-    fs.writeFileSync(created.path, formatNote(retiredNote));
+    writeFileSync(created.path, formatNote(retiredNote));
 
     const { notes: reloadedNotes } = loadNotes(home);
     const fix = findFix(reloadedNotes, "error", null);

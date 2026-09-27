@@ -4,9 +4,10 @@
  * cards after compaction, logs tool results, tracks edited paths and failures, and provides
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
-import { createNote, GLOBAL, KINDS, loadNotes, type Kind } from "./notes.ts";
+import { isAbsolute, relative, resolve } from "node:path";
+import { createNote, findSameHeadline, GLOBAL, KINDS, loadNotes, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { recall, renderHit } from "./search.ts";
+import { answer } from "./search.ts";
 import { appendEvent, errorSignature, findFix, renderFix, toolEventFrom } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { logUse, type UseKind } from "./telemetry.ts";
@@ -129,6 +130,17 @@ function requireString(value: unknown, name: string): string {
   return value;
 }
 
+/** A path as the agent should read it: relative to the project root when inside it, forward slashes. */
+export function displayPath(path: string, root: string | null, cwd: string): string {
+  const absolute = isAbsolute(path) ? path : resolve(cwd, path);
+  if (root) {
+    const rel = relative(root, absolute);
+    const inside = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    if (inside) return rel.replace(/\\/g, "/");
+  }
+  return path.replace(/\\/g, "/");
+}
+
 export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = process.env): void {
   const home = findHome(undefined, env);
   if (!home) {
@@ -151,6 +163,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   // Handle before_agent_start
   pi.on("before_agent_start", (event, ctx) => {
     try {
+      const started = performance.now();
       const key = sessionKey(ctx);
       const state = getSession(key);
       const eventObj = asObject(event);
@@ -179,7 +192,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
         if (cardContent) {
           state.carded = true;
-          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: 0, session: key });
+          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key });
           return buildCardMessage(cardContent);
         }
         state.carded = true;
@@ -252,6 +265,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   // Handle session_compact
   pi.on("session_compact", (_event, ctx) => {
     try {
+      const started = performance.now();
       const key = sessionKey(ctx);
       const state = getSession(key);
 
@@ -264,7 +278,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         const now = Date.now();
         state.resume = { content: cardContent, at: now };
         state.resumeSeen = false;
-        logUse(home, { kind: "resume", project: project.id, tokens: estimateTokens(cardContent), ms: 0, session: key });
+        logUse(home, { kind: "resume", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key });
       } else {
         state.resume = undefined;
       }
@@ -278,6 +292,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   // Handle tool_result
   pi.on("tool_result", (event, ctx) => {
     try {
+      const started = performance.now();
       const key = sessionKey(ctx);
       const state = getSession(key);
       const eventObj = asObject(event);
@@ -299,17 +314,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (fields.ok && fields.path) {
         const path = fields.path;
         // Check if path is inside project.root; if so, make it relative
-        let normalizedPath = path;
-        if (project.root) {
-          try {
-            // Simple relative path computation for forward slashes
-            if (path.startsWith(project.root)) {
-              normalizedPath = path.slice(project.root.length).replace(/^[\\/]+/, "").replace(/\\/g, "/");
-            }
-          } catch {
-            // Keep original path on error
-          }
-        }
+        const normalizedPath = displayPath(path, project.root, cwd);
 
         // Keep last 20 unique edited paths
         if (!state.edited.includes(normalizedPath)) {
@@ -341,7 +346,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const fixText = renderFix(fix);
           const contentArray = Array.isArray(content) ? content : [];
           const resultContent = [...contentArray, { type: "text", text: fixText }];
-          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: 0, session: key });
+          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key });
           return { content: resultContent };
         }
       }
@@ -407,13 +412,12 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       tool(
         "brain_recall",
         "Brain recall",
-        'Search long-term memory from earlier sessions and projects. Returns up to 3 one-line answers, or "no match".',
-        { query: { type: "string", description: "what you want to know" }, all: { type: "boolean", description: "search every project", optional: true } },
+        'Search long-term memory from earlier sessions and projects: up to 3 answers, or "no match". Pass a note id to read that note in full.',
+        { query: { type: "string", description: "a question, keywords, or a note id" }, all: { type: "boolean", description: "search every project", optional: true } },
         (params, cwd) => {
           const query = requireString(params.query, "query");
           const project = resolveProject(home, cwd, env);
-          const hits = recall(loadNotes(home).notes, query, { project, all: params.all === true });
-          return { text: hits.length ? hits.map(renderHit).join("\n") : "no match", kind: "recall", project: project.id };
+          return { text: answer(loadNotes(home).notes, query, { project, all: params.all === true }), kind: "recall", project: project.id };
         },
       ),
     );
@@ -434,9 +438,12 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const kind = typeof params.kind === "string" && (KINDS as readonly string[]).includes(params.kind) ? (params.kind as Kind) : "note";
           const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
           const project = resolveProject(home, cwd, env);
+          const scope = params.global === true ? GLOBAL : project.id;
+          const same = findSameHeadline(loadNotes(home).notes, text, scope);
+          if (same) return { text: `already noted ${same.id}`, kind: "note", project: project.id };
           const note = createNote(home, {
             text,
-            project: params.global === true ? GLOBAL : project.id,
+            project: scope,
             kind,
             errors: error ? [error] : [],
             tested: params.tested === true,
