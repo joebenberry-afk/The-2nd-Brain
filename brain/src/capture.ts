@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
 import { cutToTokens, estimateTokens, nowIso, randomId, writeAtomic } from "./util.ts";
 
@@ -74,12 +75,15 @@ export function eventsDir(home: string): string {
 }
 
 /**
- * Safe session key: keep [A-Za-z0-9._-], replace others with "_", cut to 100 chars.
- * Empty or only-non-alphanumeric → "unknown".
+ * A file-name-safe session key: [A-Za-z0-9._-] kept, others "_". Long keys (session file paths
+ * share long prefixes) keep their distinctive tail plus a hash of the whole key, so two sessions
+ * never share a log. Empty → "unknown".
  */
 export function safeSession(session: string): string {
-  const safe = session.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 100);
-  return safe && /[A-Za-z0-9]/.test(safe) ? safe : "unknown";
+  const safe = session.replace(/[^A-Za-z0-9._-]/g, "_");
+  if (!/[A-Za-z0-9]/.test(safe)) return "unknown";
+  if (safe.length <= 100) return safe;
+  return `${safe.slice(-60).replace(/^[._-]+/, "")}-${createHash("sha256").update(session).digest("hex").slice(0, 12)}`;
 }
 
 /**

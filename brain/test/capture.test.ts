@@ -134,9 +134,13 @@ describe("capture.safeSession", () => {
     expect(safeSession("session@host#tag")).toBe("session_host_tag");
   });
 
-  it("cuts to 100 characters", () => {
-    const long = "a".repeat(150);
-    expect(safeSession(long).length).toBeLessThanOrEqual(100);
+  it("keeps long keys short and distinct: sessions sharing a long prefix never share a log", () => {
+    const base = "C:\\Users\\me\\.omp\\agent\\sessions\\--C--Users-me-Documents-Some-Long-Project-Name--\\";
+    const a = safeSession(base + "2026-09-27T10-00-00-000Z_aaaa.jsonl");
+    const b = safeSession(base + "2026-09-27T11-00-00-000Z_bbbb.jsonl");
+    expect(a).not.toBe(b);
+    expect(a.length).toBeLessThanOrEqual(100);
+    expect(a).toMatch(/aaaa\.jsonl-[0-9a-f]{12}$/);
   });
 
   it("returns unknown for empty or only-non-alphanumeric", () => {
