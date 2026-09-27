@@ -1,8 +1,8 @@
 ---
-at: 2026-09-27T22:39:21Z
+at: 2026-09-27T23:53:20Z
 ---
 
 Goal: make V4 an agent's best friend (tokens, speed, reliability) via recursive swarm→fix rounds.
-Done: V4 verified LIVE in OMP 18.3.5 (card 386 tok, tools mounted). Round-1 swarm (5 hunters, privacy, perf, Astra, Fable) → batch 5 workers running: Lifecycle (resume ≤150, subagent state guard, auto→state/), Card, Notes, Capture, SyncData.
-Next: full gate (eslint/tsc/vitest), smoke card/recall/resume, commit, round-2 re-swarm on changed code, README.
-Watch out: compaction re-inject measured 399 tok (budget 150); subagents could overwrite this plan via brain_state.
+Done: rounds 1–2 landed (f1a53c8 batch 5, 0677252 batch 6; data 9890ae2, cb58972, 47bf005). Resume ≤150 (was 399), subagent-safe state via ctx.agent.kind, auto state local, complete card lines, capture proposals only for true retries, global known fixes seeded, privacy scrubs. Gate: 456 pass; eval dev 13/15, held-out 7/8.
+Next: owner restarts OMP, /compact once → check `brain stats` for resume row; week of use. Owner decisions: prompt-time push, seeding plan from compaction summary.
+Watch out: ca…
