@@ -1,6 +1,6 @@
 /** MVP kits (Agent Skills format). */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { estimateTokens, slug, tagList, writeAtomic } from "./util.ts";
 import { parseFrontmatter, type Note, isActive } from "./notes.ts";
 import type { Project } from "./project.ts";
@@ -70,8 +70,9 @@ export function loadKits(home: string): Kit[] {
   return kits;
 }
 
+/** A kit by its name, or by the folder name `kit new` made from it ("FastAPI MVP" → fastapi-mvp). */
 export function findKit(kits: Kit[], name: string): Kit | undefined {
-  return kits.find((k) => k.name === name);
+  return kits.find((k) => k.name === name) ?? kits.find((k) => k.name === slug(name) || basename(dirname(k.path)) === slug(name));
 }
 
 export function kitsFor(kits: Kit[], project: Project): Kit[] {

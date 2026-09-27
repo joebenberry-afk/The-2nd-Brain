@@ -52,7 +52,7 @@ const ctx = (session: string, cwd = join(root, "work")) => ({
 describe("OMP extension", () => {
   it("falls back to its own checkout as the home when SECOND_BRAIN_HOME is unset", () => {
     const { handlers } = load({}, false);
-    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "context", "session_before_compact", "session_compact", "session_shutdown", "tool_result"]);
+    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "context", "session_before_branch", "session_before_switch", "session_branch", "session_compact", "session_shutdown", "session_switch", "tool_result"]);
   });
 
   it("registers handlers even when home is empty (no notes)", () => {
@@ -60,7 +60,6 @@ describe("OMP extension", () => {
     expect(handlers.size).toBeGreaterThan(0);
     expect(handlers.has("before_agent_start")).toBe(true);
     expect(handlers.has("context")).toBe(true);
-    expect(handlers.has("session_before_compact")).toBe(true);
     expect(handlers.has("session_compact")).toBe(true);
     expect(handlers.has("tool_result")).toBe(true);
     expect(handlers.has("session_shutdown")).toBe(true);
@@ -125,7 +124,7 @@ describe("OMP extension", () => {
 
     const { handlers } = load();
     const start = handlers.get("before_agent_start")!;
-    const beforeCompact = handlers.get("session_before_compact")!;
+    const compact = handlers.get("session_compact")!;
 
     const session = "s-prompt-test";
     const c = ctx(session, workDir);
@@ -133,8 +132,8 @@ describe("OMP extension", () => {
     // Trigger before_agent_start with a prompt
     start({ prompt: "  test   with   spaces  " }, c);
 
-    // Trigger compaction to write auto section
-    beforeCompact({}, c);
+    // Compaction writes the auto section
+    compact({}, c);
 
     // Check the work file was written - project resolves to folder name
     const workFile = readWork(home, "work");
@@ -157,7 +156,6 @@ describe("OMP extension", () => {
 
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;
-    const beforeCompact = handlers.get("session_before_compact")!;
     const compact = handlers.get("session_compact")!;
     const contextHandler = handlers.get("context")!;
     const start = handlers.get("before_agent_start")!;
@@ -175,9 +173,6 @@ describe("OMP extension", () => {
       },
       c
     );
-
-    // Step 2: before_compact writes auto section
-    beforeCompact({}, c);
 
     // Step 3: compact builds resume
     compact({}, c);
@@ -209,7 +204,6 @@ describe("OMP extension", () => {
 
   it("does not duplicate resume card if already in messages", () => {
     const { handlers } = load();
-    const beforeCompact = handlers.get("session_before_compact")!;
     const compact = handlers.get("session_compact")!;
     const contextHandler = handlers.get("context")!;
 
@@ -223,7 +217,6 @@ describe("OMP extension", () => {
     const c = ctx(session);
 
     // Trigger compaction
-    beforeCompact({}, c);
     compact({}, c);
 
     // Context with resume card already present
@@ -256,7 +249,6 @@ describe("OMP extension", () => {
     });
 
     const { handlers } = load();
-    const beforeCompact = handlers.get("session_before_compact")!;
     const compact = handlers.get("session_compact")!;
     const start = handlers.get("before_agent_start")!;
 
@@ -264,7 +256,6 @@ describe("OMP extension", () => {
     const c = ctx(session, workDir);
 
     // Trigger compaction without calling context
-    beforeCompact({}, c);
     compact({}, c);
 
     // Now call before_agent_start: should deliver the card
@@ -380,7 +371,6 @@ describe("OMP extension", () => {
 
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;
-    const beforeCompact = handlers.get("session_before_compact")!;
 
     const session = "s-paths";
     const c = ctx(session, workDir);
@@ -397,8 +387,7 @@ describe("OMP extension", () => {
         c
       );
     }
-
-    beforeCompact({}, c);
+    handlers.get("session_compact")!({}, c);
 
     const workFile = readWork(home, "work");
     expect(workFile?.auto).toContain("file1.ts");
@@ -651,6 +640,6 @@ describe("OMP extension under a hostile or limited host", () => {
   it("survives a host that does not know some events", () => {
     const { pi, handlers } = host({ unknownEvents: ["context", "session_compact"] });
     expect(() => secondBrain(pi, { SECOND_BRAIN_HOME: home })).not.toThrow();
-    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "session_before_compact", "session_shutdown", "tool_result"]);
+    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "session_before_branch", "session_before_compact", "session_before_switch", "session_branch", "session_shutdown", "session_switch", "tool_result"]);
   });
 });

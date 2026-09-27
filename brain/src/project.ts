@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
-import { slug, tagList } from "./util.ts";
+import { slug, tagKey, tagList, writeAtomic } from "./util.ts";
 
 export interface Project {
   id: string;
@@ -75,9 +75,36 @@ export function loadProjects(home: string): Record<string, ProjectEntry> {
     if (!value || typeof value !== "object") continue;
     const entry = value as ProjectEntry;
     const aliases = Array.isArray(entry.aliases) ? entry.aliases.filter((a): a is string => typeof a === "string").map(slug) : undefined;
-    projects[slug(key)] = { ...entry, ...(aliases ? { aliases } : {}) };
+    // "global" is the scope every project sees: a project can never take that id.
+    const id = slug(key) === GLOBAL ? "global-project" : slug(key);
+    projects[id] = { ...entry, ...(aliases ? { aliases } : {}) };
   }
   return projects;
+}
+
+/**
+ * Give project `id` the tag `tag` in projects.json, editing the file as written (unknown keys,
+ * other entries and key spelling kept). False when it already has the tag. Throws, touching
+ * nothing, when projects.json exists but is not `{ "projects": { … } }`.
+ */
+export function addProjectTag(home: string, id: string, tag: string): boolean {
+  const file = join(home, "projects.json");
+  let data: { projects: Record<string, unknown> } = { projects: {} };
+  if (existsSync(file)) {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    const inner = (parsed as { projects?: unknown } | null)?.projects;
+    if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(`${file}: expected { "projects": { … } }`);
+    data = parsed as { projects: Record<string, unknown> };
+  }
+  const key = Object.keys(data.projects).find((k) => (slug(k) === GLOBAL ? "global-project" : slug(k)) === id) ?? id;
+  const entry = data.projects[key];
+  if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(`${file}: project ${key} is not an object`);
+  const current = entry as Record<string, unknown> | undefined;
+  const tags = Array.isArray(current?.tags) ? (current.tags as unknown[]) : [];
+  if (tags.some((t) => typeof t === "string" && tagKey(t) === tagKey(tag))) return false;
+  data.projects[key] = { ...current, tags: [...tags, tagKey(tag)] };
+  writeAtomic(file, JSON.stringify(data, null, 2) + "\n");
+  return true;
 }
 
 /** The nearest directory at or above `cwd` that contains a `.git` entry. */

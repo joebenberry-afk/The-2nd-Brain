@@ -110,8 +110,9 @@ describe("brain cli", () => {
     const { home, io } = setup();
     const id = (await run(["note", "Use node 22"], io)).out.replace("saved ", "");
     expect((await run(["share", id], io)).code).toBe(1);
-    expect((await run(["share", id, "--tag", "Node"], io)).out).toBe(`shared ${id} with tag node`);
+    expect((await run(["share", id, "--tag", "Node"], io)).out).toBe(`shared ${id} with tag node; project demo now has tag node, so it still sees it`);
     expect(loadNotes(home).notes[0]).toMatchObject({ project: "global", tags: ["node"] });
+    expect((await run(["recall", "use node"], io)).out).toContain(id);
   });
 
   it("review lists captured proposals, accept makes a note, reject forgets", async () => {

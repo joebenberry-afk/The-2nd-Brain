@@ -91,9 +91,21 @@ function parseInlineList(raw: string): string[] {
   return inner.split(",").map((part) => parseScalar(part)).filter((part) => part !== "");
 }
 
-/** Parse frontmatter into scalars and lists. Unknown keys are kept; malformed lines throw. */
+/** A value ends at " #" (a YAML comment); a quoted value's quotes protect a "#" inside them. */
+function stripComment(value: string): string {
+  const quoted = /^"(?:\\.|[^"\\])*"|^'(?:''|[^'])*'/.exec(value);
+  const start = quoted ? quoted[0].length : 0;
+  const hash = /(^|\s)#/.exec(value.slice(start));
+  return hash ? value.slice(0, start + hash.index).trimEnd() : value;
+}
+
+/**
+ * Parse frontmatter into scalars and lists. Unknown keys are kept; malformed lines throw.
+ * Also read, as Agent Skills files use them: `# comments`, a `key:` followed by an indented map
+ * (kept as an empty value) and `>` / `|` block scalars (folded to one line / kept as lines).
+ */
 export function parseFrontmatter(text: string): { fields: Map<string, string | string[]>; body: string } {
-  const normalized = text.replace(/^﻿/, "").replace(/\r\n/g, "\n");
+  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   if (!normalized.startsWith("---\n")) throw new NoteError("missing frontmatter");
   const end = normalized.indexOf("\n---", 4);
   if (end < 0) throw new NoteError("unterminated frontmatter");
@@ -102,28 +114,44 @@ export function parseFrontmatter(text: string): { fields: Map<string, string | s
   const body = afterFence < 0 ? "" : normalized.slice(afterFence + 1);
   const fields = new Map<string, string | string[]>();
   let listKey: string | null = null;
+  let block: { key: string; folded: boolean; lines: string[] } | null = null;
+  const endBlock = () => {
+    if (!block) return;
+    const lines = block.lines.join("\n").replace(/\n+$/, "").split("\n");
+    fields.set(block.key, block.folded ? lines.map((l) => l.trim()).filter(Boolean).join(" ") : lines.join("\n"));
+    block = null;
+  };
   for (const line of head.split("\n")) {
+    if (block && (!line.trim() || /^\s/.test(line))) {
+      block.lines.push(line.replace(/^\s+/, ""));
+      continue;
+    }
+    endBlock();
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
     const item = /^\s+-\s?(.*)$/.exec(line);
     if (item && listKey !== null) {
-      (fields.get(listKey) as string[]).push(parseScalar(item[1] ?? ""));
+      (fields.get(listKey) as string[]).push(parseScalar(stripComment(item[1] ?? "")));
       continue;
     }
+    // An indented `key: value` under a bare `key:` is a nested map (metadata:, compatibility:).
+    if (listKey !== null && /^\s+[A-Za-z_][\w-]*:(\s|$)/.test(line)) continue;
     const pair = /^([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(line);
     if (!pair) throw new NoteError(`bad frontmatter line: ${line.slice(0, 80)}`);
     const key = pair[1] as string;
-    const value = (pair[2] ?? "").trim();
+    const value = stripComment((pair[2] ?? "").trim());
+    listKey = null;
     if (value === "") {
       fields.set(key, []);
       listKey = key;
+    } else if (/^[>|][+-]?$/.test(value)) {
+      block = { key, folded: value.startsWith(">"), lines: [] };
     } else if (value.startsWith("[") && value.endsWith("]")) {
       fields.set(key, parseInlineList(value));
-      listKey = null;
     } else {
       fields.set(key, parseScalar(value));
-      listKey = null;
     }
   }
+  endBlock();
   return { fields, body: body.replace(/^\n+/, "") };
 }
 
@@ -306,11 +334,68 @@ export interface NewNote {
   replaces?: string;
 }
 
+/**
+ * Why an error pattern cannot be used, or null. A known fix is appended to every failure it
+ * matches, in every project that sees it, so a pattern must be specific: a literal of at least 5
+ * characters, or a `re:` regex that compiles, does not match trivial text, and has no quantified
+ * group holding a quantifier or an alternation (`(\w+\s?)+`), which can backtrack for minutes.
+ */
+export function errorPatternProblem(pattern: string): string | null {
+  if (!pattern.startsWith("re:")) return pattern.trim().length >= 5 ? null : `error pattern too short to be specific: ${JSON.stringify(pattern)}`;
+  const source = pattern.slice(3).trim();
+  let regex: RegExp;
+  try {
+    regex = new RegExp(source, "i");
+  } catch (error) {
+    return `invalid error pattern ${JSON.stringify(pattern)}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (nestedQuantifier(source)) return `error pattern can backtrack for minutes (a repeated group that repeats inside): ${JSON.stringify(pattern)}`;
+  if (["", " ", "x", "0", "a b", "error"].some((probe) => regex.test(probe))) return `error pattern matches almost anything: ${JSON.stringify(pattern)}`;
+  return null;
+}
+
+/** A group followed by *, + or {n,} / {n,m>1} that itself holds a quantifier or an alternation. */
+function nestedQuantifier(source: string): boolean {
+  const groups: boolean[] = []; // per open group: does it hold a quantifier or "|"?
+  let inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+      continue;
+    }
+    if (c === "[") inClass = true;
+    else if (c === "(") groups.push(false);
+    else if (c === "|" || c === "*" || c === "+" || (c === "{" && /^\{\d+,\d*\}/.test(source.slice(i)))) {
+      if (groups.length) groups[groups.length - 1] = true;
+    } else if (c === ")") {
+      const risky = groups.pop() ?? false;
+      const next = source.slice(i + 1);
+      const repeated = /^[*+]/.test(next) || /^\{\d+,(\d*)\}/.test(next) && !/^\{(\d+),\1\}/.test(next) && !/^\{\d+,1\}/.test(next);
+      if (risky && repeated) return true;
+      if (risky && groups.length) groups[groups.length - 1] = true;
+    }
+  }
+  return false;
+}
+
+function checkErrors(errors: string[]): void {
+  for (const pattern of errors) {
+    const problem = errorPatternProblem(pattern);
+    if (problem) throw new NoteError(problem);
+  }
+}
+
 /** Create and save a new note. `text` becomes the body (first line = headline); secrets are masked. */
 export function createNote(home: string, input: NewNote): Note {
   const clean = (s: string) => scrub(s, { longRuns: false }).text;
   const body = clean(input.text.trim());
   if (!body) throw new NoteError("empty note");
+  checkErrors(input.errors ?? []);
   const note: Note = {
     id: randomId("n"),
     kind: input.kind ?? "note",
@@ -327,6 +412,24 @@ export function createNote(home: string, input: NewNote): Note {
     path: "",
   };
   return saveNote(home, note);
+}
+
+/**
+ * Noting a headline again with more to say upgrades the existing note: an explicit kind wins, tags,
+ * errors and evidence are added, tested sticks. Null when there was nothing new.
+ */
+export function upgradeNote(home: string, note: Note, input: Omit<NewNote, "text" | "project">): Note | null {
+  checkErrors(input.errors ?? []);
+  const clean = (s: string) => scrub(s, { longRuns: false }).text;
+  const merged: Note = {
+    ...note,
+    kind: input.kind ?? note.kind,
+    tags: tagList([...note.tags, ...(input.tags ?? [])]),
+    errors: [...new Set([...note.errors, ...(input.errors ?? []).map(clean)])],
+    evidence: [...new Set([...note.evidence, ...(input.evidence ?? [])])],
+    tested: note.tested || input.tested === true,
+  };
+  return formatNote(merged) === formatNote(note) ? null : saveNote(home, merged);
 }
 
 /** Retire a note (history kept). With `by`, the replacement is linked both ways. */

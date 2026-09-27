@@ -57,7 +57,7 @@ describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
     expect(loader.subarray(0, 2).toString()).toBe("//");
     expect(loader.toString()).toContain(`export { default } from "${join(PACKAGE_HOME, "brain", "src", "omp.ts").replace(/\\/g, "/")}";`);
     expect(readFileSync(shim, "utf8")).toMatch(/^@(node|bun) "%~dp0brain\\bin\\brain\.mjs" %\*/);
-    if (BUN) expect(bunLoads(extensions)).toBe("before_agent_start,context,session_before_compact,session_compact,session_shutdown,tool_result|brain_recall,brain_note,brain_state");
+    if (BUN) expect(bunLoads(extensions)).toBe("before_agent_start,context,session_before_branch,session_before_switch,session_branch,session_compact,session_shutdown,session_switch,tool_result|brain_recall,brain_note,brain_state");
 
     const copy = ps("install-v4.ps1", "-ExtensionsDir", extensions, "-NoPath", "-NoEnv", "-Copy");
     expect(copy.status, copy.out).toBe(0);

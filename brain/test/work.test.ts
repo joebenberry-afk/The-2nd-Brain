@@ -104,7 +104,7 @@ describe("work", () => {
     const formatted = formatAuto({
       edited: ["a", "b", "c", "a", "d", "e", "a", "f", "g", "h", "i", "j"],
     });
-    expect(formatted.split("\n")[0]).toBe("- edited: d, e, a, f, g, h, i, j");
+    expect(formatted.split("\n")[0]).toBe("- edited: d, e, a, f, g, h, i, j +2 more");
   });
 
   it("formatAuto: failure collapsed and cut to 200 chars", () => {

@@ -4,6 +4,8 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
+import { addProjectTag } from "./project.ts";
+import { mergeRejected } from "./capture.ts";
 import { nowIso, tagKey } from "./util.ts";
 
 export class SyncError extends Error {}
@@ -195,18 +197,7 @@ function mergeable(file: string): boolean {
 function merge(file: string, upstream: string | null, local: string | null): string {
   if (upstream === null) return local ?? "";
   if (local === null) return upstream;
-  if (file === "rejected.json") {
-    const read = (text: string): Record<string, unknown> => {
-      try {
-        return JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        return {};
-      }
-    };
-    const [a, b] = [read(upstream), read(local)];
-    const union = (key: string) => [...new Set([...(Array.isArray(a[key]) ? a[key] : []), ...(Array.isArray(b[key]) ? b[key] : [])])];
-    return JSON.stringify({ signatures: union("signatures"), texts: union("texts") }, null, 2) + "\n";
-  }
+  if (file === "rejected.json") return mergeRejected(upstream, local);
   return stampOf(local) > stampOf(upstream) ? local : upstream;
 }
 
@@ -249,7 +240,12 @@ function abortRebase(home: string): void {
   git(home, "rebase", "--quit");
 }
 
-export function shareNote(home: string, id: string, tag: string): Note {
+/**
+ * Share a note with every project carrying `tag`: it moves to global with that tag. The project it
+ * came from gets the tag too (in projects.json), so sharing never hides a note from its own project.
+ * `taggedProject` names that project when its tags changed.
+ */
+export function shareNote(home: string, id: string, tag: string): Note & { taggedProject?: string } {
   const { notes } = loadNotes(home);
   const note = findNote(notes, id);
 
@@ -266,23 +262,10 @@ export function shareNote(home: string, id: string, tag: string): Note {
   }
 
   const normalizedTag = tagKey(tag);
-  let updated = note;
-
-  // If the note is project-scoped, move it to global
-  if (note.project !== GLOBAL) {
-    updated = {
-      ...note,
-      project: GLOBAL,
-    };
-  }
-
-  // Add the tag if not already present
-  if (!updated.tags.includes(normalizedTag)) {
-    updated = {
-      ...updated,
-      tags: [...updated.tags, normalizedTag].sort(),
-    };
-  }
-
-  return saveNote(home, updated);
+  if (!normalizedTag) throw new SyncError("a tag is required");
+  // Tag the source project first: if projects.json cannot be edited, nothing has moved yet.
+  const taggedProject = note.project !== GLOBAL && addProjectTag(home, note.project, normalizedTag) ? note.project : undefined;
+  const tags = note.tags.includes(normalizedTag) ? note.tags : [...note.tags, normalizedTag].sort();
+  const saved = saveNote(home, { ...note, project: GLOBAL, tags });
+  return taggedProject ? { ...saved, taggedProject } : saved;
 }

@@ -190,7 +190,7 @@ describe("second review", () => {
     const ctx = { cwd: home, sessionManager: { getSessionId: () => "s" } };
     handlers.get("tool_result")?.({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [] }, ctx);
     handlers.get("tool_result")?.({ toolName: "edit", input: { path: "b.ts" }, isError: false, content: [] }, ctx);
-    handlers.get("session_before_compact")?.({}, { ...ctx });
+    handlers.get("session_compact")?.({}, { ...ctx });
     expect(readFileSync(join(home, "work", `${resolveProject(home, home, {}).id}.md`), "utf8")).toContain("- edited: b.ts\n");
   });
 
@@ -286,7 +286,7 @@ describe("fourth review", () => {
     secondBrain({ on: (e, h) => void handlers.set(e, h) }, { SECOND_BRAIN_HOME: home });
     const ctx = { cwd: home, sessionManager: { getSessionId: () => "s" } };
     for (const path of ["a.ts", "b.ts", "a.ts"]) handlers.get("tool_result")?.({ toolName: "edit", input: { path }, isError: false, content: [] }, ctx);
-    handlers.get("session_before_compact")?.({}, ctx);
+    handlers.get("session_compact")?.({}, ctx);
     expect(readFileSync(join(home, "work", `${resolveProject(home, home, {}).id}.md`), "utf8")).toContain("- edited: b.ts, a.ts\n");
   });
 });

@@ -2,19 +2,19 @@
  * The `brain` command: the same functions the OMP extension uses, for any shell, harness or
  * human. `main(argv, io)` takes injected I/O so tests run it in-process.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { acceptProposal, appendEvent, findFix, listProposals, rejectProposal, renderFix, scanCommits, scanEvents } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { draftKit, findKit, kitsDir, loadKits } from "./kits.ts";
-import { createNote, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, retireNote, saveNote, type Kind } from "./notes.ts";
+import { createNote, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, parseFrontmatter, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
 import { gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { answer } from "./search.ts";
 import { shareNote, sync } from "./sync.ts";
 import { logUse, stats, type UseKind } from "./telemetry.ts";
-import { estimateTokens, findHome, slug } from "./util.ts";
+import { estimateTokens, findHome, slug, tagKey } from "./util.ts";
 import { readWork, resumeText, writeWork } from "./work.ts";
 
 export interface Io {
@@ -62,6 +62,7 @@ const OPTIONS = {
   from: { type: "string" },
   to: { type: "string" },
   "dry-run": { type: "boolean" },
+  help: { type: "boolean", short: "h" },
 } as const;
 
 type Values = ReturnType<typeof parseArgs<{ options: typeof OPTIONS; allowPositionals: true }>>["values"];
@@ -132,7 +133,14 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const scope = c.opts.global ? GLOBAL : c.project.id;
     const same = findSameHeadline(loadNotes(c.home).notes, text, scope, c.project.tags);
     if (same) {
-      c.io.out(`already noted ${same.id}`);
+      const changed = upgradeNote(c.home, same, {
+        kind: c.opts.kind ? (kind as Kind) : undefined,
+        tags: c.opts.tag,
+        errors: c.opts.error,
+        evidence: c.opts.evidence,
+        tested: c.opts.tested === true,
+      });
+      c.io.out(`${changed ? "updated" : "already noted"} ${same.id}`);
       return 0;
     }
     const note = createNote(c.home, {
@@ -201,7 +209,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const id = need(c.args[0], "a note id");
     const tag = need(c.opts.tag?.[0], "--tag");
     const note = shareNote(c.home, id, tag);
-    c.io.out(`shared ${id} with tag ${note.tags.join(", ")}`);
+    c.io.out(`shared ${id} with tag ${note.tags.join(", ")}${note.taggedProject ? `; project ${note.taggedProject} now has tag ${tagKey(tag)}, so it still sees it` : ""}`);
     return 0;
   },
 
@@ -251,7 +259,10 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     if (sub === "new") {
       const tags = c.opts.tag ?? [];
       const from = c.opts.from ? projectById(c.home, c.opts.from, c.io.cwd).id : c.project.id;
-      const kit = draftKit(c.home, need(name, "a kit name"), from, loadNotes(c.home).notes, tags.length ? tags : undefined);
+      const notes = loadNotes(c.home).notes;
+      // A --from that matches no project is a typo, not a request for an empty scaffold.
+      if (c.opts.from && !notes.some((n) => n.project === from && !n.retired)) throw new Error(`no notes in project ${from}`);
+      const kit = draftKit(c.home, need(name, "a kit name"), from, notes, tags.length ? tags : undefined);
       c.io.out(`drafted ${kit.path}`);
       return 0;
     }
@@ -287,27 +298,86 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
   },
 };
 
-/** Problems that would otherwise be silent: an unreadable projects.json, a kit that is skipped. */
+/**
+ * Problems that would otherwise be silent: a home that is not a directory, files the loader never
+ * reads (outside a project folder, in a folder that is not a project id, not named *.md), merge
+ * leftovers in working states, an unreadable or mistyped projects.json, a kit that is skipped.
+ */
 function configErrors(home: string): string[] {
   const errors: string[] = [];
+  const isDir = (path: string) => {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  if (!isDir(home)) return [`${home}: not a directory (the Brain home)`];
+  const list = (dir: string) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith("."));
+    } catch {
+      return [];
+    }
+  };
+  const notesDir = join(home, "notes");
+  if (existsSync(notesDir) && !isDir(notesDir)) errors.push(`${notesDir}: not a directory`);
+  for (const entry of list(notesDir)) {
+    const path = join(notesDir, entry.name);
+    if (!entry.isDirectory()) {
+      errors.push(`${path}: not in a project folder, never read`);
+      continue;
+    }
+    if (entry.name !== slug(entry.name)) errors.push(`${path}: folder is not a project id (use ${slug(entry.name)}), never read`);
+    for (const [dir, inner] of [[path, true], [join(path, "private"), false]] as const) {
+      for (const file of list(dir)) {
+        if (file.isDirectory() ? !(inner && file.name === "private") : !file.name.endsWith(".md")) {
+          errors.push(`${join(dir, file.name)}: never read (notes are <project>/<id>.md or <project>/private/<id>.md)`);
+        }
+      }
+    }
+  }
+  for (const entry of list(join(home, "work"))) {
+    const path = join(home, "work", entry.name);
+    if (!entry.name.endsWith(".md") || entry.name.slice(0, -3) !== slug(entry.name.slice(0, -3))) {
+      errors.push(`${path}: never read (working states are work/<project id>.md)`);
+    } else if (/^(<{7}|>{7}|={7})( |$)/m.test(readFileSync(path, "utf8"))) {
+      errors.push(`${path}: holds merge conflict markers`);
+    }
+  }
   const projectsFile = join(home, "projects.json");
   if (existsSync(projectsFile)) {
     try {
       const data: unknown = JSON.parse(readFileSync(projectsFile, "utf8").replace(/^\uFEFF/, ""));
       const projects = (data as { projects?: unknown } | null)?.projects;
-      if (!projects || typeof projects !== "object") errors.push(`${projectsFile}: expected { "projects": { … } }`);
+      if (!projects || typeof projects !== "object" || Array.isArray(projects)) errors.push(`${projectsFile}: expected { "projects": { … } }`);
+      else {
+        const strings = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === "string");
+        for (const [id, entry] of Object.entries(projects as Record<string, unknown>)) {
+          const e = entry as Record<string, unknown> | null;
+          if (!e || typeof e !== "object" || Array.isArray(e)) errors.push(`${projectsFile}: ${id} is not an object, ignored`);
+          else {
+            for (const key of ["paths", "tags", "aliases"]) if (key in e && !strings(e[key])) errors.push(`${projectsFile}: ${id}.${key} must be a list of strings`);
+            if ("remote" in e && typeof e.remote !== "string") errors.push(`${projectsFile}: ${id}.remote must be a string`);
+          }
+        }
+      }
     } catch (error) {
       errors.push(`${projectsFile}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const loaded = new Set(loadKits(home).map((k) => k.path));
-  try {
-    for (const entry of readdirSync(kitsDir(home), { withFileTypes: true })) {
-      const skill = join(kitsDir(home), entry.name, "SKILL.md");
-      if (entry.isDirectory() && !loaded.has(skill)) errors.push(`${skill}: missing, unreadable, or without a description`);
+  for (const entry of list(kitsDir(home))) {
+    const skill = join(kitsDir(home), entry.name, "SKILL.md");
+    if (!entry.isDirectory() || loaded.has(skill)) continue;
+    let why = "missing";
+    try {
+      const { fields } = parseFrontmatter(readFileSync(skill, "utf8"));
+      why = fields.get("description") ? "unreadable" : "without a description";
+    } catch (error) {
+      if (existsSync(skill)) why = error instanceof Error ? error.message : String(error);
     }
-  } catch {
-    // no kits directory
+    errors.push(`${skill}: ${why}`);
   }
   return errors;
 }
@@ -323,15 +393,23 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       const cwd = typeof p.cwd === "string" && p.cwd ? p.cwd : io.cwd;
       const project = resolveProject(home, cwd, io.env);
       const event = p.hook_event_name;
+      const session = typeof p.session_id === "string" && p.session_id ? p.session_id : undefined;
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
-        const card = renderCard(home, loadNotes(home).notes, project, { tools: false });
+        const { notes } = loadNotes(home);
+        // Pair up failures and fixes from earlier sessions, so the card can say what waits for review.
+        try {
+          scanEvents(home, notes);
+        } catch {
+          // the card matters more than the count
+        }
+        const card = renderCard(home, notes, project, { tools: false });
         if (card) {
           output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
-          logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0 });
+          logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0, session });
         }
       } else if (event === "PostToolUseFailure" && typeof p.error === "string" && p.error.trim() && p.is_interrupt !== true) {
         const input = (p.tool_input && typeof p.tool_input === "object" ? p.tool_input : {}) as Record<string, unknown>;
-        appendEvent(home, typeof p.session_id === "string" ? p.session_id : "claude-code", cwd, {
+        appendEvent(home, session ?? "claude-code", cwd, {
           tool: typeof p.tool_name === "string" ? p.tool_name : "unknown",
           command: typeof input.command === "string" ? input.command : undefined,
           path: typeof input.file_path === "string" ? input.file_path : undefined,
@@ -342,7 +420,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         if (fix) {
           const text = renderFix(fix);
           output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };
-          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0 });
+          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session });
         }
       }
     }
@@ -365,7 +443,7 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
   }
   const [command = "help", ...args] = parsed.positionals;
   const opts = parsed.values;
-  if (command === "help") {
+  if (command === "help" || opts.help) {
     io.out(USAGE);
     return 0;
   }

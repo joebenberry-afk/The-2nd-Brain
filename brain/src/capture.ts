@@ -22,6 +22,7 @@ import {
   GLOBAL,
   type Kind,
   createNote,
+  errorPatternProblem,
   headline,
   isActive,
   type Note,
@@ -93,6 +94,16 @@ export function safeSession(session: string): string {
 /** A long text as its first and last `keep` characters. */
 export function headAndTail(text: string, keep: number): string {
   return text.length <= keep * 2 + 5 ? text : `${text.slice(0, keep)}\n…\n${text.slice(-keep)}`;
+}
+
+/**
+ * headAndTail with credentials masked (long runs kept). Each end is scrubbed with a margin before
+ * it is cut, so a secret the cut goes through is masked, not half-kept.
+ */
+export function scrubCut(text: string, keep: number): string {
+  const clean = (part: string) => scrub(part, { longRuns: false }).text;
+  if (text.length <= keep * 2 + 5) return clean(text);
+  return `${clean(text.slice(0, keep + 400)).slice(0, keep)}\n…\n${clean(text.slice(-(keep + 400))).slice(-keep)}`;
 }
 
 /**
@@ -259,7 +270,7 @@ export function appendEvent(
     // Cut before scrubbing (scrubbing megabytes of output would block the session). An error keeps
     // its head and its tail: compilers report first, Python tracebacks end with the actual error.
     const command = fields.command ? cutToTokens(scrub(fields.command.slice(0, 2000), { longRuns: false }).text, 125) : undefined;
-    const error = fields.error ? scrub(headAndTail(fields.error, 300), { longRuns: false }).text : undefined;
+    const error = fields.error ? scrubCut(fields.error, 300) : undefined;
     const path = fields.path ? fields.path.slice(0, 300) : undefined;
 
     const line: ToolEvent = {
@@ -285,23 +296,59 @@ export function rejectedPath(home: string): string {
   return join(home, "rejected.json");
 }
 
-/** The rejected list, merged with the pre-sync location (state/rejected.json) when present. */
-function readRejected(home: string): { signatures: string[]; texts: string[] } {
-  const merged = { signatures: [] as string[], texts: [] as string[] };
-  for (const path of [rejectedPath(home), join(home, "state", "rejected.json")]) {
-    const data = readJson<{ signatures?: unknown; texts?: unknown }>(path, {});
-    for (const key of ["signatures", "texts"] as const) {
-      const list = data[key];
-      if (Array.isArray(list)) for (const v of list) if (typeof v === "string" && !merged[key].includes(v)) merged[key].push(v);
-    }
+/**
+ * A rejection is kept as a hash of the lower-cased headline ("h") or error signature ("e"): the
+ * file is synced, and what the owner declined (often because it showed a secret) must not be.
+ */
+function rejectKey(kind: "h" | "e", text: string): string {
+  return createHash("sha256").update(`${kind}:${text.toLowerCase()}`).digest("hex").slice(0, 16);
+}
+
+/** The rejection hashes in one rejected.json text; plain `texts`/`signatures` of older files are hashed. */
+function rejectedKeys(text: string): string[] {
+  let data: Record<string, unknown> = {};
+  try {
+    data = asRecord(JSON.parse(text));
+  } catch {
+    return [];
   }
-  return merged;
+  const strings = (key: string) => (Array.isArray(data[key]) ? (data[key] as unknown[]).filter((v): v is string => typeof v === "string") : []);
+  return [...strings("hashes"), ...strings("texts").map((t) => rejectKey("h", t)), ...strings("signatures").map((sig) => rejectKey("e", sig))];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function formatRejected(keys: Iterable<string>): string {
+  return JSON.stringify({ hashes: [...new Set(keys)].sort() }, null, 2) + "\n";
+}
+
+/** Both sides of a sync conflict on rejected.json, merged: every rejection from either machine. */
+export function mergeRejected(a: string, b: string): string {
+  return formatRejected([...rejectedKeys(a), ...rejectedKeys(b)]);
+}
+
+/** Every rejection, including the pre-sync location (state/rejected.json) when present. */
+function readRejected(home: string): Set<string> {
+  const keys = new Set<string>();
+  for (const path of [rejectedPath(home), join(home, "state", "rejected.json")]) {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    for (const key of rejectedKeys(text)) keys.add(key);
+  }
+  return keys;
 }
 
 /** What must not be proposed again: active notes, pending proposals, rejected ones (lower-cased). */
 interface Seen {
   headlines: Set<string>;
   errors: Set<string>;
+  rejected: Set<string>;
 }
 
 function readJson<T>(path: string, fallback: T): T {
@@ -313,7 +360,7 @@ function readJson<T>(path: string, fallback: T): T {
 }
 
 function seenBefore(home: string, notes: Note[]): Seen {
-  const seen: Seen = { headlines: new Set(), errors: new Set() };
+  const seen: Seen = { headlines: new Set(), errors: new Set(), rejected: readRejected(home) };
   const add = (headlineText: string, errors: string[]) => {
     seen.headlines.add(headlineText.toLowerCase());
     for (const e of errors) seen.errors.add(e.toLowerCase());
@@ -321,9 +368,6 @@ function seenBefore(home: string, notes: Note[]): Seen {
   // Retired notes count too: an accepted-then-retired learning is not proposed again.
   for (const note of notes) add(headline(note), note.errors);
   for (const p of listProposals(home)) add(headline({ body: p.text }), p.errors);
-  const rejected = readRejected(home);
-  for (const text of rejected.texts ?? []) seen.headlines.add(text.toLowerCase());
-  for (const sig of rejected.signatures ?? []) seen.errors.add(sig.toLowerCase());
   return seen;
 }
 
@@ -331,6 +375,7 @@ function seenBefore(home: string, notes: Note[]): Seen {
 function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[]): boolean {
   const head = headline({ body: proposal.text }).toLowerCase();
   if (seen.headlines.has(head) || proposal.errors.some((e) => seen.errors.has(e.toLowerCase()))) return false;
+  if (seen.rejected.has(rejectKey("h", head)) || proposal.errors.some((e) => seen.rejected.has(rejectKey("e", e)))) return false;
   seen.headlines.add(head);
   for (const e of proposal.errors) seen.errors.add(e.toLowerCase());
   saveProposal(home, proposal);
@@ -468,7 +513,7 @@ export function scanCommits(home: string, repoRoot: string, project: string, not
   const proposals: Proposal[] = [];
   for (const { sha, body } of commits) {
     for (const match of body.matchAll(/^Brain-(Decision|Gotcha):\s*(.+)$/gim)) {
-      const text = cutToTokens(scrub((match[2] ?? "").trim()).text, 200);
+      const text = cutToTokens(scrub((match[2] ?? "").trim().slice(0, 2000)).text, 200);
       if (!text) continue;
       propose(home, seen, {
         id: proposalId([`commit:${sha}`], text),
@@ -582,13 +627,9 @@ export function rejectProposal(home: string, id: string): void {
   }
 
   const rejected = readRejected(home);
-  const hl = headline({ body: prop.text }).toLowerCase();
-  if (!rejected.texts.includes(hl)) rejected.texts.push(hl);
-  for (const err of prop.errors) {
-    const errLower = err.toLowerCase();
-    if (!rejected.signatures.includes(errLower)) rejected.signatures.push(errLower);
-  }
-  writeAtomic(rejectedPath(home), JSON.stringify(rejected, null, 2) + "\n");
+  rejected.add(rejectKey("h", headline({ body: prop.text })));
+  for (const err of prop.errors) rejected.add(rejectKey("e", err));
+  writeAtomic(rejectedPath(home), formatRejected(rejected));
 
   // Delete inbox file
   try {
@@ -627,6 +668,17 @@ export function pendingCount(home: string, project?: string): number {
   return count;
 }
 
+const regexCache = new Map<string, RegExp | null>();
+
+function safeRegex(pattern: string): RegExp | null {
+  let regex = regexCache.get(pattern);
+  if (regex === undefined) {
+    regex = errorPatternProblem(pattern) ? null : new RegExp(pattern.slice(3).trim(), "i");
+    regexCache.set(pattern, regex);
+  }
+  return regex;
+}
+
 /**
  * Find an eligible fix for an error: active, tested, errors.length > 0, visibleTo project.
  * Match by longest pattern (regex: "re:" prefix, case-insensitive; else substring).
@@ -646,6 +698,8 @@ export function findFix(
   const scrubbed = scrub(errorText).text;
   const flat = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\s+/g, " ");
   const haystack = `${errorText}\n${scrubbed}\n${flat(errorText)}\n${flat(scrubbed)}`.toLowerCase();
+  let split: string[] | undefined;
+  const lines = () => (split ??= `${errorText}\n${scrubbed}\n${flat(errorText)}`.split("\n").map((l) => l.slice(0, 500)));
   let best: { len: number; id: string; note: Note } | null = null;
 
   for (const note of notes) {
@@ -656,18 +710,12 @@ export function findFix(
       let matchLen = 0;
 
       if (pattern.startsWith("re:")) {
-        // Regex pattern
-        const regexText = pattern.slice(3).trim();
-        try {
-          const regex = new RegExp(regexText, "i");
-          if (regex.test(errorText) || regex.test(scrubbed) || regex.test(flat(errorText))) {
-            matchLen = regexText.length;
-          }
-        } catch {
-          // Invalid regex, skip
-        }
-      } else {
-        // Substring match (case-folded)
+        // A pattern that could backtrack for seconds, or matches anything, is skipped (it may come
+        // from a synced or hand-edited note). The rest run line by line on bounded lines.
+        const regex = safeRegex(pattern);
+        if (regex && lines().some((line) => regex.test(line))) matchLen = pattern.length - 3;
+      } else if (!errorPatternProblem(pattern)) {
+        // Substring match (case-folded); a pattern too short to be specific never matches
         const patternLower = pattern.trim().replace(/\s+/g, " ").toLowerCase();
         if (haystack.includes(patternLower)) {
           matchLen = pattern.length;

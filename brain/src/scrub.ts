@@ -7,8 +7,9 @@ const KEY_OWNERS = new Set(["api", "private", "access", "secret", "client", "aut
 /**
  * Whether a key name holds a credential: one of its parts (split on _ . - and camelCase) is a
  * credential word (DB_PASSWORD, clientSecret, aws_secret_access_key), a word pair names a key
- * (api_key, private-key, accessKey), or it is a token and the value looks like one (8+ letters
- * or digits in a row — so "Unexpected token: }" stays).
+ * (api_key, private-key, accessKey), a name ending in "key" holds a generated-looking value
+ * (STRIPE_KEY=…), or it is a token and the value looks like one (8+ letters or digits in a row — so
+ * "Unexpected token: }" stays).
  */
 function isCredential(name: string, value: string): boolean {
   const parts = name
@@ -19,12 +20,20 @@ function isCredential(name: string, value: string): boolean {
   // A part that is, or ends in, a credential word: PASSWORD, PGPASSWORD, mysecret.
   if (parts.some((p) => CREDENTIAL_WORDS.has(p) || SUFFIX_WORDS.some((w) => p.endsWith(w)))) return true;
   if (parts.some((p, i) => p === "key" && i > 0 && KEY_OWNERS.has(parts[i - 1] as string))) return true;
+  // STRIPE_KEY, MAILGUN_KEY: a key named after anything, when the value looks generated
+  if (parts.at(-1) === "key" && tokenLike(value)) return true;
   return parts.includes("token") && /[A-Za-z0-9]{8}/.test(value);
+}
+
+/** 16+ letters, digits, "_" or "-" in a row, with both a letter and a digit: a generated value, not a word. */
+function tokenLike(value: string): boolean {
+  return (value.match(/[A-Za-z0-9_-]{16,}/g) ?? []).some((run) => /\d/.test(run) && /[A-Za-z]/.test(run));
 }
 
 /**
  * Replace secret-looking values with ***, return (text, scrubbed).
- * Cover: known token formats (GitHub, sk-, Slack, AWS, Google), Authorization headers, URL and
+ * Cover: known token formats (GitHub, sk-, Slack, AWS, Google, Stripe, GitLab, npm, SendGrid),
+ * private key blocks, Authorization headers, URL and
  * curl credentials, any key=value / key: value whose key names a credential (quoted values are
  * masked whole) and, unless `longRuns` is false, runs of ≥ 40 hex or base64 characters. Notes and
  * working state pass `longRuns: false` so the commit SHAs they cite survive; captured tool output
@@ -41,6 +50,13 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   result = result.replace(/\bxox[baprs]-[A-Za-z0-9_-]+/g, "***");
   result = result.replace(/\bAKIA[0-9A-Z]{16}\b/g, "***");
   result = result.replace(/\bAIza[0-9A-Za-z_-]{35}/g, "***");
+  result = result.replace(/\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g, "***"); // Stripe
+  result = result.replace(/\bglpat-[A-Za-z0-9_-]{20,}/g, "***"); // GitLab
+  result = result.replace(/\bnpm_[A-Za-z0-9]{36}\b/g, "***"); // npm
+  result = result.replace(/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, "***"); // SendGrid
+
+  // Private key blocks (PEM, OpenSSH), also when the output was cut before the END line
+  result = result.replace(/(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g, "$1 *** -----END PRIVATE KEY-----");
 
   // Authorization headers and schemes: Bearer ***, Basic ***, Authorization: Token ***
   result = result.replace(/\b(Bearer|Basic|Digest)\s+[A-Za-z0-9._~+/-]{6,}=*/g, "$1 ***");
@@ -49,7 +65,8 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   );
 
   // Credentials in URLs and curl: https://user:***@host, redis://:***@host, curl -u user:***
-  result = result.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s@/]+@/gi, "$1***@");
+  // (the scheme's start is anchored by a lookbehind: "a.a.a.…" must not be retried at every dot)
+  result = result.replace(/((?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s@/]+@/gi, "$1***@");
   result = result.replace(/((?:^|\s)(?:-u\s*|--user[=\s]\s*)[^\s:]+:)\S+/g, "$1***");
 
   // Windows: setx NAME value, [Environment]::SetEnvironmentVariable("NAME", "value", …)

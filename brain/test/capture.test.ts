@@ -707,9 +707,10 @@ describe("capture.rejectProposal", () => {
 
     const rejectedFile = join(home, "rejected.json"); // synced with the notes
     expect(existsSync(rejectedFile)).toBe(true);
-    const rejected = JSON.parse(readFileSync(rejectedFile, "utf8"));
-    expect(rejected.texts).toContain("this is a false alarm");
-    expect(rejected.signatures).toContain("pattern1");
+    // Synced: only hashes, never the declined text (it may show a secret)
+    const raw = readFileSync(rejectedFile, "utf8");
+    expect(JSON.parse(raw).hashes).toHaveLength(3);
+    expect(raw).not.toMatch(/false alarm|pattern1/);
   });
 
   it("throws for unknown proposal", () => {
@@ -833,13 +834,8 @@ describe("capture.findFix", () => {
 
   it("skips invalid regexes", () => {
     const home = tmp();
-    const note = createNote(home, {
-      text: "Fix",
-      project: "global",
-      kind: "gotcha",
-      errors: ["re:[invalid("],
-      tested: true,
-    });
+    // createNote refuses it; a hand-edited or synced note may still carry one
+    const note = { ...createNote(home, { text: "Fix", project: "global", kind: "gotcha", tested: true }), errors: ["re:[invalid("] };
 
     const fix = findFix([note], "error", null);
     expect(fix).toBeNull();

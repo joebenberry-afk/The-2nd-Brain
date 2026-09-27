@@ -55,10 +55,10 @@ it("a failure fixed in one session becomes the known fix, the card and the resum
   day1.fire("tool_result", { toolName: "edit", input: { path: join(app, "src", "cart.ts") }, isError: false, content: [] }, s1);
 
   // Compaction mid-run: the model's next calls start with the resume card.
-  day1.fire("session_before_compact", {}, s1);
   day1.fire("session_compact", {}, s1);
   const patched = day1.fire("context", { messages: [{ role: "compactionSummary", summary: "…" }] }, s1) as { messages: { customType?: string; content?: string }[] };
-  const resume = patched.messages[0];
+  // After the summary: Anthropic's native compaction drops everything before it.
+  const resume = patched.messages[1];
   expect(resume?.customType).toBe(CARD_TYPE);
   expect(resume?.content).toContain("Goal: green test suite.");
   expect(resume?.content).toContain("- edited: src/cart.ts");

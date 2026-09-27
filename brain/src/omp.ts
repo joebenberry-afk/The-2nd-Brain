@@ -5,14 +5,14 @@
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
 import { isAbsolute, relative, resolve } from "node:path";
-import { createNote, findSameHeadline, GLOBAL, KINDS, loadNotes, type Kind } from "./notes.ts";
+import { createNote, findSameHeadline, GLOBAL, KINDS, loadNotes, upgradeNote, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
 import { answer } from "./search.ts";
-import { appendEvent, errorSignature, findFix, renderFix, toolEventFrom } from "./capture.ts";
+import { appendEvent, errorSignature, findFix, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { logUse, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
-import { writeAuto, writeWork, type AutoFields } from "./work.ts";
+import { writeAuto, writeWork } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
@@ -27,6 +27,8 @@ type Json = Record<string, unknown>;
 
 interface SessionState {
   carded: boolean;
+  /** A card went out with a prompt that has not reached the model yet. */
+  cardPending?: boolean;
   resume?: { content: string; at: number };
   resumeSeen: boolean;
   edited: string[];
@@ -58,6 +60,64 @@ function sessionKey(ctx: unknown): string {
 function cwdOf(ctx: unknown): string | undefined {
   const cwd = asObject(ctx)?.cwd;
   return typeof cwd === "string" && cwd ? cwd : undefined;
+}
+
+function sessionManagerOf(ctx: unknown): Json | undefined {
+  return asObject(asObject(ctx)?.sessionManager);
+}
+
+function call(target: Json | undefined, name: string): unknown {
+  const fn = target?.[name];
+  if (typeof fn !== "function") return undefined;
+  try {
+    return (fn as () => unknown).call(target);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A subagent (OMP task tool) runs this extension too, headless and in a child session. It gets the
+ * card, but never writes the project's working state: that is the parent's.
+ */
+function isSubagent(ctx: unknown): boolean {
+  if (asObject(ctx)?.hasUI !== false) return false;
+  const manager = sessionManagerOf(ctx);
+  return !call(manager, "getSessionFile") || typeof asObject(call(manager, "getHeader"))?.parentSession === "string";
+}
+
+function textOf(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => (asObject(part)?.type === "text" && typeof asObject(part)?.text === "string" ? (asObject(part)?.text as string) : "")).join(" ");
+}
+
+/** The last thing the user typed, from the session's own history (not OMP's synthetic continue prompts). */
+function lastUserAsk(ctx: unknown): string | undefined {
+  const branch = call(sessionManagerOf(ctx), "getBranch");
+  if (!Array.isArray(branch)) return undefined;
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const message = asObject(asObject(branch[i])?.message);
+    if (asObject(branch[i])?.type === "message" && message?.role === "user") return cutAsk(textOf(message.content)) || undefined;
+  }
+  return undefined;
+}
+
+function cutAsk(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > 200 ? collapsed.slice(0, 199).trimEnd() + "…" : collapsed;
+}
+
+/** Files an editing tool changed: path-like fields and OMP's `paths` list; never tool URIs (xd://, local://). */
+export function editedPaths(input: unknown): string[] {
+  const obj = asObject(input);
+  if (!obj) return [];
+  const found: string[] = [];
+  for (const key of ["path", "file_path", "filePath", "file", "paths"]) {
+    const value = obj[key];
+    for (const item of Array.isArray(value) ? value : [value]) if (typeof item === "string" && item.trim()) found.push(item.trim());
+  }
+  return [...new Set(found)].filter((p) => !/^[a-z][a-z0-9+.-]*:\/\//i.test(p));
 }
 
 function buildCardMessage(content: string, isResume = false): { message: { customType: string; content: string; display: boolean; details: Json } } {
@@ -150,11 +210,13 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   }
 
   const sessions = new Map<string, SessionState>();
-  const on = (event: string, handler: (event: unknown, ctx: unknown) => unknown): void => {
+  const on = (event: string, handler: (event: unknown, ctx: unknown) => unknown): boolean => {
     try {
       pi.on(event, handler);
+      return true;
     } catch {
       // an event this host version does not know: that moment is simply not covered
+      return false;
     }
   };
 
@@ -189,6 +251,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       name,
       label,
       description,
+      // OMP moves extension tools behind xd:// unless they are essential; the card names them directly.
+      loadMode: "essential",
       parameters: schema(pi.typebox, props),
       execute(...args: unknown[]) {
         const started = performance.now();
@@ -232,21 +296,29 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         },
         (params, cwd) => {
           const text = requireString(params.text, "text");
-          const kind = typeof params.kind === "string" && (KINDS as readonly string[]).includes(params.kind) ? (params.kind as Kind) : "note";
+          const kind = typeof params.kind === "string" && (KINDS as readonly string[]).includes(params.kind) ? (params.kind as Kind) : undefined;
           const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
           const project = resolveProject(home, cwd, env);
           const scope = params.global === true ? GLOBAL : project.id;
           const same = findSameHeadline(loadNotes(home).notes, text, scope, project.tags);
-          if (same) return { text: `already noted ${same.id}`, kind: "note", project: project.id };
+          // A tested fix is appended to every failure it matches. The agent may vouch for one in
+          // its own project; a global one, shown in every project, needs the owner's `brain tested`.
+          const wantsTested = params.tested === true;
+          const tested = wantsTested && (same?.project ?? scope) !== GLOBAL;
+          const untested = wantsTested && !tested ? " (untested: a global fix is confirmed with `brain tested <id>`)" : "";
+          if (same) {
+            const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested });
+            return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}`, kind: "note", project: project.id };
+          }
           const note = createNote(home, {
             text,
             project: scope,
             kind,
             errors: error ? [error] : [],
-            tested: params.tested === true,
+            tested,
             source: "agent",
           });
-          return { text: `saved ${note.id}`, kind: "note", project: project.id };
+          return { text: `saved ${note.id}${untested}`, kind: "note", project: project.id };
         },
       ),
     );
@@ -275,10 +347,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
       // Remember the prompt as the last ask (whitespace-collapsed, 200 chars)
       const prompt = eventObj?.prompt;
-      if (typeof prompt === "string" && prompt.trim()) {
-        const collapsed = prompt.replace(/\s+/g, " ").trim();
-        state.ask = collapsed.length > 200 ? collapsed.slice(0, 199).trimEnd() + "…" : collapsed;
-      }
+      if (typeof prompt === "string" && prompt.trim()) state.ask = cutAsk(prompt);
 
       // Fallback: if resume exists and was never seen by context, deliver it now
       if (state.resume && !state.resumeSeen) {
@@ -286,6 +355,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.resume = undefined;
         state.resumeSeen = true;
         state.carded = true; // Mark card as sent so later calls return nothing
+        state.cardPending = true;
         return msg;
       }
 
@@ -293,10 +363,17 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!state.carded && !state.resumeSeen) {
         const { notes } = loadNotes(home);
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
+        // Pair up failures and fixes from earlier sessions, so the card can say what waits for review.
+        try {
+          scanEvents(home, notes);
+        } catch {
+          // the card matters more than the count
+        }
         const cardContent = renderCard(home, notes, project, { tools: toolsOn });
 
         if (cardContent) {
           state.carded = true;
+          state.cardPending = true;
           logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key });
           return buildCardMessage(cardContent);
         }
@@ -319,6 +396,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     try {
       const key = sessionKey(ctx);
       const state = getSession(key);
+      state.cardPending = false;
 
       // Only insert if we have a resume card and event.messages is an array
       if (!state.resume) return undefined;
@@ -326,53 +404,73 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const messages = asObject(event)?.messages;
       if (!Array.isArray(messages)) return undefined;
 
-      // Check if a resume card is already present
-      for (const msg of messages) {
-        const m = asObject(msg);
-        const details = asObject(m?.details);
-        if (m?.customType === CARD_TYPE && details?.resume === true) {
-          // Already present, don't add
-          return undefined;
-        }
+      // After the compaction summary: Anthropic's native compaction drops every block before it.
+      const at = messages.findLastIndex((m) => asObject(m)?.role === "compactionSummary") + 1;
+      // A resume card already there (delivered with a prompt) is enough.
+      if (messages.slice(at).some((m) => asObject(m)?.customType === CARD_TYPE && asObject(asObject(m)?.details)?.resume === true)) {
+        state.resumeSeen = true;
+        return undefined;
       }
 
-      // Insert the resume card at index 0 with the saved timestamp (same object values for cache)
+      // Same object values on every call, so the prompt cache prefix stays stable.
       const resumeMsg = buildResumeMessage(state.resume.content, state.resume.at);
       state.resumeSeen = true;
-      return { messages: [resumeMsg, ...messages] };
+      return { messages: [...messages.slice(0, at), resumeMsg, ...messages.slice(at)] };
     } catch {
       return undefined;
     }
   });
 
-  // Handle session_before_compact
-  on("session_before_compact", (_event, ctx) => {
+  /** Save this session's edits, last failure and last ask into the project's working state. */
+  const saveAuto = (ctx: unknown): void => {
+    if (isSubagent(ctx)) return;
+    const state = getSession(sessionKey(ctx));
+    const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
+    writeAuto(home, project.id, { edited: state.edited.length ? state.edited : undefined, failure: state.failure, ask: lastUserAsk(ctx) ?? state.ask });
+  };
+
+  // /new, /resume, /fork and /branch leave this session without a shutdown: save it first. A fork
+  // or branch continues the same work, so it carries the state (and the card) over.
+  let carry: SessionState | undefined;
+  const leaving = (event: unknown, ctx: unknown) => {
     try {
-      const key = sessionKey(ctx);
-      const state = getSession(key);
-
-      // Write auto section with edited paths, last failure, last ask
-      const autoFields: AutoFields = {
-        edited: state.edited.length > 0 ? state.edited : undefined,
-        failure: state.failure,
-        ask: state.ask,
-      };
-
-      const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-      writeAuto(home, project.id, autoFields);
-
-      return undefined;
+      saveAuto(ctx);
+      const reason = asObject(event)?.reason;
+      const state = getSession(sessionKey(ctx));
+      carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], resume: undefined, resumeSeen: false, cardPending: false } : undefined;
     } catch {
-      return undefined;
+      carry = undefined;
     }
-  });
+    return undefined;
+  };
+  const arrived = (_event: unknown, ctx: unknown) => {
+    try {
+      if (carry) sessions.set(sessionKey(ctx), { ...carry });
+    } catch {
+      // the new session starts fresh
+    }
+    carry = undefined;
+    return undefined;
+  };
+  on("session_before_switch", leaving);
+  on("session_before_branch", leaving);
+  on("session_switch", (event, ctx) => (asObject(event)?.reason === "fork" ? arrived(event, ctx) : ((carry = undefined), undefined)));
+  on("session_branch", arrived);
 
   // Handle session_compact
-  on("session_compact", (_event, ctx) => {
+  const compactCovered = on("session_compact", (_event, ctx) => {
     try {
       const started = performance.now();
       const key = sessionKey(ctx);
       const state = getSession(key);
+      // Written here, not in session_before_compact: /handoff skips that event, and handling it
+      // turns off OMP's background compaction.
+      saveAuto(ctx);
+      // A card sent with the prompt this compaction runs before is still ahead of the model.
+      if (state.cardPending) {
+        state.resume = undefined;
+        return undefined;
+      }
 
       // Build fresh card and freeze as resume
       const { notes } = loadNotes(home);
@@ -393,6 +491,17 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       return undefined;
     }
   });
+  // A host without session_compact still gets the working state saved before it compacts.
+  if (!compactCovered) {
+    on("session_before_compact", (_event, ctx) => {
+      try {
+        saveAuto(ctx);
+      } catch {
+        // never block the host's compaction
+      }
+      return undefined;
+    });
+  }
 
   // Handle tool_result
   on("tool_result", (event, ctx) => {
@@ -417,20 +526,18 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
       // Track edited path on success
       // Only tools that change files count as edits; reads and searches also carry a path.
-      if (fields.ok && fields.path && EDITING_TOOL.test(fields.tool)) {
-        const path = fields.path;
-        // Check if path is inside project.root; if so, make it relative
-        const normalizedPath = displayPath(path, project.root, cwd);
-
-        // The last 20 distinct files, most recently edited last
-        state.edited = [...state.edited.filter((f) => f !== normalizedPath), normalizedPath].slice(-20);
+      if (fields.ok && EDITING_TOOL.test(fields.tool)) {
+        // Relative to the project root when inside it; the last 20 distinct files, most recent last
+        const paths = editedPaths(input).map((p) => displayPath(p, project.root, cwd));
+        state.edited = [...state.edited.filter((f) => !paths.includes(f)), ...paths].slice(-20);
       }
 
       // Track last failure
       if (!fields.ok && fields.error) {
         const tool = fields.tool || "unknown";
         const cmd = fields.command;
-        const sig = errorSignature(fields.error);
+        // Masked before the signature cuts it: a cut must not keep half a secret.
+        const sig = errorSignature(scrubCut(fields.error, 2000));
         if (cmd) {
           state.failure = `${cmd} → ${sig}`;
         } else {
@@ -461,24 +568,10 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   // Handle session_shutdown
   on("session_shutdown", (_event, ctx) => {
     try {
-      const key = sessionKey(ctx);
-      const state = getSession(key);
-      const cwd = cwdOf(ctx) ?? process.cwd();
-      const project = resolveProject(home, cwd, env);
-
-      // Write auto section (same as before compaction)
-      const autoFields: AutoFields = {
-        edited: state.edited.length > 0 ? state.edited : undefined,
-        failure: state.failure,
-        ask: state.ask,
-      };
-
-      writeAuto(home, project.id, autoFields);
-
-      return undefined;
+      saveAuto(ctx);
     } catch {
-      return undefined;
+      // never block the host's exit
     }
+    return undefined;
   });
-
 }

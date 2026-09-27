@@ -89,50 +89,36 @@ export function writeWork(home: string, project: string, text: string): Work {
   };
 }
 
-/** Format auto fields as lines. */
+/**
+ * Format auto fields as lines. Each field has its own share of AUTO_BUDGET (edited 80 chars,
+ * failure 28 tokens, ask 24 tokens), so a long file list never pushes the last ask out.
+ */
 export function formatAuto(fields: AutoFields): string {
-  fields = {
-    edited: fields.edited,
-    failure: fields.failure && scrub(fields.failure).text,
-    ask: fields.ask && scrub(fields.ask, { longRuns: false }).text,
-  };
+  const failure = fields.failure && scrub(fields.failure).text.replace(/\s+/g, " ").trim();
+  const ask = fields.ask && scrub(fields.ask, { longRuns: false }).text.replace(/\s+/g, " ").trim();
   const lines: string[] = [];
 
-  // Edited: last 8 unique in last-occurrence order
-  if (fields.edited && fields.edited.length > 0) {
-    const seen = new Map<string, number>();
-    for (let i = 0; i < fields.edited.length; i++) {
-      const item = fields.edited[i];
-      if (item) {
-        seen.set(item, i);
-      }
-    }
-    const unique = Array.from(seen.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .sort((a, b) => a[1] - b[1])
-      .map(([v]) => v);
-    if (unique.length > 0) {
-      lines.push(`- edited: ${unique.join(", ")}`);
-    }
+  // Edited: the most recent unique files that fit, in last-occurrence order
+  const latest = [...new Map((fields.edited ?? []).filter(Boolean).map((item, i) => [item, i] as const)).entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([item]) => item);
+  const shown: string[] = [];
+  for (const item of latest.slice(0, 8)) {
+    const more = latest.length - shown.length - 1;
+    if (shown.length && `- edited: ${[item, ...shown].join(", ")}${more ? ` +${more} more` : ""}`.length > 80) break;
+    shown.unshift(item);
   }
-
-  // Failure
-  if (fields.failure && typeof fields.failure === "string") {
-    const collapsed = fields.failure.replace(/\s+/g, " ").trim();
-    const cut = cutToTokens(collapsed, 50); // 50 tokens = 200 chars
-    lines.push(`- last failure: ${cut}`);
+  if (shown.length) {
+    const tail = latest.length > shown.length ? ` +${latest.length - shown.length} more` : "";
+    const list = shown.join(", ");
+    // One path longer than the line keeps its end: the file name matters more than the folders.
+    const room = 80 - "- edited: ".length - tail.length;
+    lines.push(`- edited: ${list.length > room ? `…${list.slice(-(room - 1))}` : list}${tail}`);
   }
+  if (failure) lines.push(`- last failure: ${cutToTokens(failure, 28)}`);
+  if (ask) lines.push(`- last ask: ${cutToTokens(ask, 24)}`);
 
-  // Ask
-  if (fields.ask && typeof fields.ask === "string") {
-    const collapsed = fields.ask.replace(/\s+/g, " ").trim();
-    const cut = cutToTokens(collapsed, 40); // 40 tokens = 160 chars
-    lines.push(`- last ask: ${cut}`);
-  }
-
-  const result = lines.join("\n");
-  return cutToTokens(result, AUTO_BUDGET);
+  return cutToTokens(lines.join("\n"), AUTO_BUDGET);
 }
 
 /** Write/update auto section. Returns updated work, or null if nothing to say and no existing file. */

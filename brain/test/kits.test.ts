@@ -337,12 +337,12 @@ Body`,
     saveNote(home, { ...older, at: "2026-01-01T00:00:00Z" });
     const newer = createNote(home, { text: "Newer untested gotcha", project: "demo", kind: "gotcha" });
     saveNote(home, { ...newer, at: "2026-06-01T00:00:00Z" });
-    const tested = createNote(home, { text: "Old tested gotcha", project: "demo", kind: "gotcha", tested: true, errors: ["boom"] });
+    const tested = createNote(home, { text: "Old tested gotcha", project: "demo", kind: "gotcha", tested: true, errors: ["boom!"] });
     saveNote(home, { ...tested, at: "2025-01-01T00:00:00Z" });
     const kit = draftKit(home, "test", "demo", loadNotes(home).notes);
     const order = ["Old tested gotcha", "Newer untested gotcha", "Older untested gotcha"].map((h) => kit.body.indexOf(h));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(kit.body).toContain("- Old tested gotcha — symptom: `boom`");
+    expect(kit.body).toContain("- Old tested gotcha — symptom: `boom!`");
   });
 });
