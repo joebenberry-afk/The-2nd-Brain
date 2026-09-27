@@ -290,3 +290,60 @@ describe("fourth review", () => {
     expect(readFileSync(join(home, "work", `${resolveProject(home, home, {}).id}.md`), "utf8")).toContain("- edited: b.ts, a.ts\n");
   });
 });
+
+describe("fifth review", () => {
+  it("syncs a Brain home that is a subdirectory of its repository", async () => {
+    const { sync } = await import("../src/sync.ts");
+    const repoDir = tmp();
+    git(repoDir, "init", "-q");
+    git(repoDir, "commit", "-q", "--allow-empty", "-m", "init");
+    const home = join(repoDir, "brain-home");
+    const note = createNote(home, { text: "note in a nested home", project: "demo" });
+    const result = sync(home, { push: false });
+    expect(result.committed).toBe(true);
+    expect(git(repoDir, "show", "--name-only", "--format=", "HEAD").stdout.trim()).toBe(`brain-home/notes/demo/${note.id}.md`);
+  });
+
+  it("commits the deletion of a whole sync path", async () => {
+    const { sync } = await import("../src/sync.ts");
+    const { rmSync } = await import("node:fs");
+    const home = tmp();
+    git(home, "init", "-q");
+    git(home, "commit", "-q", "--allow-empty", "-m", "init");
+    createNote(home, { text: "soon gone", project: "demo" });
+    writeFileSync(join(home, "projects.json"), '{ "projects": {} }\n');
+    sync(home, { push: false });
+    rmSync(join(home, "notes"), { recursive: true });
+    rmSync(join(home, "projects.json"));
+    const result = sync(home, { push: false });
+    expect(result.committed).toBe(true);
+    expect(git(home, "ls-files").stdout.trim()).toBe("");
+  });
+});
+
+it("resolves a working-state conflict in a nested Brain home", async () => {
+  const { sync } = await import("../src/sync.ts");
+  const root = tmp();
+  const bare = join(root, "remote.git");
+  mkdirSync(bare);
+  git(bare, "init", "-q", "--bare");
+  git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+  const a = join(root, "a");
+  mkdirSync(a);
+  git(a, "init", "-q", "-b", "main");
+  git(a, "commit", "-q", "--allow-empty", "-m", "init");
+  git(a, "remote", "add", "origin", bare);
+  git(a, "push", "-q", "-u", "origin", "main");
+  git(root, "clone", "-q", bare, "b");
+  const b = join(root, "b");
+  const work = (at: string, text: string) => `---\nat: ${at}\n---\n\n${text}\n`;
+  for (const clone of [a, b]) mkdirSync(join(clone, "home", "work"), { recursive: true });
+  writeFileSync(join(a, "home", "work", "demo.md"), work("2026-09-27T09:00:00Z", "base"));
+  sync(join(a, "home"));
+  sync(join(b, "home"));
+  writeFileSync(join(a, "home", "work", "demo.md"), work("2026-09-27T10:00:00Z", "older from A"));
+  sync(join(a, "home"));
+  writeFileSync(join(b, "home", "work", "demo.md"), work("2026-09-27T11:00:00Z", "newer from B"));
+  expect(sync(join(b, "home"))).toMatchObject({ pulled: true, pushed: true });
+  expect(readFileSync(join(b, "home", "work", "demo.md"), "utf8")).toContain("newer from B");
+});

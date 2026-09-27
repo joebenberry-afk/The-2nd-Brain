@@ -26,12 +26,11 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     throw new SyncError(`${home} is not a git repository`);
   }
 
-  // Find the SYNC_PATHS that exist on disk
+  // The SYNC_PATHS that exist on disk or are tracked (so deleting all of notes/ is committed too)
   const existingPaths: string[] = [];
   for (const path of SYNC_PATHS) {
-    if (existsSync(join(home, path))) {
-      existingPaths.push(path);
-    }
+    const tracked = spawnSync("git", ["-C", home, "ls-files", "-z", "--", path], { encoding: "utf8" }).stdout;
+    if (existsSync(join(home, path)) || tracked) existingPaths.push(path);
   }
 
   // Build pathspecs with exclude for private notes. With no Brain path on disk there is nothing to
@@ -55,7 +54,7 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     const tempFile = join(tmpdir(), `brain-pathspecs-${process.pid}-${Math.random().toString(16).slice(2)}`);
     // Exactly the staged Brain files: a directory with no tracked file (notes/ holding only
     // private notes, an empty kits/) would make git reject the whole pathspec.
-    const staged = spawnSync("git", ["-C", home, "diff", "--cached", "--name-only", "-z", "--", ...pathspecs], { encoding: "utf8" });
+    const staged = spawnSync("git", ["-C", home, "diff", "--cached", "--name-only", "--relative", "-z", "--", ...pathspecs], { encoding: "utf8" });
     const pathspecContent = staged.stdout.split("\0").filter(Boolean).map((f) => `:(literal)${f}`).join("\0");
     writeFileSync(tempFile, pathspecContent);
 
@@ -173,11 +172,12 @@ function stampOf(text: string): string {
  */
 function resolveWorkConflicts(home: string): boolean {
   for (let round = 0; round < 50 && rebaseInProgress(home); round++) {
-    const conflicted = git(home, "diff", "--name-only", "--diff-filter=U").stdout.split("\n").filter(Boolean);
+    // Paths relative to the home, which may be a subdirectory of the repository
+    const conflicted = git(home, "diff", "--name-only", "--relative", "--diff-filter=U").stdout.split("\n").filter(Boolean);
     if (!conflicted.length || !conflicted.every((f) => f.startsWith("work/"))) return false;
     for (const file of conflicted) {
-      const upstream = git(home, "show", `:2:${file}`);
-      const local = git(home, "show", `:3:${file}`);
+      const upstream = git(home, "show", `:2:./${file}`);
+      const local = git(home, "show", `:3:./${file}`);
       const keep =
         upstream.status !== 0 ? local.stdout : local.status !== 0 ? upstream.stdout : stampOf(local.stdout) > stampOf(upstream.stdout) ? local.stdout : upstream.stdout;
       writeFileSync(join(home, file), keep);
