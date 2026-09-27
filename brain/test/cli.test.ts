@@ -243,3 +243,18 @@ describe("brain move", () => {
     expect((await run(["move", "n-nope", "--to", "x"], io)).code).toBe(1);
   });
 });
+
+describe("brain check reports silent failures", () => {
+  it("flags an unreadable projects.json and a kit that would be skipped", async () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-check-"));
+    const io = { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: home };
+    expect((await run(["check"], io)).code).toBe(0);
+    writeFileSync(join(home, "projects.json"), '{ "projects": { "x": { "aliases": ["y"], } } }');
+    mkdirSync(join(home, "kits", "half-done"), { recursive: true });
+    writeFileSync(join(home, "kits", "half-done", "SKILL.md"), "---\nname: half-done\n---\nbody\n");
+    const r = await run(["check"], io);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("projects.json");
+    expect(r.err).toContain(join("half-done", "SKILL.md"));
+  });
+});

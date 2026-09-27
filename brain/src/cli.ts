@@ -2,12 +2,13 @@
  * The `brain` command: the same functions the OMP extension uses, for any shell, harness or
  * human. `main(argv, io)` takes injected I/O so tests run it in-process.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { acceptProposal, appendEvent, findFix, listProposals, rejectProposal, renderFix, scanCommits, scanEvents } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
-import { draftKit, findKit, loadKits } from "./kits.ts";
+import { draftKit, findKit, kitsDir, loadKits } from "./kits.ts";
 import { createNote, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, retireNote, saveNote, type Kind } from "./notes.ts";
 import { gitRoot, loadProjects, resolveProject, type Project } from "./project.ts";
 import { answer } from "./search.ts";
@@ -268,7 +269,8 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
   },
 
   check(c) {
-    const { notes, errors } = loadNotes(c.home);
+    const { notes, errors: noteErrors } = loadNotes(c.home);
+    const errors = [...noteErrors, ...configErrors(c.home)];
     const active = notes.filter((n) => !n.retired).length;
     c.io.out(`notes: ${notes.length} (${active} active) · projects: ${Object.keys(loadProjects(c.home)).length} · kits: ${loadKits(c.home).length}`);
     for (const e of errors) c.io.err(e);
@@ -282,6 +284,31 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     return report.errors.length ? 1 : 0;
   },
 };
+
+/** Problems that would otherwise be silent: an unreadable projects.json, a kit that is skipped. */
+function configErrors(home: string): string[] {
+  const errors: string[] = [];
+  const projectsFile = join(home, "projects.json");
+  if (existsSync(projectsFile)) {
+    try {
+      const data: unknown = JSON.parse(readFileSync(projectsFile, "utf8"));
+      const projects = (data as { projects?: unknown } | null)?.projects;
+      if (!projects || typeof projects !== "object") errors.push(`${projectsFile}: expected { "projects": { … } }`);
+    } catch (error) {
+      errors.push(`${projectsFile}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const loaded = new Set(loadKits(home).map((k) => k.path));
+  try {
+    for (const entry of readdirSync(kitsDir(home), { withFileTypes: true })) {
+      const skill = join(kitsDir(home), entry.name, "SKILL.md");
+      if (entry.isDirectory() && !loaded.has(skill)) errors.push(`${skill}: missing, unreadable, or without a description`);
+    }
+  } catch {
+    // no kits directory
+  }
+  return errors;
+}
 
 /** `brain hook claude-code`: one JSON object in, one out, exit 0 — whatever happens. */
 function claudeCodeHook(io: Io, explicitHome: string | undefined): number {

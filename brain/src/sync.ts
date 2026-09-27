@@ -1,7 +1,7 @@
 /** Git sync of the Brain home, and sharing a note across projects. */
 import { spawnSync } from "node:child_process";
 import { existsSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
 import { nowIso, slug } from "./util.ts";
@@ -115,8 +115,7 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     encoding: "utf8",
   });
 
-  if (pullResult.status !== 0) {
-    // On failure, abort the rebase
+  if (pullResult.status !== 0 && !resolveWorkConflicts(home)) {
     spawnSync("git", ["-C", home, "rebase", "--abort"], { encoding: "utf8" });
     throw new SyncError(pullResult.stderr.slice(0, 500));
   }
@@ -148,6 +147,44 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
   const message = parts.length > 0 ? parts.join(", ") : "nothing to sync";
 
   return { committed, pulled, pushed, message };
+}
+
+function git(home: string, ...args: string[]): { status: number | null; stdout: string } {
+  const r = spawnSync("git", ["-C", home, ...args], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true" } });
+  return { status: r.status, stdout: r.stdout ?? "" };
+}
+
+function rebaseInProgress(home: string): boolean {
+  return ["rebase-merge", "rebase-apply"].some((name) => {
+    const path = git(home, "rev-parse", "--git-path", name).stdout.trim();
+    return path !== "" && existsSync(isAbsolute(path) ? path : join(home, path));
+  });
+}
+
+/** The `at:` of a working-state file's text, "" when absent. */
+function stampOf(text: string): string {
+  return /^at:\s*(\S+)/m.exec(text)?.[1] ?? "";
+}
+
+/**
+ * A rebase stopped only on working-state files (work/*.md) is resolved, not aborted: a working
+ * state is a snapshot, so the side with the newer `at` wins. Any other conflict → false.
+ */
+function resolveWorkConflicts(home: string): boolean {
+  for (let round = 0; round < 50 && rebaseInProgress(home); round++) {
+    const conflicted = git(home, "diff", "--name-only", "--diff-filter=U").stdout.split("\n").filter(Boolean);
+    if (!conflicted.length || !conflicted.every((f) => f.startsWith("work/"))) return false;
+    for (const file of conflicted) {
+      const upstream = git(home, "show", `:2:${file}`);
+      const local = git(home, "show", `:3:${file}`);
+      const keep =
+        upstream.status !== 0 ? local.stdout : local.status !== 0 ? upstream.stdout : stampOf(local.stdout) > stampOf(upstream.stdout) ? local.stdout : upstream.stdout;
+      writeFileSync(join(home, file), keep);
+      git(home, "add", "--", file);
+    }
+    git(home, "rebase", "--continue");
+  }
+  return !rebaseInProgress(home);
 }
 
 export function shareNote(home: string, id: string, tag: string): Note {

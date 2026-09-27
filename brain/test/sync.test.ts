@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -233,5 +233,41 @@ describe("sync to a branch whose name contains a slash (regression)", () => {
     const log = gitCmd(bare, "log", "--format=%s", "-1", "claude/topic-x");
     expect(log).toMatch(/^brain: sync /);
     expect(spawnSync("git", ["-C", bare, "rev-parse", "--verify", "refs/heads/claude"]).status).not.toBe(0);
+  });
+});
+
+describe("sync resolves working-state conflicts by recency (regression)", () => {
+  const work = (at: string, text: string) => `---\nat: ${at}\n---\n\n${text}\n`;
+
+  it("keeps the newer working state when both machines changed it", () => {
+    const { a, b } = pairRepos();
+    mkdirSync(join(a, "work"), { recursive: true });
+    writeFileSync(join(a, "work", "demo.md"), work("2026-09-27T10:00:00Z", "base"));
+    sync(a);
+    sync(b);
+    writeFileSync(join(a, "work", "demo.md"), work("2026-09-27T11:00:00Z", "from A, older"));
+    sync(a);
+    writeFileSync(join(b, "work", "demo.md"), work("2026-09-27T12:00:00Z", "from B, newer"));
+    createNote(b, { text: "a note written on B", project: "demo" });
+    const result = sync(b);
+    expect(result).toMatchObject({ pulled: true, pushed: true });
+    expect(readFileSync(join(b, "work", "demo.md"), "utf8")).toContain("from B, newer");
+    expect(loadNotes(b).notes).toHaveLength(1);
+    expect(gitCmd(b, "status", "--porcelain")).toBe("");
+    sync(a);
+    expect(readFileSync(join(a, "work", "demo.md"), "utf8")).toContain("from B, newer");
+  });
+
+  it("keeps the upstream state when it is the newer one", () => {
+    const { a, b } = pairRepos();
+    mkdirSync(join(a, "work"), { recursive: true });
+    writeFileSync(join(a, "work", "demo.md"), work("2026-09-27T10:00:00Z", "base"));
+    sync(a);
+    sync(b);
+    writeFileSync(join(b, "work", "demo.md"), work("2026-09-27T11:00:00Z", "from B, older"));
+    writeFileSync(join(a, "work", "demo.md"), work("2026-09-27T12:00:00Z", "from A, newer"));
+    sync(a);
+    sync(b);
+    expect(readFileSync(join(b, "work", "demo.md"), "utf8")).toContain("from A, newer");
   });
 });
