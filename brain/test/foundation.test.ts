@@ -95,6 +95,18 @@ describe("project", () => {
     }
   });
 
+  it("resolves a not-yet-existing directory under a junction through its nearest existing ancestor", () => {
+    const home = tmp();
+    const root = tmp();
+    const target = join(root, "repository");
+    const link = join(root, "shortcut");
+    mkdirSync(target, { recursive: true });
+    symlinkSync(target, link, "junction");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { app: { paths: [link] } } }));
+    expect(resolveProject(home, join(link, "missing", "deeper"), {}).id).toBe("app");
+    expect(resolveProject(home, join(target, "missing"), {}).id).toBe("app");
+  });
+
   it("keeps lexical matching for missing registered paths", () => {
     const home = tmp();
     const missing = join(home, "not-created");

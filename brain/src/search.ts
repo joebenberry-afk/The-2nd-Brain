@@ -307,12 +307,16 @@ export function renderHit(hit: Hit, max = 240): string {
   const { note } = hit;
   const idAndKind = `${note.id} [${note.kind}${note.tested ? ", tested" : ""}]`;
   const marker = note.retired ? ` (retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""})` : "";
-  const rest = restOfBody(note);
-  const full = `${idAndKind} ${firstLine(note)}${marker}${rest ? ` — ${rest}` : ""}`;
+  const title = firstLine(note);
+  let rest = restOfBody(note);
+  while (title && rest.startsWith(title) && (!rest[title.length] || /[\s:;,.—–-]/.test(rest[title.length]!))) {
+    rest = rest.slice(title.length).replace(/^[\s:;,.—–-]+/, "");
+  }
+  const full = `${idAndKind} ${title}${marker}${rest ? ` — ${rest}` : ""}`;
   if (full.length <= max) return full;
   // Cut the text, never the id, the kind or the retired marker.
   const room = max - idAndKind.length - 1 - marker.length;
-  const text = `${firstLine(note)}${rest ? ` — ${rest}` : ""}`;
+  const text = `${title}${rest ? ` — ${rest}` : ""}`;
   return room <= 1 ? `${idAndKind}${marker}`.slice(0, max) : `${idAndKind} ${text.slice(0, room - 1).trimEnd()}…${marker}`;
 }
 
@@ -330,6 +334,8 @@ export function renderHits(hits: Hit[]): string {
 export interface AnswerOptions extends RecallOptions {
   /** Explicit Brain home enables kit recall without consulting process-global state. */
   home?: string;
+  /** The CLI has flags rather than tool arguments. */
+  tools?: boolean;
 }
 
 /** One call answers: exact ids, named kits, then scoped note search. */
@@ -367,7 +373,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
   if (!hits.length && !opts.all) {
     const related = matchingHits(scored, { ...opts, all: true }).length
       || (!opts.history ? matchingHits(scored, { ...opts, all: true, history: true }).length : 0);
-    if (related) return { text: `no match here; ${related} related in other projects (all: true)`, hits: 0 };
+    if (related) return { text: `no match here; ${related} related in other projects (${opts.tools === false ? "--all" : "all: true"})`, hits: 0 };
   }
   return { text: renderHits(hits), hits: hits.length };
 }

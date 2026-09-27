@@ -570,6 +570,16 @@ describe("OMP extension", () => {
     expect(existsSync(join(home, "state"))).toBe(false);
   });
 
+  it("host agent identity decides: a headless top-level run saves, a sub with UI does not", () => {
+    const { tools } = load({ SECOND_BRAIN_HOME: home }, true);
+    const stateTool = tools.find((t: any) => t.name === "brain_state") as any;
+    const headlessMain = { ...ctx("print"), hasUI: false, agent: { kind: "main" }, sessionManager: { getSessionId: () => "print", getSessionFile: () => undefined } };
+    expect(stateTool.execute("id", { text: "Goal: headless plan" }, undefined, undefined, headlessMain).content[0].text).toMatch(/^state saved/);
+    const tanClone = { ...ctx("tan"), agent: { kind: "sub" } };
+    expect(stateTool.execute("id", { text: "Goal: clone plan" }, undefined, undefined, tanClone).content[0].text).toBe("not saved: working state belongs to the parent session");
+    expect(readWork(home, "work")?.text).toBe("Goal: headless plan");
+  });
+
   it("compaction freezes only bounded working state and preserves it on fork", () => {
     writeWork(home, "work", "Goal: ship release. Next: run integration.");
     createNote(home, { project: "work", text: "Unrelated durable fact " + "detail ".repeat(100) });

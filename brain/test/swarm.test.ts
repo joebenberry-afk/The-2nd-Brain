@@ -566,7 +566,7 @@ describe("batch 3: OMP lifecycle", async () => {
     const { home, cwd, fire } = setup();
     mkdirSync(join(home, "state", "events"), { recursive: true });
     const line = (o: object) => JSON.stringify({ v: 1, at: "2026-09-27T10:00:00Z", session: "old", cwd, tool: "bash", ...o }) + "\n";
-    writeFileSync(join(home, "state", "events", "old.jsonl"), line({ command: "npm run tset", ok: false, error: "npm ERR! Missing script: \"tset\"" }) + line({ command: "npm run test", ok: true }));
+    writeFileSync(join(home, "state", "events", "old.jsonl"), line({ command: "npm test", ok: false, error: "Error: missing dependency" }) + line({ command: "npm ci && npm test", ok: true }));
     const card = fire("before_agent_start", { prompt: "go" }, session("new", cwd)) as { message: { content: string } };
     expect(card.message.content).toMatch(/1 proposal/);
   });
@@ -578,13 +578,13 @@ describe("batch 3: privacy and security", () => {
     mkdirSync(join(home, "state", "events"), { recursive: true });
     const line = (o: object) => JSON.stringify({ v: 1, at: "2026-09-27T10:00:00Z", session: "s", cwd: "", tool: "bash", ...o }) + "\n";
     writeFileSync(join(home, "state", "rejected.json"), JSON.stringify({ texts: ["ssh: ssh deploy@10.20.0.5 -i ~/.ssh/acme_prod fails"], signatures: [] }));
-    writeFileSync(join(home, "state", "events", "s.jsonl"), line({ command: "deploy --token-file ./prod.tok", ok: false, error: "deploy: 401 unauthorized for acme-prod" }) + line({ command: "deploy --token-file ./prod2.tok", ok: true }));
+    writeFileSync(join(home, "state", "events", "s.jsonl"), line({ command: "deploy --token-file ./prod.tok", ok: false, error: "deploy: 401 unauthorized for acme-prod" }) + line({ command: "deploy --token-file ./prod.tok --refresh", ok: true }));
     const [p] = scanEvents(home, []);
     rejectProposal(home, p?.id ?? "");
     const synced = readFileSync(join(home, "rejected.json"), "utf8");
     expect(synced).not.toMatch(/acme|deploy|10\.20/);
     expect(JSON.parse(synced).hashes).toHaveLength(3);
-    writeFileSync(join(home, "state", "events", "t.jsonl"), line({ command: "deploy --token-file ./prod.tok", ok: false, error: "deploy: 401 unauthorized for acme-prod" }) + line({ command: "deploy --token-file ./prod2.tok", ok: true }));
+    writeFileSync(join(home, "state", "events", "t.jsonl"), line({ command: "deploy --token-file ./prod.tok", ok: false, error: "deploy: 401 unauthorized for acme-prod" }) + line({ command: "deploy --token-file ./prod.tok --refresh", ok: true }));
     expect(scanEvents(home, [])).toEqual([]);
   });
 

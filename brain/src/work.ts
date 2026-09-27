@@ -78,7 +78,7 @@ export function readWork(home: string, project: string): Work | null {
   }
 }
 
-/** Label-aware truncation: a long Done must never crowd out a late Next. */
+/** Label-aware truncation: a long Done must never crowd out a late Next; text before the first label leads. */
 function planText(text: string, budget: number): string {
   const labels = [...text.matchAll(/(?:^|[\n/.;·]\s*|\s+)(Goal|Done|Next|Watch out):\s*|(?:^|[\n/·]\s*)(Goal|Done|Next|Watch out)\s+/gi)];
   if (!labels.length) return cutToTokens(text, budget);
@@ -86,12 +86,14 @@ function planText(text: string, budget: number): string {
     label: (match[1] ?? match[2]!).toLowerCase(),
     text: text.slice(match.index! + match[0].length, labels[i + 1]?.index ?? text.length).trim(),
   }));
+  const preamble = text.slice(0, labels[0]!.index).trim();
   const lines: string[] = [];
   let remaining = budget * 4;
-  for (const label of ["goal", "next", "watch out", "done"]) {
-    const value = parts.filter(part => part.label === label).map(part => part.text).join(" ");
+  for (const label of ["", "goal", "next", "watch out", "done"]) {
+    const value = label ? parts.filter(part => part.label === label).map(part => part.text).join(" ") : preamble;
     if (!value || remaining < label.length + 5) continue;
-    const line = cutToTokens(`${label[0]!.toUpperCase()}${label.slice(1)}: ${value}`, Math.floor(Math.min(remaining, budget * 2) / 4));
+    const line = cutToTokens(label ? `${label[0]!.toUpperCase()}${label.slice(1)}: ${value}` : value, Math.floor(Math.min(remaining, budget * 2) / 4));
+    if (!line) continue;
     lines.push(line);
     remaining -= line.length + 1;
   }

@@ -188,6 +188,15 @@ describe("search", () => {
     expect(ids).toContain("n-2");
   });
 
+  it.each([
+    ["Headline\nHeadline: useful new detail", "Headline — useful new detail"],
+    ["Headline\nHeadline\n\nHeadline — useful new detail", "Headline — useful new detail"],
+    ["Headline\nHeadline", "Headline"],
+    ["Head\nHeading remains distinct", "Head — Heading remains distinct"],
+  ])("renders the headline only once for %s", (body, expected) => {
+    expect(renderHit({ note: note("n-repeat", { body }), score: 1, matched: [] })).toBe("n-repeat [note] " + expected);
+  });
+
   it("renderHit: format, tested marker, retired marker", () => {
     const h1 = {
       note: note("n-abc", { body: "headline\nbody content", tested: true }),
@@ -301,6 +310,12 @@ describe("recall and note boundaries", () => {
     const text = '---\nid: note-1\nerrors: ["unexpected # token", "unexpected, comma", "say \\"hi\\", now", \'it\'\'s # quoted\'] # comment\n---\nFix parser';
     const parsed = parseNote(text, "note-1.md", "test", false);
     expect(parsed.errors).toEqual(["unexpected # token", "unexpected, comma", 'say "hi", now', "it's # quoted"]);
+    expect(parseNote(formatNote(parsed), "note-1.md", "test", false).errors).toEqual(parsed.errors);
+  });
+
+  it("keeps apostrophes inside plain inline list items literal", () => {
+    const parsed = parseNote("---\nid: note-1\nerrors: [can't open, don't retry] # why\n---\nFix", "note-1.md", "test", false);
+    expect(parsed.errors).toEqual(["can't open", "don't retry"]);
     expect(parseNote(formatNote(parsed), "note-1.md", "test", false).errors).toEqual(parsed.errors);
   });
 

@@ -229,6 +229,14 @@ describe("work", () => {
     expect(text.indexOf("Next:")).toBeLessThan(text.indexOf("Done:"));
   });
 
+  it("resume keeps text written before the first label", () => {
+    const home = tmp();
+    writeWork(home, "p", `Do not deploy without owner approval.\nDone: ${"step ".repeat(200)}\nNext: run tests`);
+    const text = renderResume(readWork(home, "p"));
+    expect(text).toContain("Do not deploy without owner approval");
+    expect(text).toContain("Next: run tests");
+  });
+
   it("stale plan and current auto context display their own timestamps", () => {
     const work = { project: "p", path: "", at: "2026-09-20T12:00:00Z", autoAt: "2026-09-27T15:00:00Z", text: "Goal: migrate DB", auto: "- last ask: export CSV" };
     for (const text of [resumeText(work), renderResume(work)]) {

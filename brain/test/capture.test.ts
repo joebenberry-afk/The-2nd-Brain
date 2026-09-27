@@ -300,7 +300,7 @@ describe("capture.scanEvents", () => {
         session: "s1",
         cwd: "/work/demo",
         tool: "bash",
-        command: "python -c 'print(x)'",
+        command: "python app.py --invalid",
         ok: false,
         error: "ERROR: NameError",
       },
@@ -319,7 +319,7 @@ describe("capture.scanEvents", () => {
         session: "s1",
         cwd: "/work/demo",
         tool: "bash",
-        command: "python -c 'x=1; print(x)'",
+        command: "python app.py --fixed",
         ok: true,
       },
     ];
@@ -332,9 +332,9 @@ describe("capture.scanEvents", () => {
     }
 
     const proposals = scanEvents(home, []);
-    expect(proposals.length).toBeGreaterThan(0);
+    expect(proposals).toHaveLength(1);
     expect(proposals[0]?.kind).toBe("gotcha");
-    expect(proposals[0]?.tested).toBe(true);
+    expect(proposals[0]?.tested).toBe(false);
   });
 
   it("does not pair beyond 6 events", () => {
@@ -368,7 +368,7 @@ describe("capture.scanEvents", () => {
         session: "s1",
         cwd: "/work",
         tool: "bash",
-        command: "python fix",
+        command: "python fail --fix",
         ok: true,
       },
     ];
@@ -391,7 +391,7 @@ describe("capture.scanEvents", () => {
 
     // Create an existing note - use exact headline that will be generated
     const note = createNote(home, {
-      text: "python: python fail fails (ERROR: something); python fix works",
+      text: "python: python fail fails (ERROR: something); python fail --fix works",
       project: "global",
       kind: "gotcha",
       tested: true,
@@ -414,7 +414,7 @@ describe("capture.scanEvents", () => {
         session: "s1",
         cwd: "/work",
         tool: "bash",
-        command: "python fix",
+        command: "python fail --fix",
         ok: true,
       },
     ];
@@ -954,6 +954,11 @@ describe("capture.renderFix", () => {
     expect(tokens).toBeLessThanOrEqual(80);
   });
 
+  it("joins a headline that already ends a sentence without doubling punctuation", () => {
+    const note = createNote(tmp(), { text: "Use anchored edits.\n\nCopy the read tag first. More later.", project: "global", kind: "gotcha", tested: true });
+    expect(renderFix(note)).toBe(`Brain: Use anchored edits. Copy the read tag first [${note.id}]`);
+  });
+
 });
 
 describe("review round trip (regressions)", () => {
@@ -982,6 +987,114 @@ describe("review round trip (regressions)", () => {
 
 
 describe("capture batch five regressions", () => {
+  it.each([
+    ["npx vitest run a.test.ts", "npx vitest run b.test.ts"],
+    ["npx eslint src test && npx tsc --noEmit", "npx vitest run eval.test.ts"],
+    ["node -e 'A'", "node -e 'B'"],
+    ["node -p 'A'", "node -p 'B'"],
+    ["python -c 'A'", "python -c 'B'"],
+    ["node --eval=A", "node --eval=B"],
+    ["node -e'A'", "node -e'B'"],
+    ["python -cA", "python -cB"],
+    ["bash -c 'A'", "bash -c 'B'"],
+    ["python - <<'PY'\nprint('A')\nPY", "python - <<'PY'\nprint('B')\nPY"],
+    ["node brain/bin/brain.mjs card", "node /absolute/brain/bin/brain.mjs card"],
+  ])("drops unrelated command successes: %s → %s", (failed, fixed) => {
+    const home = tmp();
+    log(home, row({ command: failed, ok: false, error: "Error: original command failed" }) + row({ command: fixed }));
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it.each([
+    ["npm test", "npm ci && npm test", true],
+    ["git push", "git push --set-upstream origin main", false],
+    ["npm test", "npm test -- --run", true],
+    ["git status --invalid", "git status --short", false],
+    ["npx vitest run a.test.ts", "npm ci; npx vitest run a.test.ts b.test.ts", false],
+    ["node -e 'console.log(1)'", "node --no-warnings -e 'console.log(1)'", false],
+    ["python - <<'PY'\nprint('A')\nPY", "python -u - <<'PY'\nprint('A')\nPY", false],
+  ])("keeps positional-prefix repairs: %s → %s", (failed, fixed, tested) => {
+    const home = tmp();
+    log(home, row({ command: failed, ok: false, error: "Error: original command failed" }) + row({ command: fixed }));
+    expect(scanEvents(home, []).map((p) => p.tested)).toEqual([tested]);
+  });
+
+  it.each(["grep", "rg", "ls", "cat", "find", "head", "tail", "wc", "echo", "which", "where", "type", "pwd", "stat", "file", "tree", "dir", "Get-ChildItem", "Select-String"])("never proposes exploration failures from %s", (program) => {
+    const home = tmp();
+    log(home, row({ command: `cd A && ${program} missing`, ok: false, error: "Error: not found" }) + row({ command: `cd B; ${program} found` }));
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it.each(["npx vitest run", "bunx vitest run", "npm exec vitest run", "npm run test --", "pnpm vitest run", "yarn vitest run", "python -m pytest", "uv run pytest", "bun run test"])("requires the launched target to be retried: %s", (launcher) => {
+    const home = tmp();
+    log(home, row({ command: `${launcher} test/cli.test.ts`, ok: false, error: "Error: test failure" }) + row({ command: `${launcher} test/kits.test.ts` }));
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it.each([
+    ["cd A && npm   test", "cd B; npm ci && npm test"],
+    ["npx vitest run test/cli.test.ts", "npm ci; npx vitest run test/cli.test.ts --reporter=verbose"],
+    ['node check.js "two words"', "node check.js 'two words' --verbose"],
+  ])("recognizes the complete retry of %s", (failed, fixed) => {
+    const home = tmp();
+    log(home, row({ command: failed, ok: false, error: "Error: repair required" }) + row({ command: fixed }));
+    expect(scanEvents(home, []).map((p) => p.tested)).toEqual([true]);
+  });
+
+  it("does not treat a quoted shell separator as an executed retry", () => {
+    const home = tmp();
+    log(home, row({ command: "npm test", ok: false, error: "Error: tests failed" }) + row({ command: 'npm exec echo "preparation; npm test; done"' }));
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("selects diagnostics over source and aggregates volatile locations", () => {
+    const home = tmp();
+    const diagnostics = [
+      "import { errorSignature, appendEvent } from './capture.ts';\ntest/first.test.ts(94,40): error TS2345: invalid argument at 0xabcdef12",
+      "const error = new Error('failure');\ntest/second.test.ts(12,8): error TS2345: invalid argument at 0x12345678",
+      "/tmp/third.test.ts:3:9: error TS2345: invalid argument at 0xabababab",
+      "C:\\work\\fourth.test.ts(8,2): error TS2345: invalid argument at 0xcdcdcdcd",
+    ];
+    log(home, diagnostics.map((error) => row({ ok: false, error })).join(""));
+    expect(capture.unmatchedErrors(home, [])).toEqual([{ signature: "<path>: error TS2345: invalid argument at <hex>", count: 4 }]);
+    expect(errorSignature("import { failure } from 'x';\nConnection refused by server")).toBe("Connection refused by server");
+    expect(errorSignature("Error: " + "complete ".repeat(20))).toMatch(/complete$/);
+    expect(errorSignature("❯ test/a.test.ts (2 tests | 1 failed)\n→ Cannot read property value")).toBe("→ Cannot read property value");
+    expect(errorSignature("file:///C:/work/[eval1]:1\nimport { failure } from 'x';\nWall time: 0.17 seconds")).toBe("");
+  });
+
+  it("never reuses a successful retry to claim another failure was fixed", () => {
+    const home = tmp();
+    log(home, row({ command: "npm run a", ok: false, error: "Error: failure A" }) + row({ command: "npm run b", ok: false, error: "Error: failure B" }) + row({ command: "npm run a --fix" }));
+    expect(scanEvents(home, []).map((p) => [p.errors[0], p.tested])).toEqual([["Error: failure A", true]]);
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("does not trust a retry whose failure is hidden by an unconditional tail", () => {
+    const home = tmp();
+    log(home, row({ command: "python bad.py", ok: false, error: "Error: still broken" }) + row({ command: "echo preparing; python bad.py; echo finished" }));
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("does not trust a retry skipped by a successful OR branch", () => {
+    const home = tmp();
+    log(home, row({ command: "npm test", ok: false, error: "Error: tests failed" }) + row({ command: "npm --version || npm test" }));
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("does not mistake a failed multiline command fragment for the fix", () => {
+    const home = tmp();
+    const failed = "python - <<'PY'\n\nprint('repairable')\nPY";
+    const fixed = "python -u - <<'PY'\n\nprint('repairable')\nPY";
+    log(home, row({ command: failed, ok: false, error: "Error: environment not ready" }) + row({ command: fixed }));
+    const proposal = scanEvents(home, [])[0]!;
+    const note = acceptProposal(home, proposal.id);
+    expect(renderFix(note)).toContain("python -u - <<'PY' print('repairable') PY works");
+    expect(renderFix(note)).not.toContain("Brain: print('repairable') PY works");
+    const legacy = { ...note, body: "Legacy repair\n\npython - <<'PY'\n\nraise RuntimeError('bad')\nPY\n\npython repaired.py\n\nError: bad input" };
+    expect(renderFix(legacy)).not.toContain("raise RuntimeError('bad') PY works");
+  });
+
   const row = (fields: Partial<ToolEvent> = {}) => JSON.stringify({ v: 1, at: new Date().toISOString(), session: "s", cwd: "", tool: "bash", ok: true, ...fields }) + "\n";
   const log = (home: string, text: string, name = "s") => {
     mkdirSync(eventsDir(home), { recursive: true });
@@ -1030,7 +1143,7 @@ describe("capture batch five regressions", () => {
   it("keeps the full successful command in a bounded captured fix", () => {
     const home = tmp();
     const command = "python -m tools.maintenance.verify_production_database_schema";
-    log(home, row({ command: "python tools/maintenance/verify_production_database_schema.py", ok: false, error: "ModuleNotFoundError: no module named tools" }) + row({ command }));
+    log(home, row({ command: command + " --invalid", ok: false, error: "Error: invalid runtime flag" }) + row({ command }));
     const [proposal] = scanEvents(home, []);
     const note = acceptProposal(home, proposal?.id ?? "");
     const fix = renderFix(note);
@@ -1041,8 +1154,8 @@ describe("capture batch five regressions", () => {
 
   it("reserves proposal body space for the actionable command after a long failure", () => {
     const home = tmp();
-    const failed = "python " + "deep_directory/".repeat(28) + "check.py";
     const fixed = "python -m " + "package.".repeat(22) + "check";
+    const failed = "python --configuration=" + "deep_directory/".repeat(28) + " -m " + "package.".repeat(22) + "check";
     log(home, row({ command: failed, ok: false, error: "ModuleNotFoundError: no module named package" }) + row({ command: fixed }));
     const [proposal] = scanEvents(home, []);
     const note = acceptProposal(home, proposal?.id ?? "");
@@ -1091,12 +1204,12 @@ describe("capture batch five regressions", () => {
     }
   });
 
-  it("requires normalized cwd equality and the same first argument for tested pairs", () => {
+  it("requires normalized cwd equality and preserves the failed target", () => {
     const home = tmp();
     log(home, row({ cwd: "C:/work/a", command: "npm test", ok: false, error: "Error: wrong cwd" }) + row({ cwd: "C:/work/b", command: "npm test -- --run" }), "different");
     log(home, row({ command: "npm test", ok: false, error: "Error: tests failed" }) + row({ command: "npm --version" }), "weak");
     log(home, row({ cwd: "C:\\work\\demo\\", command: "npm test", ok: false, error: "Error: useful test failure" }) + row({ cwd: "c:/WORK/demo", command: "npm test -- --run" }), "strong");
-    expect(scanEvents(home, []).map((p) => [p.errors[0], p.tested]).sort()).toEqual([["Error: tests failed", false], ["Error: useful test failure", true]]);
+    expect(scanEvents(home, []).map((p) => [p.errors[0], p.tested])).toEqual([["Error: useful test failure", true]]);
   });
 
   it("marks an explicit successful retry after preparation as tested", () => {

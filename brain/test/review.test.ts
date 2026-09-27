@@ -25,7 +25,7 @@ describe("capture", () => {
     const error = "fatal: bad object 0123456789abcdef0123456789abcdef01234567 (error)";
     writeFileSync(
       join(home, "state", "events", "s.jsonl"),
-      line({ command: "npm test", ok: false, error }) + line({ command: "npm --prefix app test", ok: true }),
+      line({ command: "npm test", ok: false, error }) + line({ command: "npm ci && npm test", ok: true }),
     );
     const [proposal] = scanEvents(home, []);
     expect(proposal?.errors[0]).not.toContain("***");

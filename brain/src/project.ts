@@ -39,12 +39,22 @@ export function normalizePath(value: string): string {
   return text.replace(/\/+$/, "") || "/";
 }
 
-/** Resolve junctions/symlinks when available; offline registrations retain lexical matching. */
+/**
+ * Resolve junctions/symlinks through the nearest existing ancestor, so a path that does not exist
+ * (yet) under a junction still lands under its target; registrations offline stay lexical.
+ */
 function canonicalPath(value: string): string {
-  try {
-    return normalizePath(realpathSync.native(value));
-  } catch {
-    return normalizePath(value);
+  let head = resolve(value);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return normalizePath([realpathSync.native(head), ...rest].join("/"));
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return normalizePath(value);
+      rest.unshift(basename(head));
+      head = parent;
+    }
   }
 }
 

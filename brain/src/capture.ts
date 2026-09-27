@@ -189,19 +189,45 @@ export function toolEventFrom(
   };
 }
 
-/**
- * The program a shell command ran: its first real word, lower-cased, without folders or a Windows
- * extension (.exe .cmd .bat .ps1 .com). Skipped: `cd X &&`-style segments, VAR=value and PowerShell
- * `$env:X = …` assignments, wrappers (sudo, env and its options, time, `cmd /c`), PowerShell's
- * call operator `&`, and a notebook's `%%bash` line or `!` shell escape. Quoted paths are one word.
- */
-function commandIdentity(command: string): { program: string; argument: string } {
+/** Split shell argv without treating quoted separators as executed commands. */
+function commandSegments(command: string): { argv: string[]; next: string }[] {
   const text = command.trim().replace(/^%%\w+[^\n]*\n/, "").replace(/^!/, "");
-  // The last segment of "cd X && …", "pushd X; …" is what ran.
-  const segments = text.split(/&&|\|\||;|\n/).map((s) => s.trim()).filter(Boolean);
-  const skip = (s: string) => /^(cd|pushd|popd|set|export|source|\.)(\s|$)/i.test(s) || /^\$[\w:]+\s*=/.test(s);
-  const main = segments.find((s) => !skip(s)) ?? segments.at(-1) ?? "";
-  const parts = [...main.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+  const segments: { argv: string[]; next: string }[] = [];
+  let argv: string[] = [];
+  let skipUntil = 0;
+  for (const match of text.matchAll(/"[^"]*"|'[^']*'|&&|\|\||[;|\n]|[^\s;&|]+/g)) {
+    if (match.index < skipUntil) continue;
+    const token = match[0];
+    if (token === "\n") {
+      const heredoc = /<<(-?)\s*(['"]?)(\w+)\2/.exec(argv.join(" "));
+      if (heredoc) {
+        const start = match.index + 1;
+        const end = new RegExp("^" + (heredoc[1] ? "\\t*" : "") + heredoc[3] + "\\r?$", "m").exec(text.slice(start));
+        const bodyEnd = end ? start + end.index : text.length;
+        argv.push(text.slice(start, bodyEnd));
+        skipUntil = end ? bodyEnd + end[0].length : text.length;
+      }
+    }
+    if (/^(?:&&|\|\||[;|\n])$/.test(token)) {
+      if (argv.length) segments.push({ argv, next: token });
+      argv = [];
+    } else {
+      argv.push(/^["']/.test(token) ? token.slice(1, -1) : token);
+    }
+  }
+  if (argv.length) segments.push({ argv, next: "" });
+  return segments;
+}
+
+/** Leading directory/environment setup is not the program being repaired. */
+function isSetup(argv: string[]): boolean {
+  return /^(cd|pushd|popd|set|export|source|\.)$/i.test(argv[0] ?? "") || /^\$[\w:]+\s*=/.test(argv.join(" "));
+}
+
+/** The executable basename, with wrappers removed, plus its complete argv. */
+function commandIdentity(command: string | string[]): { program: string; argv: string[] } {
+  const segments = typeof command === "string" ? commandSegments(command) : [];
+  const parts = typeof command !== "string" ? command : (segments.find((s) => !isSetup(s.argv)) ?? segments.at(-1))?.argv ?? [];
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i] as string;
     if (!part || part === "&") continue;
@@ -213,34 +239,75 @@ function commandIdentity(command: string): { program: string; argument: string }
       continue;
     }
     const prog = (part.replace(/\\/g, "/").split("/").pop() ?? "").toLowerCase();
-    return { program: prog.replace(/\.(exe|cmd|bat|ps1|com)$/, ""), argument: parts[i + 1] ?? "" };
+    return { program: prog.replace(/\.(exe|cmd|bat|ps1|com)$/, ""), argv: parts.slice(i) };
   }
-  return { program: "", argument: "" };
+  return { program: "", argv: [] };
 }
 
 export function program(command: string): string {
   return commandIdentity(command).program;
 }
 
+const EXPLORATION = new Set(["grep", "rg", "ls", "cat", "find", "head", "tail", "wc", "echo", "which", "where", "type", "pwd", "stat", "file", "tree", "dir", "get-childitem", "select-string"]);
+
+/** Non-flag argv define what ran, including inline scripts and heredoc contents. */
+function positionals(argv: string[]): string[] {
+  return argv.slice(1).filter((arg, index) =>
+    !arg.startsWith("-") || /^(?:--(?:eval|print|command)=|-[epc].)/.test(arg) ||
+    /^(?:-e|-p|-c|--eval|--print|--command)$/.test(argv[index] ?? "") || /^<</.test(argv[index] ?? ""));
+}
+
+/** A changed command is a candidate only while it still targets the failed operation. */
+function keepsCommand(failed: string, fixed: string): boolean {
+  const original = commandIdentity(failed);
+  const args = positionals(original.argv);
+  const segments = commandSegments(fixed);
+  if (segments.some((s) => s.next === "||" || s.next === "|")) return false;
+  return segments.some((segment, index) => {
+    if (segments.slice(index, -1).some((s) => s.next !== "&&")) return false;
+    const candidate = commandIdentity(segment.argv);
+    const target = positionals(candidate.argv);
+    return candidate.program === original.program && args.every((arg, i) => target[i] === arg);
+  });
+}
+
+/** Full argv matters, including a launcher's tool and target, not just its first argument. */
+function retriesCommand(failed: string, fixed: string): boolean {
+  const original = commandSegments(failed).filter((s) => !isSetup(s.argv));
+  if (original.length !== 1) return false;
+  const argv = commandIdentity(original[0]!.argv).argv;
+  const segments = commandSegments(fixed);
+  if (!argv.length || segments.some((s) => s.next === "||" || s.next === "|")) return false;
+  return segments.some((segment, index) => {
+    // A later unconditional command could hide this retry's exit status.
+    if (segments.slice(index, -1).some((s) => s.next !== "&&")) return false;
+    const candidate = commandIdentity(segment.argv).argv;
+    return argv.every((arg, i) => candidate[i] === arg) &&
+      candidate.slice(argv.length).every((arg) => arg.startsWith("-"));
+  });
+}
+
 /** Tools that run code cells (python, ipython, a notebook, a JS REPL): their "command" is code, not a shell command. */
 const CODE_TOOL = /python|notebook|repl|jupyter|^js$|javascript|eval/i;
 
-/**
- * Extract error signature: first line with error keywords, else first non-empty line.
- * Strip ANSI escapes, collapse whitespace, cut to 120 characters.
- */
-export function errorSignature(error: string): string {
-  const clean = (line: string) => line.trim().split(/\s+/).join(" ").slice(0, 120);
+/** Error-like diagnostic, not an echoed source line; cut only at a word boundary. */
+export function errorSignature(error: string, max = 120): string {
   const lines = error.replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).filter((l) => l.trim());
-  // Banners and headers say nothing about which error it was.
   const banner = /^(traceback \(most recent call last\):|during handling of the above exception|the above exception was the direct cause|[=_*#~-]{3,}.*[=_*#~-]{3,}$|[=_*#~-]{5,}$)/i;
-  const useful = lines.filter((l) => !banner.test(l.trim()));
-  // A Python-style exception line ("ModuleNotFoundError: …") is the error; the last one wins.
-  const exception = [...useful].reverse().find((l) => /^\s*(E\s+)?[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b.*:/.test(l));
-  if (exception) return clean(exception.replace(/^\s*E\s+/, ""));
-  const keyword = /(error|exception|failed|failure|not found|denied|mismatch|no such|cannot|unable)/i;
-  const hit = useful.find((l) => keyword.test(l)) ?? useful[0] ?? lines[0];
-  return hit ? clean(hit) : "";
+  const code = /^(?:\d+\s*[|:]\s*)?(?:import\b|from\s+\S+\s+import\b|(?:export\s+)?(?:const|let|var|function|class|interface|type)\b|(?:throw|raise|return)\b|(?:expect|assert)\s*\(|at\s+|Node\.js v\d|[{}^|])/;
+  const location = /^(?:(?:file:\/\/\/|(?:[A-Za-z]:)?[\/\\]|[\w.-]+[\/\\]).*:\d+(?::\d+)?|\S+:\d+(?::\d+)?\)?)$/;
+  const useful = lines.map((l) => l.trim()).filter((l) => /[\p{L}\p{N}]/u.test(l) && !/^Wall time:/i.test(l) && !banner.test(l) && !code.test(l) && !location.test(l));
+  const exception = [...useful].reverse().find((l) => /^(E\s+)?[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b.*:/.test(l));
+  const keyword = /error|fail|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable/i;
+  const diagnostic = /error|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable/i;
+  const hit = exception?.replace(/^E\s+/, "") ?? useful.find((l) => diagnostic.test(l)) ?? useful.find((l) => keyword.test(l)) ?? useful[0] ?? "";
+  return signatureCut(hit.replace(/\s+/g, " "), max);
+}
+
+function signatureCut(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  return (/\s/.test(text[max] ?? "") ? cut : cut.replace(/\s+\S*$/, "")).trimEnd();
 }
 
 /** A private path in any event field must never become a public proposal. */
@@ -447,6 +514,9 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
   const cursor = readJson<Record<string, number>>(cursorFile, {});
   const seen = seenBefore(home, notes);
   const proposals: Proposal[] = [];
+  // Evidence survives a waiting cursor, so a later scan cannot reuse an earlier repair.
+  const consumed = new Set([...seen.proposals, ...notes].flatMap((item) => item.evidence)
+    .filter((ref) => /^events:.*#\d+-\d+$/.test(ref)).map((ref) => ref.replace(/#\d+-/, "#")));
 
   for (const fileName of readdirSync(dir).filter((n) => n.endsWith(".jsonl")).sort()) {
     const filePath = join(dir, fileName);
@@ -477,6 +547,7 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
       // may still be fixed: the cursor waits on it. A quiet log's session is over: nothing waits.
       const live = now.getTime() - mtimeMs < 3_600_000;
       let waiting: number | undefined;
+
       for (let i = 0; i < events.length; i++) {
         const failed = events[i];
         if (!failed || failed.ok !== false || !failed.command || !failed.error || touchesPrivate(failed)) continue;
@@ -484,25 +555,20 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
         if (CODE_TOOL.test(failed.tool) && !/^(%%(bash|sh|cmd|powershell|pwsh)\b|!)/.test(failed.command.trim())) continue;
         const identity = commandIdentity(failed.command);
         const prog = identity.program;
-        if (!prog) continue;
-        const failedCommand = failed.command.trim().replace(/\s+/g, " ");
+        if (!prog || EXPLORATION.has(prog)) continue;
         let paired = false;
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
           const fixed = events[j];
-          if (!fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command || touchesPrivate(fixed)) continue;
+          if (consumed.has(`events:${fileName}#${starts[j] ?? j}`) || !fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command || touchesPrivate(fixed)) continue;
           if (normalizePath(fixed.cwd) !== normalizePath(failed.cwd)) continue;
-          const fixedIdentity = commandIdentity(fixed.command);
-          const retriesFailure = fixed.command.split(/&&|;/).some((part) => {
-            const command = part.trim().replace(/\s+/g, " ");
-            return command === failedCommand || command.startsWith(failedCommand + " -");
-          });
-          if ((!retriesFailure && fixedIdentity.program !== prog) || fixed.command === failed.command) continue;
-          const failedCmd = scrub(failed.command).text;
-          const fixedCmd = cutToTokens(scrub(fixed.command).text, 125);
+          if (fixed.command === failed.command || !keepsCommand(failed.command, fixed.command)) continue;
+          const retriesFailure = retriesCommand(failed.command, fixed.command);
+          const failedCmd = scrub(failed.command).text.replace(/\s+/g, " ").trim();
+          const fixedCmd = cutToTokens(scrub(fixed.command).text.replace(/\s+/g, " ").trim(), 125);
           const error = scrub(failed.error).text;
           const short = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 60);
           // The signature is matched against future raw errors: only credentials are masked in it.
-          const sig = errorSignature(scrub(failed.error, { longRuns: false }).text).slice(0, 60);
+          const sig = errorSignature(scrub(failed.error, { longRuns: false }).text, 60);
           const head = cutToTokens(`${prog}: ${short(failedCmd)} fails (${sig}); ${short(fixedCmd)} works`, 50);
           const evidence = [`events:${fileName}#${starts[i] ?? i}-${starts[j] ?? j}`];
           // Reserve the full retained successful command before filling the 800-character body.
@@ -515,10 +581,11 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
             kind: "gotcha",
             text,
             errors: sig && !errorPatternProblem(sig) ? [sig] : [],
-            tested: retriesFailure || (fixedIdentity.program === prog && fixedIdentity.argument === identity.argument),
+            tested: retriesFailure,
             source: "capture",
             evidence,
           }, proposals, project);
+          consumed.add(`events:${fileName}#${starts[j] ?? j}`);
           paired = true;
           break;
         }
@@ -794,12 +861,13 @@ export function renderFix(note: Note): string {
   const prefix = "Brain: ";
   const budget = Math.max(0, FIX_BUDGET * 4 - prefix.length - suffix.length);
   // Captured bodies retain headline, failed command, successful command, then error.
-  const fixed = note.source === "capture" ? note.body.split(/\n\s*\n/)[2]?.replace(/\s+/g, " ").trim() : undefined;
+  const paragraphs = note.source === "capture" ? note.body.split(/\n\s*\n/) : [];
+  const fixed = paragraphs[3]?.startsWith("Error:") ? paragraphs[2]?.replace(/\s+/g, " ").trim() : undefined;
   let text = fixed ? `${fixed} works — ${firstLine(note)}` : firstLine(note);
   if (!fixed) {
     const rest = note.body.split("\n").slice(1).join(" ").replace(/\s+/g, " ").trim();
     const sentence = rest.split(/(?<=[.!?])\s+/)[0]?.replace(/\.$/, "");
-    if (sentence && text.length + sentence.length + 2 <= budget) text += `: ${sentence}`;
+    if (sentence && text.length + sentence.length + 2 <= budget) text += /[.!?:]$/.test(text) ? ` ${sentence}` : `: ${sentence}`;
   }
   // displayLine is code-point safe; the token estimator counts UTF-16 units.
   let content = displayLine({ body: text }, budget);
@@ -832,7 +900,11 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
       }
       if (opts.project && opts.project !== (project?.id ?? GLOBAL)) continue;
       if (findFix(notes, event.error, project)) continue;
-      const signature = errorSignature(scrub(event.error).text);
+      const signature = signatureCut(errorSignature(scrub(event.error).text, Infinity)
+        .replace(/(?:file:\/\/\/)?(?:[A-Za-z]:)?[\/\\]?(?:[\w.@~[\]-]+[\/\\])+[\w.@~[\]-]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)?/g, "<path>")
+        .replace(/\b[\w.-]+\.[a-z]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)/gi, "<path>")
+        .replace(/^\d+:\d+\s+/, "").replace(/\bline\s+\d+\b/gi, "line <n>")
+        .replace(/\b0x[\da-f]+\b|\b[\da-f]{8,}\b/gi, "<hex>"), 120);
       if (signature) counts.set(signature, (counts.get(signature) ?? 0) + 1);
     }
   }

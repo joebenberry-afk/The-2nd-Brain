@@ -77,10 +77,14 @@ function call(target: Json | undefined, name: string): unknown {
 }
 
 /**
- * A subagent (OMP task tool) runs this extension too, headless and in a child session. It gets the
- * card, but never writes the project's working state: that is the parent's.
+ * A subagent (OMP task tool, eval agent(), /tan clone) runs this extension too. It gets the card,
+ * but never writes the project's working state: that is the parent's. OMP ≥ 18.3 reports
+ * `ctx.agent.kind`; headless top-level runs (`omp -p`) are "main" there. Older hosts: headless and
+ * in a child session.
  */
 function isSubagent(ctx: unknown): boolean {
+  const kind = asObject(asObject(ctx)?.agent)?.kind;
+  if (kind === "main" || kind === "sub") return kind === "sub";
   if (asObject(ctx)?.hasUI !== false) return false;
   const manager = sessionManagerOf(ctx);
   return !call(manager, "getSessionFile") || typeof asObject(call(manager, "getHeader"))?.parentSession === "string";

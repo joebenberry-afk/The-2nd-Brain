@@ -99,25 +99,65 @@ function parseScalar(raw: string): string {
   return value;
 }
 
+/** Index just past the quoted span opening at `start`, or -1 when it never closes. */
+function quoteEnd(text: string, start: number): number {
+  const q = text[start];
+  for (let j = start + 1; j < text.length; j++) {
+    if (q === '"' && text[j] === "\\") j++;
+    else if (text[j] === q) {
+      if (q === "'" && text[j + 1] === "'") j++;
+      else return j + 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Walk a YAML flow value: a quote opens a quoted span only where an item starts (value start,
+ * after `[` or `,`), so apostrophes inside plain items (`can't open`) stay literal. Calls `at`
+ * for every unquoted character; `at` returning true stops the walk.
+ */
+function walkFlow(text: string, at: (c: string, i: number) => boolean): void {
+  let itemStart = true;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] as string;
+    if (itemStart && (c === '"' || c === "'")) {
+      const end = quoteEnd(text, i);
+      if (end > 0) {
+        i = end - 1;
+        itemStart = false;
+        continue;
+      }
+    }
+    if (at(c, i)) return;
+    if (c === "[" || c === ",") itemStart = true;
+    else if (!/\s/.test(c)) itemStart = false;
+  }
+}
+
 function parseInlineList(raw: string): string[] {
   const inner = raw.trim().slice(1, -1).trim();
   const parts: string[] = [];
   let start = 0;
-  for (const match of inner.matchAll(/"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|,/g)) {
-    if (match[0] !== ",") continue;
-    parts.push(parseScalar(inner.slice(start, match.index)));
-    start = match.index + 1;
-  }
+  walkFlow(inner, (c, i) => {
+    if (c === ",") {
+      parts.push(parseScalar(inner.slice(start, i)));
+      start = i + 1;
+    }
+    return false;
+  });
   parts.push(parseScalar(inner.slice(start)));
   return parts.filter((part) => part !== "");
 }
 
 /** Only unquoted whitespace-prefixed hashes start YAML comments, including within lists. */
 function stripComment(value: string): string {
-  for (const match of value.matchAll(/"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|(?:^|\s)#/g)) {
-    if (match[0].trimStart().startsWith("#")) return value.slice(0, match.index).trimEnd();
-  }
-  return value;
+  let cut = -1;
+  walkFlow(value, (c, i) => {
+    if (c === "#" && (i === 0 || /\s/.test(value[i - 1] as string))) cut = i;
+    return cut >= 0;
+  });
+  return cut < 0 ? value : value.slice(0, cut).trimEnd();
 }
 
 /**

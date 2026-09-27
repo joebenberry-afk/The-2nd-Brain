@@ -118,6 +118,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const { text, hits } = answerWithHits(loadNotes(c.home).notes, query, {
       project: c.project,
       home: c.home,
+      tools: false,
       all: c.opts.all === true,
       history: c.opts.history === true,
       limit: positiveInt(c.opts.limit, 3),

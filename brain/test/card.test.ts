@@ -77,10 +77,11 @@ describe("card", () => {
     execFileSync("git", ["init", root]);
     for (let i = 0; i < 4; i++) writeFileSync(join(root, "file" + i), "new source");
     const fresh = renderCard(home, [], { ...project, root }, { now: NOW });
-    expect(fresh).toContain("New project? MVP kits: fastapi-mvp, vite-react");
+    expect(fresh).toContain("fastapi-mvp");
+    expect(fresh).toContain("vite-react");
     createNote(home, { text: "we use vite", project: "demo", kind: "decision" });
     const known = renderCard(home, loadNotes(home).notes, project, { now: NOW });
-    expect(known).toContain("Kits for this kind of project: vite-react");
+    expect(known).toContain("vite-react");
     expect(known).not.toContain("fastapi-mvp");
   });
 
@@ -97,6 +98,27 @@ describe("card", () => {
 
 
 describe("card completeness and scope", () => {
+  it("includes the fact after a short title and skips an incomplete combined fact", () => {
+    const home = tmp();
+    const useful = createNote(home, { text: "Migration ordering\n\nApply migrations in numeric order.", project: "demo" });
+    const oversized = createNote(home, { text: "Oversized title\n\n" + "complete instruction ".repeat(120), project: "demo", kind: "gotcha" });
+    const card = renderCard(home, [oversized, useful], project);
+    expect(card).toContain("Migration ordering — Apply migrations in numeric order.");
+    expect(card).not.toContain("Oversized title");
+    expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
+  });
+
+  it.each([true, false])("advertises directly callable kits with tools=%s", (tools) => {
+    const home = tmp();
+    kit(home, "node-ts-cli", ["web"]);
+    kit(home, "omp-extension", ["web"]);
+    const card = renderCard(home, [], project, { tools });
+    const command = tools ? 'brain_recall("kit <name>")' : 'brain recall "kit <name>"';
+    expect(card).toContain("Kits: node-ts-cli, omp-extension → " + command);
+    expect(card).not.toContain(home);
+    expect(card).not.toContain("SKILL.md");
+  });
+
   it("renders long facts completely and skips oversized facts without hiding later facts", () => {
     const home = tmp();
     const long = "OMP compaction must retain the active session plan and insert the continuation after the compaction summary; " + "the complete instruction remains useful only when its final clause is visible.";
@@ -207,16 +229,17 @@ describe("local usage telemetry", () => {
     expect(s.recalls).toEqual({ calls: 3, measured: 2, matched: 1 });
   });
 
-  it("bounds telemetry growth while retaining newest complete rows", () => {
+  it("rotates telemetry past 1 MiB by rename, keeping the previous file readable by stats", () => {
     const home = tmp();
     mkdirSync(join(home, "state"), { recursive: true });
     const old = JSON.stringify({ at: NOW.toISOString(), kind: "card", project: "old", tokens: 1, ms: 1 }) + "\n";
-    writeFileSync(telemetryPath(home), old.repeat(Math.ceil(1_100_000 / old.length)));
+    const oldRows = Math.ceil(1_100_000 / old.length);
+    writeFileSync(telemetryPath(home), old.repeat(oldRows));
     logUse(home, { kind: "note", project: "newest", tokens: 1, ms: 1 }, NOW);
-    expect(statSync(telemetryPath(home)).size).toBeLessThanOrEqual(1_048_576);
     const rows = readFileSync(telemetryPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(rows.at(-1).project).toBe("newest");
-    expect(rows[0].project).toBe("old");
+    expect(rows.map((r) => r.project)).toEqual(["newest"]);
+    expect(statSync(join(home, "state", "telemetry.1.jsonl")).size).toBe(old.length * oldRows);
+    expect(stats(home, 7, NOW).byKind).toEqual({ card: { count: oldRows, tokens: oldRows }, note: { count: 1, tokens: 1 } });
   });
 });
 

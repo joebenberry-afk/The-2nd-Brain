@@ -1,8 +1,10 @@
 /**
  * One local line per Brain moment, so "is this used?" is answered by data (plan rule 1).
- * `<home>/state/telemetry.jsonl`: local bounded usage, including subagent and recall-hit data. Never throws.
+ * `<home>/state/telemetry.jsonl`: local usage, including subagent and recall-hit data. Past 1 MiB
+ * it is renamed to `telemetry.1.jsonl` (replacing the previous one): a rename, never a rewrite, so a
+ * concurrent session's append lands in one file or the other and is never lost. Never throws.
  */
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { nowIso } from "./util.ts";
 
@@ -22,27 +24,17 @@ export function telemetryPath(home: string): string {
   return join(home, "state", "telemetry.jsonl");
 }
 
+const MAX_BYTES = 1_048_576;
+
 export function logUse(home: string, use: Use, now: Date = new Date()): void {
   try {
     mkdirSync(join(home, "state"), { recursive: true });
     const path = telemetryPath(home);
     const row = JSON.stringify({ at: nowIso(now), ...use, ms: Math.round(use.ms * 10) / 10 }) + "\n";
-    const maxBytes = 1_048_576;
-    if (Buffer.byteLength(row) > maxBytes / 2) return;
-    if (existsSync(path) && statSync(path).size + Buffer.byteLength(row) > maxBytes) {
-      const fd = openSync(path, "r");
-      let tail: Buffer;
-      try {
-        const size = fstatSync(fd).size;
-        tail = Buffer.alloc(Math.min(size, maxBytes / 2));
-        const read = readSync(fd, tail, 0, tail.length, size - tail.length);
-        tail = tail.subarray(0, read);
-      } finally {
-        closeSync(fd);
-      }
-      // Start after a newline, never in the middle of JSON or a UTF-8 code point.
-      const newline = tail.indexOf(10);
-      writeFileSync(path, newline < 0 ? "" : tail.subarray(newline + 1));
+    try {
+      if (statSync(path).size + Buffer.byteLength(row) > MAX_BYTES) renameSync(path, join(home, "state", "telemetry.1.jsonl"));
+    } catch {
+      // no file yet, or another session rotated it first
     }
     appendFileSync(path, row);
   } catch {
@@ -66,10 +58,12 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
   const recalls = { calls: 0, measured: 0, matched: 0 };
   const sessions = new Set<string>();
   let text = "";
-  try {
-    text = readFileSync(telemetryPath(home), "utf8");
-  } catch {
-    return { days, sessions: 0, byKind, cards, recalls };
+  for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
+    try {
+      text += readFileSync(file, "utf8") + "\n";
+    } catch {
+      // either file may be missing
+    }
   }
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;

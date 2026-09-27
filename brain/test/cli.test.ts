@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +46,15 @@ describe("brain cli", () => {
     const home = tmp();
     await run(["note", "explicit home note", "--home", home], { env: {}, cwd: repo("demo") });
     expect(loadNotes(home).notes).toHaveLength(1);
+  });
+
+  it("offers an executable CLI widening flag", async () => {
+    const { home, io } = setup();
+    createNote(home, { text: "Foreign zebras", project: "other" });
+    const result = await run(["recall", "zebras"], io);
+    expect(result.out).toContain("(--all)");
+    expect(result.out).not.toContain("all: true");
+    expect((await run(["recall", "zebras", "--all"], io)).out).toContain("Foreign zebras");
   });
 
   it("note → recall → show → tested → retire", async () => {
@@ -123,7 +132,7 @@ describe("brain cli", () => {
     mkdirSync(events, { recursive: true });
     const rows = [
       { v: 1, at: "2026-09-27T10:00:00Z", session: "s", cwd, tool: "bash", command: "npm test", ok: false, error: "Error: Cannot find module x" },
-      { v: 1, at: "2026-09-27T10:00:05Z", session: "s", cwd, tool: "bash", command: "npm --version", ok: true },
+      { v: 1, at: "2026-09-27T10:00:05Z", session: "s", cwd, tool: "bash", command: "npm test extra-target", ok: true },
       { v: 1, at: "2026-09-27T10:01:00Z", session: "s", cwd, tool: "bash", command: "tsc --noEmit", ok: false, error: "error TS2307: cannot resolve" },
       { v: 1, at: "2026-09-27T10:01:05Z", session: "s", cwd, tool: "bash", command: "tsc --version", ok: true },
     ];
@@ -247,6 +256,18 @@ describe("brain hook claude-code", () => {
 });
 
 describe("bin/brain.mjs", () => {
+  it("exits quietly when the stdout consumer closes its pipe", async () => {
+    const child = spawn(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "help"], { stdio: ["ignore", "pipe", "pipe"] });
+    let error = "";
+    child.stderr.on("data", (chunk: Buffer) => { error += chunk.toString(); });
+    child.stdout.destroy();
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", resolve);
+    });
+    expect({ code, error }).toEqual({ code: 0, error: "" });
+  });
+
   it("runs under node from the package", () => {
     const r = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "help"], { encoding: "utf8" });
     expect(r.status).toBe(0);

@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pendingCount } from "./capture.ts";
-import { kitsDir, kitsFor, loadKits, type Kit } from "./kits.ts";
+import { kitsFor, loadKits, type Kit } from "./kits.ts";
 import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { recall } from "./search.ts";
@@ -59,8 +59,11 @@ export function rankForCard(notes: Note[], candidates: Note[], project: Project,
 function noteLine(n: Note, room: number): string {
   const prefix = `- [${n.kind}${n.tested ? ", tested" : ""}] `;
   const suffix = ` (${n.id})`;
-  const text = displayLine(n, Math.max(0, room - prefix.length - suffix.length));
-  if (!text || text !== firstLine(n)) return "";
+  const lines = n.body.split("\n").map((line) => line.trim()).filter(Boolean);
+  const title = firstLine(n);
+  const full = title.length <= 48 && lines[1] ? title + " — " + lines[1] : title;
+  const text = displayLine({ body: full }, Math.max(0, room - prefix.length - suffix.length));
+  if (!text || text !== full) return "";
   const line = prefix + text + suffix;
   return line.length <= room ? line : "";
 }
@@ -89,10 +92,10 @@ function freshRoot(root: string | null): boolean {
   }
 }
 
-/** Include only complete names and a usable path, reserving at most 64 tokens for kits. */
-function kitsLine(kits: Kit[], fresh: boolean, home: string): string {
-  const label = fresh ? "New project? MVP kits: " : "Kits for this kind of project: ";
-  const where = ` → read ${kitsDir(home).replace(/\\/g, "/")}/<name>/SKILL.md`;
+/** Include complete kit names and a callable recall, reserving at most 64 tokens. */
+function kitsLine(kits: Kit[], tools: boolean): string {
+  const label = "Kits: ";
+  const where = tools ? ' → brain_recall("kit <name>")' : ' → brain recall "kit <name>"';
   const names: string[] = [];
   for (const kit of kits) {
     if (/[\r\n]/.test(kit.name)) continue;
@@ -117,7 +120,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const ranked = rankForCard(notes, candidates, project, work?.text ?? "", now, opts.prompt);
   const allKits = opts.subagent ? [] : loadKits(home);
   const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
-  const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), fresh, home);
+  const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);
   const pending = pendingCount(home, project.id);
   const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — memory from earlier sessions; the repo wins on conflict`;
   const tail = [kits, pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
