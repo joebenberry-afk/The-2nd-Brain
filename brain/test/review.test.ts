@@ -372,3 +372,22 @@ describe("sixth review: credentials by key name, URL and header", () => {
     }
   });
 });
+
+describe("seventh review", () => {
+  it("a note whose fields contain \\r or U+2028 still loads", () => {
+    const home = tmp();
+    const note = createNote(home, { text: "pip install stalls behind proxy", project: "demo", errors: ["Downloading 50%\rProxyError"], tags: ["a b"], tested: true });
+    const { notes, errors } = loadNotes(home);
+    expect(errors).toEqual([]);
+    expect(notes[0]).toMatchObject({ id: note.id, errors: ["Downloading 50% ProxyError"], tags: ["a b"] });
+  });
+
+  it("a global note the project cannot see is not a duplicate", async () => {
+    const { findSameHeadline } = await import("../src/notes.ts");
+    const home = tmp();
+    createNote(home, { text: "Use uv for installs", project: "global", tags: ["python"] });
+    const { notes } = loadNotes(home);
+    expect(findSameHeadline(notes, "Use uv for installs", "web", ["node"])).toBeUndefined();
+    expect(findSameHeadline(notes, "Use uv for installs", "etl", ["python"])).toBeDefined();
+  });
+});

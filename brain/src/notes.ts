@@ -115,6 +115,11 @@ export function parseFrontmatter(text: string): { fields: Map<string, string | s
   return { fields, body: body.replace(/^\n+/, "") };
 }
 
+/** A frontmatter value is one line: line breaks of every kind (\r, \u2028 …) and control characters become spaces. */
+function oneLine(value: string): string {
+  return value.replace(/\s*[\r\n\u2028\u2029\u0085]+\s*/g, " ").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ");
+}
+
 function scalarOut(value: string): string {
   const plain = /^[A-Za-z0-9_./@+-][^\n]*$/.test(value) && !/(:\s|\s#|:$|^[-?]\s|\s$)/.test(value);
   const reserved = /^(true|false|null|yes|no|~|-?\d+(\.\d+)?)$/i.test(value);
@@ -177,12 +182,12 @@ export function formatNote(note: Note): string {
   for (const key of ORDER) {
     const value = values[key];
     if (LIST_KEYS.has(key)) {
-      const items = (value as string[]).filter((v) => v.trim() !== "");
+      const items = (value as string[]).map(oneLine).filter((v) => v.trim() !== "");
       if (!items.length) continue;
       lines.push(`${key}:`);
-      for (const item of items) lines.push(`  - ${scalarOut(item.replace(/\s*\n\s*/g, " "))}`);
+      for (const item of items) lines.push(`  - ${scalarOut(item)}`);
     } else if (typeof value === "string" && value !== "") {
-      lines.push(`${key}: ${scalarOut(value.replace(/\s*\n\s*/g, " "))}`);
+      lines.push(`${key}: ${scalarOut(oneLine(value))}`);
     }
   }
   lines.push("---", "", note.body.trim(), "");
@@ -312,10 +317,19 @@ export function retireNote(home: string, id: string, by?: string): Note {
   return saveNote(home, { ...note, retired: nowIso(), replacedBy: by });
 }
 
-/** An active note in `project` (or global) whose headline equals the headline of `text`, ignoring case and spacing. */
-export function findSameHeadline(notes: Note[], text: string, project: string): Note | undefined {
+/**
+ * An active note with the same headline (ignoring case and spacing) that the writer can already
+ * see: for a project note, the project's own notes and the global notes visible to it (untagged,
+ * or sharing one of `tags`); for a global note, the untagged global notes.
+ */
+export function findSameHeadline(notes: Note[], text: string, project: string, tags: string[] = []): Note | undefined {
   const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
   const wanted = key(headline({ body: text }));
   if (!wanted) return undefined;
-  return notes.find((n) => !n.retired && (n.project === project || n.project === GLOBAL) && key(headline(n)) === wanted);
+  const sees = (n: Note): boolean => {
+    if (n.project !== GLOBAL) return project !== GLOBAL && n.project === project;
+    if (!n.tags.length) return true;
+    return project !== GLOBAL && n.tags.some((t) => tags.includes(t));
+  };
+  return notes.find((n) => !n.retired && sees(n) && key(headline(n)) === wanted);
 }

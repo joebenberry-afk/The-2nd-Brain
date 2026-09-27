@@ -236,7 +236,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
           const project = resolveProject(home, cwd, env);
           const scope = params.global === true ? GLOBAL : project.id;
-          const same = findSameHeadline(loadNotes(home).notes, text, scope);
+          const same = findSameHeadline(loadNotes(home).notes, text, scope, project.tags);
           if (same) return { text: `already noted ${same.id}`, kind: "note", project: project.id };
           const note = createNote(home, {
             text,

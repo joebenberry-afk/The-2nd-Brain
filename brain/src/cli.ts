@@ -130,7 +130,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
     if (c.opts.global && c.opts.private) throw new UsageError("--global and --private exclude each other");
     const scope = c.opts.global ? GLOBAL : c.project.id;
-    const same = findSameHeadline(loadNotes(c.home).notes, text, scope);
+    const same = findSameHeadline(loadNotes(c.home).notes, text, scope, c.project.tags);
     if (same) {
       c.io.out(`already noted ${same.id}`);
       return 0;
