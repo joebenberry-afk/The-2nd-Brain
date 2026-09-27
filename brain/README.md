@@ -92,7 +92,44 @@ source `compact`, so the card — and the working state — comes back.
 Restart OMP. `-RemovePath` also takes the checkout off your PATH. Notes, kits and working state
 stay as files; nothing in the V2/V3 stores was changed by V4.
 
-## 5. Develop
+## 5. The files (edit them by hand when you like)
+
+A note, `notes/<project>/<id>.md` (scope comes from the folder: a project, `global`, or
+`<project>/private/` which never syncs):
+
+```markdown
+---
+id: n-3f9a2c1b7d
+kind: gotcha               # note | fact | decision | gotcha | procedure
+at: 2026-09-27T10:00:00Z
+source: agent              # agent | user | capture | commit | convert
+tags:                      # on global notes: only projects with one of these tags see it
+  - python
+errors:                    # error text this note fixes; "re:<regex>" for a pattern
+  - "SRE module mismatch"
+evidence:
+  - scripts/bootstrap.ps1
+tested: true               # only tested notes are appended to failed tool results
+---
+
+Clear PYTHONHOME before running python        ← the first line is the headline
+
+Why and how, in as much detail as helps.
+```
+
+Retiring keeps the file (`retired:`, `replaced_by:`); `brain retire <id> [--by <new id>]` writes
+both sides. A working state, `work/<project>.md`, is free text under a one-line frontmatter
+(`at:`), followed by an `## auto` section the extension maintains. A kit,
+`kits/<name>/SKILL.md`, is an Agent Skill (`name`, `description`, optional `tags`). Projects
+need nothing; `projects.json` adds `paths`, `remote`, `aliases` and `tags`:
+
+```json
+{ "projects": { "sztool": { "aliases": ["sz-tool", "sz-tools"], "tags": ["sparking-zero"] } } }
+```
+
+`brain check` reports any file it cannot read.
+
+## 6. Develop
 
 ```bash
 npm ci
