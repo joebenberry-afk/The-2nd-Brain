@@ -1,5 +1,0 @@
-{
-  "exit": 0,
-  "stdout": "Checking formatting...\n\nAll matched files use the correct format.\nFinished in 34ms on 8 files using 32 threads.\n",
-  "stderr": ""
-}

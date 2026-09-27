@@ -1,1 +1,0 @@
-{"PYTHONHOME_effective": null, "PYTHONPATH_effective": null, "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot", "executable": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.venv\\Scripts\\python.exe", "module_file": "C:\\Users\\assas\\Documents\\The-Second-Brain\\src\\second_brain\\__init__.py"}

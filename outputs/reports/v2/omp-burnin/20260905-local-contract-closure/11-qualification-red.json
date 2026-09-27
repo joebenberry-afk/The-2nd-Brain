@@ -1,7 +1,0 @@
-{
-  "baseline": "6baea51b0be3ac7108ca6deafe5665ab8cca0852",
-  "scope": "Historical checker, disposable fixture database only",
-  "exit": 1,
-  "stdout": "{\"empty\": {\"check\": \"qualification_ledger\", \"ok\": true, \"details\": {\"records\": [], \"proven_count\": 0}}, \"partial_failed\": {\"check\": \"qualification_ledger\", \"ok\": true, \"details\": {\"records\": [{\"qualification_id\": \"red-only\", \"phase\": \"v2-0\", \"requirement\": \"baseline_identity_and_schema\", \"status\": \"FAILED\"}], \"proven_count\": 0}}}\r\n",
-  "stderr": "Traceback (most recent call last):\r\n  File \"<string>\", line 11, in <module>\r\nAssertionError: Baseline incorrectly certifies empty and failed partial qualification ledgers\r\n"
-}

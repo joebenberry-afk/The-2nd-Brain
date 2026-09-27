@@ -4,8 +4,6 @@
 
 ```powershell
 git status                                # commit or stash local changes first
-git fetch origin
-git switch claude/new-session-nro2r6
 .\scripts\install-v4.ps1
 ```
 
@@ -28,15 +26,6 @@ loading the installed extension) wherever `pwsh` is available — including CI.
 
 No `npm install` is needed to run it (no runtime dependencies); `npm ci` in `brain/` is only for
 tests.
-
-**Memories added on this machine since the V3 snapshot** (optional, one time): the committed
-`notes/` were converted from the V3 `records/`. If the V2 database on this machine has newer
-memories, bring them over through V3 first, then convert (existing ids are skipped):
-
-```powershell
-.venv\Scripts\brain.exe convert --from-db db\brain.sqlite --legacy-home .   # V2 db → records/
-brain convert --from .                                                     # records/ → notes/
-```
 
 Open a **new terminal** (it picks up PATH and `SECOND_BRAIN_HOME`), then:
 
@@ -91,7 +80,8 @@ source `compact`, so the card — and the working state — comes back.
 ```
 
 Restart OMP. `-RemovePath` also takes `brain\bin` off your PATH. Notes, kits and working state
-stay as files; nothing in the V2/V3 stores was changed by V4.
+stay as files. The parked V2/V3 extensions expect the pre-V4 tree (tag `v2-archive`), which
+this checkout no longer contains.
 
 ## 5. The files (edit them by hand when you like)
 

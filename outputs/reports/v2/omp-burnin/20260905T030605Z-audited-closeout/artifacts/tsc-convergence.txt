@@ -1,3 +1,0 @@
-exit=2
-src/index.ts(933,32): error TS2552: Cannot find name 'session'. Did you mean '_session'?
-src/index.ts(940,53): error TS2552: Cannot find name 'session'. Did you mean '_session'?

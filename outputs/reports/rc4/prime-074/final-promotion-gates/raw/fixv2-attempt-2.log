@@ -1,8 +1,0 @@
-(node:45924) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
-(Use `node --trace-warnings ...` to show where the warning was created)
-(node:47672) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
-(Use `node --trace-warnings ...` to show where the warning was created)
-› setting up python kernel (one-time, ~30s)…
-rebuilding kernel venv
-Failed to set up the Python kernel runtime. EPERM: operation not permitted, unlink 'C:\Users\assas\.prime-eperm-repro\venvA\Scripts\python.exe.stale-1787284928903-2744.stale-1787284930455-47672'
-First-time setup needs internet to install uv, Python, ipykernel, prime-agent-runtime, and default Python packages; once set up, prime-agent runs offline. Set PRIME_AGENT_KERNEL_PYTHON to a Python with ipykernel, a current prime-agent-runtime, and default Python packages installed to skip auto-bootstrap.

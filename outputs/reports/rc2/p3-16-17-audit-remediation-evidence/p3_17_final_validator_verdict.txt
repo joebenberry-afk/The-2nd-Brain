@@ -1,8 +1,0 @@
-P3.17_PROVEN
-
-The installed real Hermes `dev` plugin registers `second_brain_handoff_read` via `ctx.register_tool`, and its handler uses the unchanged `_BrainClient.request` -> `hermes_adapter.handle_request(event="handoff_read")` path. Evidence records genuine Hermes session identity `hermes:Brain-Dev:20260828_025246_379945`, with a distinct Brain session from the OMP source session; `capsule_sha256` and `payload_sha256` exactly match the source envelope. Recovered state includes objective, next_action, the full verification dict, and no source transcript was supplied -- only the bounded envelope. `.venv/Scripts/python.exe -m pytest tests/test_handoff.py -q` passed in full. P3.1-P3.16 remain untouched by this P3.17-only fix, and Lean remains candidate/HOLD_SHADOW.
-
----
-Source: independent read-only OMP-primary re-validation session (--plan-yolo), specifically confirming the real-Hermes-host remediation
-OMP session id: 2026-08-28T06-57-42-782Z_01a04728-f97e-768b-ab22-787f6590cb02
-Model: openai-codex/gpt-5.6-luna

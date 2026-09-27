@@ -1,2 +1,0 @@
-Task P-03: Refactoring module interface and updating calls
-Description: Refactor session state accessor

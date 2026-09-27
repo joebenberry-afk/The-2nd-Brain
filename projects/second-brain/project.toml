@@ -1,6 +1,0 @@
-# Brain project manifest for projects/<id>/ (canonical copy of registration facts).
-schema_version = 1
-id = "second-brain"
-name = "The Second Brain"
-repo_path = "C:/Users/assas/Documents/The-Second-Brain"
-git_remote = "https://github.com/joebenberry-afk/The-2nd-Brain"

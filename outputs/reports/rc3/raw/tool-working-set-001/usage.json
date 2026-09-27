@@ -1,7 +1,0 @@
-{
-  "input_tokens": 308,
-  "output_tokens": 35,
-  "total_tokens": 343,
-  "schema_tokens_saved_per_turn": 1492,
-  "source": "tool-working-set-engine"
-}

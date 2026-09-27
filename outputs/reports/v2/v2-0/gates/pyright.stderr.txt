@@ -1,1 +1,0 @@
-venv .venv subdirectory not found in venv path c:\Users\assas\Documents\The-Second-Brain\.worktrees\v2-one-shot.

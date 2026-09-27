@@ -1,5 +1,0 @@
-{
-  "exit": 1,
-  "stdout": "",
-  "stderr": "\n[Uncaught Exception] Error: initial same-worktree admission failed: {\"block\":true,\"reason\":\"CONTEXT_UNAVAILABLE\"}\n    at assertAdmitted (<USERPROFILE>\\Documents\\The-Second-Brain-lifecycle-receipts\\brainstem\\prime-extension\\tests\\worker-lease.probe.ts:191:17)\n    at main (<USERPROFILE>\\Documents\\The-Second-Brain-lifecycle-receipts\\brainstem\\prime-extension\\tests\\worker-lease.probe.ts:241:5)\n    at processTicksAndRejections (native:7:39)\n"
-}

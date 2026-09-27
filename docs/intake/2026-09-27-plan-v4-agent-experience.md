@@ -224,7 +224,7 @@ installed V3/V2 runtime until the installer runs in P2, and that installer is re
 | P3 | built | capture → review → accept round trip; known fix ≤ 80 tokens on a failed tool result |
 | P4 | built, first kits written | `kits/omp-extension`, `kits/node-ts-cli`; card lists kits (all of them on a new project) |
 | P5 | built | git sync (private excluded by pathspec; slashed branches); `brain hook claude-code` |
-| P6 | waiting | after ≥ 1 week of daily use on the owner's machine |
+| P6 | kill list executed early on owner's call (2026-09-27, branch `brain/v4-baseline`); `v2-archive` tagged locally | tree is V4 only; `docs/history/pre-v4-outline.md` records what was removed |
 
 Hardening pass (2026-09-27, "perfect it without a live test"): secrets masked on every write;
 recall by note id and a retired-answer history line; duplicate notes refused; tools registered

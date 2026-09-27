@@ -1,2 +1,0 @@
-Task P-11: Driver to worker subtask delegation and resume
-Description: Delegate AST symbol parse

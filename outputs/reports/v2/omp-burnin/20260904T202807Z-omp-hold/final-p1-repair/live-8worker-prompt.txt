@@ -1,5 +1,0 @@
-Use the task tool to launch exactly 8 independent background subagents in ONE batch call. Each subagent's job: reply with exactly the text "worker-N-ok" where N is its number (1 through 8), nothing else, no tool calls.
-
-CRITICAL: after spawning the batch, you must NOT call the hub tool at all (no hub jobs, no hub wait, no polling of any kind) for the rest of this turn. Simply continue naturally; if you receive an automatic notice that a job finished, that is expected and you may read it, but never manually poll or wait on the jobs.
-
-Once you have naturally received all 8 completion notices (via whatever mechanism the harness delivers them, without you polling), reply with exactly one final line: "ALL8DONE: <n> succeeded, <n> failed" using the real counts you observed.

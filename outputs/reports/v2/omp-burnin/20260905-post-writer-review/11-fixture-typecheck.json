@@ -1,5 +1,0 @@
-{
-  "exit": 0,
-  "stdout": "",
-  "stderr": "$ tsgo -p tsconfig.json --noEmit\n"
-}

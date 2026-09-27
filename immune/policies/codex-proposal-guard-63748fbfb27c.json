@@ -1,9 +1,0 @@
-{
-  "policy_id": "codex-proposal-guard-63748fbfb27c",
-  "guard": {
-    "rollback_trigger": "codex-proposal-guard-63748fbfb27c-failure",
-    "rollback_target": "outputs/reports/v1-v2-closure-20260908T011250Z/guarded-policy-proposal.toml",
-    "backup_of": "985663c8e405915bc6b05d1e38de3bd41bcff3fcaec74235d2a6c3945a29945c",
-    "created_at": "2026-09-08T17:35:35.318361+00:00"
-  }
-}

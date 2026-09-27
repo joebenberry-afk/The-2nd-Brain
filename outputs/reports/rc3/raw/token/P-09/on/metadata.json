@@ -1,8 +1,0 @@
-{
-  "task_id": "P-09",
-  "workload_class": "RESEARCH",
-  "name": "Evaluating embedding model latency vs accuracy",
-  "brain_mode": "on",
-  "model": "gemini-3.7-flash",
-  "harness": "prime-agent"
-}

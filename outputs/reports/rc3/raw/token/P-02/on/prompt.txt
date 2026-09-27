@@ -1,2 +1,0 @@
-Task P-02: Feature implementation with helper functions
-Description: Add token expiry validator

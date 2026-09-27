@@ -1,5 +1,0 @@
-{
-  "hit": true,
-  "latency_ms": 30.064,
-  "content": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\qualification-manifest.json:876:\"class GoalStore\",\nC:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\qualification-manifest.json:897:\"class GoalStore\",\nC:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\scripts\\run_v1_p4_qualification.py:889:pattern = \"class GoalStore\"\nC:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\src\\second_brain\\goals.py:161:class GoalStore:"
-}

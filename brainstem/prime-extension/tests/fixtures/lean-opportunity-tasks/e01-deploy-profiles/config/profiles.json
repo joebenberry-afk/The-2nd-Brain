@@ -1,4 +1,0 @@
-{
-  "default_timeout_ms": 5000,
-  "prod": { "timeout_ms": 30000 }
-}

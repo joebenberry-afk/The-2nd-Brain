@@ -1,5 +1,0 @@
-# Brain project manifest for projects/<id>/ (canonical copy of registration facts).
-schema_version = 1
-id = "{id}"
-name = "{name}"
-repo_path = "{repo_path}"

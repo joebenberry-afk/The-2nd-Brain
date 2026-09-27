@@ -1,1 +1,0 @@
-runtime C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-v2\src\second_brain\__init__.py

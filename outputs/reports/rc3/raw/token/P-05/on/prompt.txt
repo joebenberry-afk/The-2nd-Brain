@@ -1,2 +1,0 @@
-Task P-05: Multi-file subsystem audit and synchronization
-Description: Cross-module storage audit

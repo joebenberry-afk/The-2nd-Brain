@@ -1,5 +1,0 @@
-{
-  "exit": 1,
-  "stdout": "\n<USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\brainstem\\prime-extension\\tests\\injection-placement.test.ts\n   7:8   error  'factory' is defined but never used. Allowed unused vars must match /^_/u               @typescript-eslint/no-unused-vars\n  13:3   error  'MEMORY_COMMANDS_TEXT' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars\n  15:15  error  'ExtensionAPI' is defined but never used. Allowed unused vars must match /^_/u          @typescript-eslint/no-unused-vars\n  15:29  error  'ExtensionContext' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars\n\n✖ 4 problems (4 errors, 0 warnings)\n\n",
-  "stderr": ""
-}

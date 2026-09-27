@@ -1,7 +1,0 @@
-{
-  "change_id": "policy-active-routing",
-  "summary": "Activate shadow skill routing for live agent sessions",
-  "risk": "high",
-  "reviewer": "",
-  "created_at": "2026-08-14T09:50:20.841601+00:00"
-}

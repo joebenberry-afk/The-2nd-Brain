@@ -1,4 +1,0 @@
-{"v": 2, "ts": "2026-08-16T16:39:40.780886+00:00", "kind": "session_start", "session": "d5320c63-456a-4e34-97f8-41f3ea5d9c6c", "harness": "antigravity", "model": "gemini-3.7-flash"}
-{"v": 2, "ts": "2026-08-16T16:39:40.780895+00:00", "kind": "lean_kernel", "session": "d5320c63-456a-4e34-97f8-41f3ea5d9c6c", "decision": "omit", "reason": "off", "kernel_chars": 0}
-{"v": 2, "ts": "2026-08-16T16:39:40.780897+00:00", "kind": "turn_end", "session": "d5320c63-456a-4e34-97f8-41f3ea5d9c6c", "turns": 5}
-{"v": 2, "ts": "2026-08-16T16:39:40.780899+00:00", "kind": "session_shutdown", "session": "d5320c63-456a-4e34-97f8-41f3ea5d9c6c"}

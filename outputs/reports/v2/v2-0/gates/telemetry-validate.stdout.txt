@@ -1,4 +1,0 @@
-1042 files, 221409 records, 3 issues
-  01a003e2-c6e4-71a8-8a36-53d88ffc786a.jsonl:34: unparseable JSON line
-  01a008bb-ae53-7120-a995-cdc0ade001f6.jsonl:4258: unparseable JSON line
-  01a008c2-7713-719d-a014-369c12638428.jsonl:1256: unparseable JSON line

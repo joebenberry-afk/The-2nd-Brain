@@ -1,8 +1,0 @@
-{
-  "task_id": "P-07",
-  "workload_class": "DEBUG",
-  "name": "SQLite concurrency lock contention triage",
-  "brain_mode": "off",
-  "model": "gemini-3.7-flash",
-  "harness": "prime-agent"
-}

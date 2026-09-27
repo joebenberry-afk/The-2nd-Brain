@@ -1,3 +1,0 @@
-Brain initialized at C:\Users\assas\Documents\The-Second-Brain\.worktrees\v1-p4-canonical-integration\outputs\reports\v1-p4\homes\shared (seeded 25 default files)
-Database ready: C:\Users\assas\Documents\The-Second-Brain\.worktrees\v1-p4-canonical-integration\outputs\reports\v1-p4\homes\shared\db\brain.sqlite (applied migrations [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-Next steps: `brainctl doctor`, `brainctl project add <repo>`, `brainctl status`

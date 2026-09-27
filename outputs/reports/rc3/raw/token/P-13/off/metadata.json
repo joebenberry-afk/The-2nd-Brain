@@ -1,8 +1,0 @@
-{
-  "task_id": "P-13",
-  "workload_class": "HANDOFF",
-  "name": "Cross-harness handoff from AGY to Prime",
-  "brain_mode": "off",
-  "model": "gemini-3.7-flash",
-  "harness": "prime-agent"
-}

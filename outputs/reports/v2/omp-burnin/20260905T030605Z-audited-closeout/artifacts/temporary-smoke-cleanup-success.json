@@ -1,7 +1,0 @@
-{
-  "command": "rm C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\receipt_smoke.ts",
-  "exit": 0,
-  "script_absent": true,
-  "retained_source_artifact": "receiver-smoke-script.json",
-  "retained_private_scratch_home": "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\receipt-smoke-home"
-}

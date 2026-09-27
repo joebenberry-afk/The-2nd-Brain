@@ -1,8 +1,0 @@
-{
-  "run_id": "action-cache-001",
-  "scenario_a_hit": true,
-  "scenario_a_latency_ms": 6.3,
-  "scenario_b_invalidation_miss": true,
-  "scenario_c_ttl_pruned": 1,
-  "safety_verification": "PASSED"
-}

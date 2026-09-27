@@ -1,87 +1,17 @@
-# The Second Brain — .gitignore
-# Doctrine: canonical human-readable knowledge is Git-versioned.
-# Derived/rebuildable/runtime data is ignored.
+# The Second Brain — notes, kits and working state are tracked; everything derived is not.
 
-# Python
-.venv/
-__pycache__/
-*.pyc
-*.egg-info/
-build/
-dist/
-.pytest_cache/
-.ruff_cache/
-.hypothesis/
-.superpowers/
-
-# Node (Prime extension)
 node_modules/
-brainstem/prime-extension/dist/
+.coverage
 
-# Runtime database + WAL artifacts (derived index; rebuilt from canonical knowledge)
-db/
-!db/.gitkeep
-
-# Runtime state (sessions, artifacts, locks, cache, projections)
+# Local-only: event logs, capture cursors, the cloud `brain` shim
 state/
-# V3 per-project views (brief, corrections) compiled from records/
-views/
-# V3 private records: searchable locally, never synced
-records/private/
-backups/
-outputs/context-capsules/
-outputs/evidence-maps/
-outputs/cache/
 
-# v1 P4 qualification (Task 8): raw command-capture evidence under
-# outputs/reports/v1-p4/raw/ is canonical evidence and tracked; the full
-# scratch Brain homes and fixtures it ran against are derived/rebuildable.
-outputs/reports/v1-p4/homes/
-outputs/reports/v1-p4/isolated/
-outputs/reports/v1-p4/fixtures/
-outputs/reports/v1-p4/verifier-scratch/
-
-# Proof campaign results are derived; manifests, fixtures, hashes, and reports are canonical.
-proof/results/
-proof/snapshots/
-proof/graphify-out/
-
-# Raw telemetry (runtime data; canonical schema docs under brainstem/telemetry are tracked)
-/telemetry/
-
-# Plasticity raw records (derived statistics)
-plasticity/
-sleep/replay-queue/
-sleep/consolidation/
-sleep/dreaming/
-sleep/reconsolidation/
-
-# Immune derived artifacts (scans, fingerprints of external content)
-immune/quarantine/
-immune/fingerprints/
-immune/baselines/
-immune/reports/
-
-# Raw episodic vault (high-volume; high-value episodes are promoted to experiences/)
-memory/episodic/
-memory/archive/
+# Per-machine CLI shims; private notes never leave the machine
+/brain.cmd
+/brain/bin/brain.cmd
+notes/*/private/
 
 # OS noise
 Thumbs.db
 Desktop.ini
 .DS_Store
-
-# RepoWise local index (derived)
-.repowise/
-.worktrees/
-
-# Campaign evidence (derived runtime captures, staged host copies, binaries and
-# archives). Canonical conclusions live under docs/; the raw tree stays on disk.
-outputs/reports/
-
-.coverage
-
-# V4: per-machine CLI shim and private notes never leave the machine
-/brain.cmd
-/brain/bin/brain.cmd
-notes/*/private/

@@ -1,5 +1,0 @@
-{
-  "exit": 1,
-  "stdout": "Checking formatting...\n\npackages/coding-agent/test/task/task-spawn.test.ts (2ms)\n\nFormat issues found in above 1 files. Run without `--check` to fix.\nFinished in 34ms on 5 files using 32 threads.\n",
-  "stderr": ""
-}

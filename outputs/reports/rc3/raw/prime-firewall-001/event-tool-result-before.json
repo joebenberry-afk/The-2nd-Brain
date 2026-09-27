@@ -1,6 +1,0 @@
-{
-  "event": "tool_result",
-  "toolName": "bash",
-  "toolCallId": "call_pytest_001",
-  "content": "============================= test session starts =============================\nplatform win32 -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0\nrootdir: C:\\Users\\assas\\Documents\\The-Second-Brain-v1\nconfigfile: pyproject.toml\nplugins: hypothesis-6.165.10, cov-7.1.0\ncollected 10 items\n\ntests\\test_cli.py ..........                                             [100%]\n\n============================= 10 passed in 5.35s ==============================\n"
-}

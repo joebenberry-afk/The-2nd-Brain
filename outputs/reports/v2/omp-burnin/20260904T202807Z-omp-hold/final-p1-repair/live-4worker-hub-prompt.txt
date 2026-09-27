@@ -1,5 +1,0 @@
-Use the task tool to launch exactly 4 independent background subagents in ONE batch call. Each subagent's job: reply with exactly the text "hubworker-N-ok" where N is its number (1 through 4), nothing else, no tool calls of its own.
-
-After spawning, explicitly poll for completion using the hub tool: call `hub` with op "wait" (blocking) repeatedly until all 4 jobs report a settled (non-running) status. This is the ONLY mechanism you should use to learn their outcomes — do not rely on any automatic notice.
-
-Finally reply with exactly one last line: "ALL4DONE: <n> succeeded, <n> failed" using the real counts you fetched via hub.

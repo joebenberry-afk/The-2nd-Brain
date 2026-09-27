@@ -1,2 +1,0 @@
-Task P-01: Single file lookup & exact constant query
-Description: Lookup auth error code

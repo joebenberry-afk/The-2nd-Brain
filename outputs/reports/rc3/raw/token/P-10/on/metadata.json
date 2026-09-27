@@ -1,8 +1,0 @@
-{
-  "task_id": "P-10",
-  "workload_class": "REVIEW",
-  "name": "Code review on multi-file PR with test diffs",
-  "brain_mode": "on",
-  "model": "gemini-3.7-flash",
-  "harness": "prime-agent"
-}

@@ -1,6 +1,0 @@
-PARENT_PID=26908
-CHILD_ID=sub-18becfeb
-CHILD_NAME=trivial-math-child-3
-RESULT=1147
-CHILD_EXIT_STATUS=completed (confirmed via rlm.list_subagents() status field before cleanup)
-CLEANUP=called await rlm.delete_subagent(handle.rlm_child_id), which returned the subagent record confirming status 'completed'

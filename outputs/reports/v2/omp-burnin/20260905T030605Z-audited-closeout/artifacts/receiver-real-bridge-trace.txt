@@ -1,7 +1,0 @@
-exit=1
-Traceback (most recent call last):
-  File "<string>", line 7, in <module>
-  File "C:\Users\assas\Documents\The-Second-Brain\.worktrees\v2-one-shot\src\second_brain\omp_adapter.py", line 259, in _prepare_worker_result
-    owner = worker_protocol.task_owner_session(home, task_id)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-TypeError: task_owner_session() missing 1 required positional argument: 'packet_sha256'

@@ -1,8 +1,0 @@
-Source repository: C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-m00
-Source commit: 749e9cda8d55000fab18b86ff4f941c695681c1d
-Target: C:\Users\assas\.omp\agent\extensions\second-brain
-File count: 17
-Manifest SHA-256: ce7fefa86ad89a607dc29ad244eedfcf588a563335f79bb73ea90b1666544421
-Pre-install backup: C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-m00\backups\20260924-025430-030-prime-extension-pre-install
-Restart OMP or run /reload to load the extension.
-exit=0

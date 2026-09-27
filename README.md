@@ -4,9 +4,9 @@
 almost nothing when it has nothing to say.** Built for Oh My Pi;
 usable from any shell or agent through the `brain` command.
 
-> **Status (2026-09-27): V4 in development** on branch `claude/new-session-nro2r6` — see
-> [the plan](docs/intake/2026-09-27-plan-v4-agent-experience.md). The V2/V3 runtimes stay in
-> the tree, untouched, until V4 has run in daily use; rollback is one command.
+> **Status (2026-09-27): V4 is the baseline** — see
+> [the plan](docs/intake/2026-09-27-plan-v4-agent-experience.md). Earlier versions are
+> outlined in [docs/history/pre-v4-outline.md](docs/history/pre-v4-outline.md).
 
 ## What an agent feels
 
@@ -59,9 +59,7 @@ runs it directly):
 In your Brain checkout:
 
 ```powershell
-git fetch origin
-git switch claude/new-session-nro2r6
-.\scripts\install-v4.ps1        # brain command on PATH, SECOND_BRAIN_HOME, OMP extension; parks V2/V3 extensions
+.\scripts\install-v4.ps1        # brain command on PATH, SECOND_BRAIN_HOME, OMP extension; parks older extensions
 brain check                     # notes, projects, kits; exit 0
 brain card                      # what a session in this project will see
 ```

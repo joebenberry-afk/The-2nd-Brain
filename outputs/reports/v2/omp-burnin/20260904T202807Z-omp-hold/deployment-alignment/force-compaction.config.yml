@@ -1,3 +1,0 @@
-compaction.enabled: true
-compaction.midTurnEnabled: true
-compaction.thresholdTokens: 3000

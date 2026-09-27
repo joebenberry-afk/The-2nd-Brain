@@ -1,6 +1,0 @@
-{
-  "exit": 0,
-  "stdout": "{\"samples_ms\":[465.8581,334.6992,332.3814,312.4257,327.85310000000004,318.1632000000002,318.0408000000002,314.5758000000001],\"median_ms\":323.0081500000001,\"result\":{\"state\":\"HARD\",\"used\":579890,\"cap\":400000}}\n",
-  "stderr": "",
-  "script": "import {runBudgetCheck} from \"C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot/brainstem/prime-extension/src/budget-bridge.ts\";const samples=[];let result;for(let i=0;i<8;i++){let t=performance.now();result=await runBudgetCheck({home:\"C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot\",sessionId:\"2026-09-05T02-16-14-068Z_01a06f5a-25f4-762b-b74e-1464fa61981f\",role:'driver',python:\"C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot/.venv/Scripts/python.exe\"});samples.push(performance.now()-t);}const sorted=[...samples].sort((a,b)=>a-b);console.log(JSON.stringify({samples_ms:samples,median_ms:(sorted[3]+sorted[4])/2,result}));"
-}

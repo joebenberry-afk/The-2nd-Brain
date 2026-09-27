@@ -1,7 +1,0 @@
-(node:24396) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
-(Use `node --trace-warnings ...` to show where the warning was created)
-(node:26504) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
-(Use `node --trace-warnings ...` to show where the warning was created)
-› setting up python kernel (one-time, ~30s)…
-✓ ready
-kernel python: C:\Users\assas\.prime-eperm-repro\venvB\Scripts\python.exe

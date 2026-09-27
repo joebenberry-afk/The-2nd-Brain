@@ -1,4 +1,0 @@
-exit=1
-signal=null
-killed=false
-The filename, directory name, or volume label syntax is incorrect.

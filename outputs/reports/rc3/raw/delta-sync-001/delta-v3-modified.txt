@@ -1,5 +1,0 @@
-[BRAIN_DELTA_SYNC v1]
-Minimal incremental memory updates applied to your session:
-~ [MODIFY] mem-auth-spec (v1 -> v2)
-    version: 2
-    guidance: Require bearer token + MFA challenge on all private routes.

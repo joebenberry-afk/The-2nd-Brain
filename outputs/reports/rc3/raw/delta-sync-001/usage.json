@@ -1,7 +1,0 @@
-{
-  "input_tokens": 22,
-  "output_tokens": 15,
-  "total_tokens": 37,
-  "raw_tokens_avoided": 152,
-  "source": "delta-sync-engine"
-}

@@ -1,5 +1,0 @@
-{
-  "exit": 0,
-  "stdout": "",
-  "stderr": "Invoke-Pester : A parameter cannot be found that matches parameter name 'Show'.\r\nAt line:1 char:145\r\n+ ... shot/brainstem/tests/install-prime-extension.Tests.ps1' -Show None -P ...\r\n+                                                             ~~~~~\r\n    + CategoryInfo          : InvalidArgument: (:) [Invoke-Pester], ParameterBindingException\r\n    + FullyQualifiedErrorId : NamedParameterNotFound,Invoke-Pester\r\n \r\n"
-}

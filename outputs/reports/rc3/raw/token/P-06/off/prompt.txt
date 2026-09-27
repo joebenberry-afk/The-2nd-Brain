@@ -1,2 +1,0 @@
-Task P-06: Diagnosing test failure in test_cli.py
-Description: Isolate CLI exit code mismatch

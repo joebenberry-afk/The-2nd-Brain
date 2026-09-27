@@ -1,5 +1,0 @@
-{
-  "exit": 0,
-  "stdout": "{\"native_cancelled\":true,\"unsettled_blocked_after_cancel\":true,\"obligation_survived_eviction\":true,\"cleanup_durably_released\":true,\"same_file_second_writer_completed\":true,\"different_worktree_concurrent\":true,\"providers_used\":0}\n",
-  "stderr": ""
-}

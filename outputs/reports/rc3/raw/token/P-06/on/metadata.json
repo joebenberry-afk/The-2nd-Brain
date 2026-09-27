@@ -1,8 +1,0 @@
-{
-  "task_id": "P-06",
-  "workload_class": "DEBUG",
-  "name": "Diagnosing test failure in test_cli.py",
-  "brain_mode": "on",
-  "model": "gemini-3.7-flash",
-  "harness": "prime-agent"
-}

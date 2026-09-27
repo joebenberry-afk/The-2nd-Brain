@@ -1,1 +1,0 @@
-{"session_id": "q8-harness-bridge", "event": "session_start", "heartbeat": {"mode": "shadow", "event": "session_start", "due": true, "ran": true, "healthy": true, "db_ok": true, "cache_pruned_count": 0, "git_dirty": true, "issue_codes": [], "latency_ms": 47, "model_tokens_used": 0, "maintenance_mutated": false}, "candidate_count": 0, "candidates": [], "fingerprints": []}

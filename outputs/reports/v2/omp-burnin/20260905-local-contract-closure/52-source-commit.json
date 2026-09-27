@@ -1,9 +1,0 @@
-{
-  "sourceCommit": "c166c9816b963d7f0e3e4f2c83179ea897651c1e",
-  "gitTree": "8fa72e6a36e2208c7d027bc5ff3168ee2abae2fc",
-  "source_tree_sha256": "bbeb0cc5596940f26605d586663cc5f4bbdba4e88ce9393fad67a110b790f13b",
-  "adapter_build_fingerprint": "46a3a38455ba882137c548aa5be9622d342a4d7743cc32ba18006d7922caf5df",
-  "proof": "1914 Python tests, 162 focused tests and frozen native smoke bind these unchanged source bytes. Commit tree equals pre-smoke frozen tree.",
-  "historicalSource": "a003939c6c906ae1b3e33e06ebabdebc58ef0c81",
-  "historicalEvidence": "6baea51b0be3ac7108ca6deafe5665ab8cca0852"
-}
