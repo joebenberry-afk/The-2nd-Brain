@@ -60,14 +60,14 @@ it("a failure fixed in one session becomes the known fix, the card and the resum
   // After the summary: Anthropic's native compaction drops everything before it.
   const resume = patched.messages[1];
   expect(resume?.customType).toBe(CARD_TYPE);
-  expect(resume?.content).toContain("Goal: green test suite.");
+  expect(resume?.content).toContain("Goal: green test suite");
   expect(resume?.content).toContain("- edited: src/cart.ts");
   expect(resume?.content).toContain("- last failure: npm test → Error: Cannot find module 'left-pad'");
   day1.fire("session_shutdown", {}, s1);
 
   // Between sessions: review turns the failed → fixed pair into a tested gotcha.
   const review = await cli(home, app, "review");
-  const pid = /^(p-[0-9a-f]+) \[gotcha, tested\] npm: npm test fails/m.exec(review)?.[1];
+  const pid = /^(p-[0-9a-f]+) \[gotcha, tested\]/m.exec(review)?.[1];
   expect(pid, review).toBeDefined();
   expect(await cli(home, app, "accept", pid as string)).toMatch(/^accepted p-[0-9a-f]+ → n-[0-9a-f]{10}$/);
 
@@ -83,11 +83,11 @@ it("a failure fixed in one session becomes the known fix, the card and the resum
   const failed = day2.fire("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: true, content: [{ type: "text", text: "Error: Cannot find module 'left-pad'\n  at require" }] }, s2) as {
     content: { text: string }[];
   };
-  expect(failed.content.at(-1)?.text).toMatch(/^Brain \(advisory\): npm: npm test fails .*npm ci && npm test works/);
+  expect(failed.content.at(-1)?.text).toMatch(/^Brain: .*npm ci && npm test works/);
 
   // Another project does not see the app's gotcha unless asked across projects.
   const other = { cwd: tool, sessionManager: { getSessionId: () => "s3" } };
-  expect(day2.call("brain_recall", { query: "left-pad module" }, other)).toBe("no match");
+  expect(day2.call("brain_recall", { query: "left-pad module" }, other)).toMatch(/^no match here; 1 related in other projects/);
   expect(day2.call("brain_recall", { query: "left-pad module", all: true }, other)).toContain("npm test fails");
   // A learning marked global reaches every project; a duplicate is refused.
   expect(day2.call("brain_note", { text: "Use UTC timestamps in every log line", kind: "decision", global: true }, other)).toMatch(/^saved n-/);

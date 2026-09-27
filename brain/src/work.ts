@@ -33,7 +33,7 @@ export function workPath(home: string, project: string): string {
 }
 
 /** Read a work file; return null when missing, unreadable, or unparseable. */
-export function readWork(home: string, project: string): Work | null {
+function readPlan(home: string, project: string): Work | null {
   const path = workPath(home, project);
   let raw: string;
   try {
@@ -66,12 +66,44 @@ export function readWork(home: string, project: string): Work | null {
   return { project, at, autoAt, text, auto, path };
 }
 
+/** Merge the canonical agent plan with machine-local observations; old inline auto remains readable. */
+export function readWork(home: string, project: string): Work | null {
+  const plan = readPlan(home, project);
+  try {
+    const { fields, body } = parseFrontmatter(readFileSync(join(home, "state", "work", `${project}.auto.md`), "utf8"));
+    const stamp = fields.get("at");
+    return { project, path: workPath(home, project), at: plan?.at ?? "", text: plan?.text ?? "", autoAt: typeof stamp === "string" ? stamp : "", auto: body.trim() };
+  } catch {
+    return plan;
+  }
+}
+
+/** Label-aware truncation: a long Done must never crowd out a late Next. */
+function planText(text: string, budget: number): string {
+  const labels = [...text.matchAll(/(?:^|[\n/.;·]\s*|\s+)(Goal|Done|Next|Watch out):\s*|(?:^|[\n/·]\s*)(Goal|Done|Next|Watch out)\s+/gi)];
+  if (!labels.length) return cutToTokens(text, budget);
+  const parts = labels.map((match, i) => ({
+    label: (match[1] ?? match[2]!).toLowerCase(),
+    text: text.slice(match.index! + match[0].length, labels[i + 1]?.index ?? text.length).trim(),
+  }));
+  const lines: string[] = [];
+  let remaining = budget * 4;
+  for (const label of ["goal", "next", "watch out", "done"]) {
+    const value = parts.filter(part => part.label === label).map(part => part.text).join(" ");
+    if (!value || remaining < label.length + 5) continue;
+    const line = cutToTokens(`${label[0]!.toUpperCase()}${label.slice(1)}: ${value}`, Math.floor(Math.min(remaining, budget * 2) / 4));
+    lines.push(line);
+    remaining -= line.length + 1;
+  }
+  return lines.join("\n");
+}
+
 /** Write work text (agent text, drops auto section). Throws WorkError on empty text. */
 export function writeWork(home: string, project: string, text: string): Work {
   const trimmed = scrub(text, { longRuns: false }).text.trim();
   if (!trimmed) throw new WorkError("empty work text");
 
-  const cut = cutToTokens(trimmed, WORK_BUDGET);
+  const cut = trimmed.length <= WORK_BUDGET * 4 ? trimmed : planText(trimmed, WORK_BUDGET);
   const at = nowIso();
   const frontmatter = `---\nat: ${at}\n---`;
   const content = `${frontmatter}\n\n${cut}\n`;
@@ -79,14 +111,7 @@ export function writeWork(home: string, project: string, text: string): Work {
   const path = workPath(home, project);
   writeAtomic(path, content);
 
-  return {
-    project,
-    at,
-    autoAt: "",
-    text: cut,
-    auto: "",
-    path,
-  };
+  return readWork(home, project)!;
 }
 
 /**
@@ -121,52 +146,36 @@ export function formatAuto(fields: AutoFields): string {
   return cutToTokens(lines.join("\n"), AUTO_BUDGET);
 }
 
-/** Write/update auto section. Returns updated work, or null if nothing to say and no existing file. */
+/** Write observations only to local state: never read-modify-write the synced plan. */
 export function writeAuto(home: string, project: string, fields: AutoFields): Work | null {
   const formatted = formatAuto(fields);
-  if (!formatted) {
-    // Nothing to say: return existing work unchanged, or null
-    return readWork(home, project);
-  }
-
-  const existing = readWork(home, project);
-  const text = existing?.text ?? "";
-
-  // Refreshing the auto section does not make the plan newer: `at` moves only with the text, and a
-  // file without a plan has no `at` at all (so it never wins a sync conflict against a real plan).
-  const autoAt = nowIso();
-  const at = text ? (existing?.at ?? autoAt) : "";
-  const frontmatter = at ? `---\nat: ${at}\nauto_at: ${autoAt}\n---` : `---\nauto_at: ${autoAt}\n---`;
-  const autoSection = `## auto\n${formatted}`;
-  const parts = [frontmatter];
-  if (text) parts.push("", text);
-  parts.push("", autoSection, "");
-  const content = parts.join("\n");
-
-  const path = workPath(home, project);
-  writeAtomic(path, content);
-
-  return {
-    project,
-    at,
-    autoAt,
-    text,
-    auto: formatted,
-    path,
-  };
+  if (!formatted) return readWork(home, project);
+  writeAtomic(join(home, "state", "work", `${project}.auto.md`), `---\nat: ${nowIso()}\n---\n\n${formatted}\n`);
+  return readWork(home, project);
 }
 
-/** Resume text for an agent (context of where we left off). */
+function timestamp(at: string): string {
+  return at ? `${at.slice(0, 16).replace("T", " ")} UTC` : "time unknown";
+}
+
+function planHeading(work: Work): string {
+  const stale = Date.parse(work.autoAt) - Date.parse(work.at) > 3 * 86400000;
+  return `${stale ? "plan may be stale — " : ""}Where we left off (${timestamp(work.at)}):`;
+}
+
+/** Full working-state display; plan and observations retain their own timestamps. */
 export function resumeText(work: Work | null): string {
   if (!work || (!work.text && !work.auto)) return "";
-
-  const latest = work.autoAt > work.at ? work.autoAt : work.at;
-  const timeStr = latest.slice(0, 16).replace("T", " ");
-  const prefix = `Where we left off (${timeStr} UTC):`;
-  const parts = [prefix];
-
-  if (work.text) parts.push(work.text);
-  if (work.auto) parts.push(work.auto);
-
+  const parts = work.text ? [planHeading(work), work.text] : ["Where we left off:"];
+  if (work.auto) parts.push(`Auto (${timestamp(work.autoAt)}):`, work.auto);
   return parts.join("\n");
 }
+
+/** The complete compaction injection, including labels, is at most 150 estimated tokens. */
+export function renderResume(work: Work | null, _now?: Date): string {
+  if (!work || (!work.text && !work.auto)) return "";
+  const parts = work.text ? [planHeading(work), planText(work.text, 100)] : ["Where we left off:"];
+  if (work.auto) parts.push(`Auto (${timestamp(work.autoAt)}):`, work.auto);
+  return cutToTokens(parts.join("\n"), WORK_BUDGET);
+}
+

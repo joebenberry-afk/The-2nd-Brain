@@ -67,6 +67,20 @@ export function headline(note: Pick<Note, "body">): string {
   return text.length > 160 ? text.slice(0, 159) + "…" : text;
 }
 
+/** Full first line, bounded by code points; prefer a complete word before the ellipsis. */
+export function displayLine(note: Pick<Note, "body">, maxChars: number): string {
+  const chars = Array.from(firstLine(note));
+  const limit = Math.max(0, Math.floor(maxChars));
+  if (chars.length <= limit) return chars.join("");
+  if (!limit) return "";
+  let text = chars.slice(0, limit - 1).join("");
+  if (chars[limit - 1] && !/\s/.test(chars[limit - 1]!)) {
+    const boundary = text.search(/\s+\S*$/u);
+    if (boundary >= 0) text = text.slice(0, boundary);
+  }
+  return text.trimEnd() + "…";
+}
+
 export function isActive(note: Note): boolean {
   return !note.retired;
 }
@@ -87,16 +101,23 @@ function parseScalar(raw: string): string {
 
 function parseInlineList(raw: string): string[] {
   const inner = raw.trim().slice(1, -1).trim();
-  if (!inner) return [];
-  return inner.split(",").map((part) => parseScalar(part)).filter((part) => part !== "");
+  const parts: string[] = [];
+  let start = 0;
+  for (const match of inner.matchAll(/"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|,/g)) {
+    if (match[0] !== ",") continue;
+    parts.push(parseScalar(inner.slice(start, match.index)));
+    start = match.index + 1;
+  }
+  parts.push(parseScalar(inner.slice(start)));
+  return parts.filter((part) => part !== "");
 }
 
-/** A value ends at " #" (a YAML comment); a quoted value's quotes protect a "#" inside them. */
+/** Only unquoted whitespace-prefixed hashes start YAML comments, including within lists. */
 function stripComment(value: string): string {
-  const quoted = /^"(?:\\.|[^"\\])*"|^'(?:''|[^'])*'/.exec(value);
-  const start = quoted ? quoted[0].length : 0;
-  const hash = /(^|\s)#/.exec(value.slice(start));
-  return hash ? value.slice(0, start + hash.index).trimEnd() : value;
+  for (const match of value.matchAll(/"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|(?:^|\s)#/g)) {
+    if (match[0].trimStart().startsWith("#")) return value.slice(0, match.index).trimEnd();
+  }
+  return value;
 }
 
 /**
@@ -403,9 +424,9 @@ export function createNote(home: string, input: NewNote): Note {
     private: input.private ?? false,
     at: nowIso(),
     source: input.source ?? "agent",
-    tags: tagList(input.tags ?? []),
+    tags: tagList((input.tags ?? []).map(clean)),
     errors: (input.errors ?? []).map(clean),
-    evidence: input.evidence ?? [],
+    evidence: (input.evidence ?? []).map(clean),
     tested: input.tested ?? false,
     replaces: input.replaces,
     body,
@@ -424,9 +445,9 @@ export function upgradeNote(home: string, note: Note, input: Omit<NewNote, "text
   const merged: Note = {
     ...note,
     kind: input.kind ?? note.kind,
-    tags: tagList([...note.tags, ...(input.tags ?? [])]),
+    tags: tagList([...note.tags, ...(input.tags ?? [])].map(clean)),
     errors: [...new Set([...note.errors, ...(input.errors ?? []).map(clean)])],
-    evidence: [...new Set([...note.evidence, ...(input.evidence ?? [])])],
+    evidence: [...new Set([...note.evidence, ...(input.evidence ?? [])].map(clean))],
     tested: note.tested || input.tested === true,
   };
   return formatNote(merged) === formatNote(note) ? null : saveNote(home, merged);
@@ -451,15 +472,17 @@ export function retireNote(home: string, id: string, by?: string): Note {
  * An active note with the same headline (ignoring case and spacing) that the writer can already
  * see: for a project note, the project's own notes and the global notes visible to it (untagged,
  * or sharing one of `tags`); for a global note, the untagged global notes.
+ * Private requests match only private notes in the same project, never a public/global fallback.
  */
-export function findSameHeadline(notes: Note[], text: string, project: string, tags: string[] = []): Note | undefined {
+export function findSameHeadline(notes: Note[], text: string, project: string, tags: string[] = [], isPrivate = false): Note | undefined {
   const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-  const wanted = key(headline({ body: text }));
+  const wanted = key(firstLine({ body: text }));
   if (!wanted) return undefined;
   const sees = (n: Note): boolean => {
+    if (isPrivate) return n.private && n.project === project;
     if (n.project !== GLOBAL) return project !== GLOBAL && n.project === project;
     if (!n.tags.length) return true;
     return project !== GLOBAL && n.tags.some((t) => tags.includes(t));
   };
-  return notes.find((n) => !n.retired && sees(n) && key(headline(n)) === wanted);
+  return notes.find((n) => !n.retired && sees(n) && key(firstLine(n)) === wanted);
 }

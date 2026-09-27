@@ -7,12 +7,12 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import { createNote, findSameHeadline, GLOBAL, KINDS, loadNotes, upgradeNote, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { answer } from "./search.ts";
+import { answerWithHits } from "./search.ts";
 import { appendEvent, errorSignature, findFix, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { logUse, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
-import { writeAuto, writeWork } from "./work.ts";
+import { readWork, renderResume, writeAuto, writeWork } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
@@ -116,6 +116,9 @@ export function editedPaths(input: unknown): string[] {
   for (const key of ["path", "file_path", "filePath", "file", "paths"]) {
     const value = obj[key];
     for (const item of Array.isArray(value) ? value : [value]) if (typeof item === "string" && item.trim()) found.push(item.trim());
+  }
+  if (typeof obj.input === "string") {
+    for (const match of obj.input.matchAll(/^(?:\[([^\]\r\n]+)#[0-9A-Fa-f]{4}\]|MV ([^\r\n]+))\r?$/gm)) found.push((match[1] ?? match[2]!).trim());
   }
   return [...new Set(found)].filter((p) => !/^[a-z][a-z0-9+.-]*:\/\//i.test(p));
 }
@@ -246,13 +249,14 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       label: string,
       description: string,
       props: Record<string, Param>,
-      run: (params: Json, cwd: string, session: string) => { text: string; kind: UseKind; project: string },
+      run: (params: Json, cwd: string, session: string, ctx: unknown) => { text: string; kind?: UseKind; project: string; hits?: number },
     ) => ({
       name,
       label,
       description,
       // OMP moves extension tools behind xd:// unless they are essential; the card names them directly.
       loadMode: "essential",
+      approval: name === "brain_recall" ? "read" : "write",
       parameters: schema(pi.typebox, props),
       execute(...args: unknown[]) {
         const started = performance.now();
@@ -260,8 +264,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const required = Object.keys(props).find((k) => !props[k]?.optional) ?? "";
           const { params, cwd, ctx } = toolArgs(args, required);
           const session = sessionKey(ctx);
-          const result = run(params, cwd, session);
-          logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session });
+          const result = run(params, cwd, session, ctx);
+          if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, hits: result.hits });
           return { content: [{ type: "text", text: result.text }], details: {} };
         } catch (error) {
           return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
@@ -278,7 +282,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         (params, cwd) => {
           const query = requireString(params.query, "query");
           const project = resolveProject(home, cwd, env);
-          return { text: answer(loadNotes(home).notes, query, { project, all: params.all === true }), kind: "recall", project: project.id };
+          return { ...answerWithHits(loadNotes(home).notes, query, { home, project, all: params.all === true }), kind: "recall", project: project.id };
         },
       ),
     );
@@ -328,8 +332,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         "Brain state",
         "Replace this project's working state (goal, done, next, watch out) so work resumes after compaction or in the next session. Update it when the plan changes; under 120 words.",
         { text: { type: "string", description: "goal, done, next, watch out" } },
-        (params, cwd) => {
+        (params, cwd, _session, ctx) => {
           const project = resolveProject(home, cwd, env);
+          if (isSubagent(ctx)) return { text: "not saved: working state belongs to the parent session", project: project.id };
           const work = writeWork(home, project.id, requireString(params.text, "text"));
           return { text: `state saved (${estimateTokens(work.text)} tokens)`, kind: "state", project: project.id };
         },
@@ -369,12 +374,13 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         } catch {
           // the card matters more than the count
         }
-        const cardContent = renderCard(home, notes, project, { tools: toolsOn });
+        const subagent = isSubagent(ctx);
+        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, prompt: typeof prompt === "string" ? prompt : undefined });
 
         if (cardContent) {
           state.carded = true;
           state.cardPending = true;
-          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key });
+          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key, sub: subagent });
           return buildCardMessage(cardContent);
         }
         state.carded = true;
@@ -437,7 +443,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       saveAuto(ctx);
       const reason = asObject(event)?.reason;
       const state = getSession(sessionKey(ctx));
-      carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], resume: undefined, resumeSeen: false, cardPending: false } : undefined;
+      carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], resume: reason === "fork" ? state.resume : undefined, resumeSeen: reason === "fork" ? state.resumeSeen : false, cardPending: false } : undefined;
     } catch {
       carry = undefined;
     }
@@ -472,10 +478,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         return undefined;
       }
 
-      // Build fresh card and freeze as resume
-      const { notes } = loadNotes(home);
+      // Freeze only working state; compaction never resends notes, kits or the tool footer.
       const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-      const cardContent = renderCard(home, notes, project, { tools: toolsOn });
+      const cardContent = isSubagent(ctx) ? "" : renderResume(readWork(home, project.id));
 
       if (cardContent) {
         const now = Date.now();
@@ -510,14 +515,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const key = sessionKey(ctx);
       const state = getSession(key);
       const eventObj = asObject(event);
-      const cwd = cwdOf(ctx) ?? process.cwd();
-      const project = resolveProject(home, cwd, env);
+      const sessionCwd = cwdOf(ctx) ?? process.cwd();
 
       // Extract tool event fields
       const toolName = eventObj?.toolName;
       const input = eventObj?.input;
       const isError = eventObj?.isError;
       const content = eventObj?.content;
+      const shellCwd = toolName === "bash" ? asObject(input)?.cwd : undefined;
+      const cwd = typeof shellCwd === "string" && shellCwd ? resolve(sessionCwd, shellCwd) : sessionCwd;
 
       const fields = toolEventFrom(toolName, input, isError, content);
 
@@ -527,6 +533,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // Track edited path on success
       // Only tools that change files count as edits; reads and searches also carry a path.
       if (fields.ok && EDITING_TOOL.test(fields.tool)) {
+        const project = resolveProject(home, cwd, env);
         // Relative to the project root when inside it; the last 20 distinct files, most recent last
         const paths = editedPaths(input).map((p) => displayPath(p, project.root, cwd));
         state.edited = [...state.edited.filter((f) => !paths.includes(f)), ...paths].slice(-20);
@@ -547,6 +554,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
       // On failed result, find and append a fix if available
       if (!fields.ok && fields.error) {
+        const project = resolveProject(home, cwd, env);
         const { notes } = loadNotes(home);
         const fix = findFix(notes, fields.error, project);
 

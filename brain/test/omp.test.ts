@@ -2,13 +2,14 @@
  * Tests for the OMP extension (brain/src/omp.ts).
  * Fake host collecting handlers and tools, with temp directories for Brain home.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import secondBrain, { CARD_TYPE, type HostLike } from "../src/omp.ts";
+import secondBrain, { CARD_TYPE, editedPaths, type HostLike } from "../src/omp.ts";
 import { createNote } from "../src/notes.ts";
-import { readWork } from "../src/work.ts";
+import { readWork, writeWork } from "../src/work.ts";
+import { estimateTokens } from "../src/util.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -146,13 +147,7 @@ describe("OMP extension", () => {
     mkdirSync(join(workDir, ".git"), { recursive: true });
     writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
 
-    // Create a note that will be visible in the work project
-    mkdirSync(join(home, "notes", "work"), { recursive: true });
-    createNote(home, {
-      text: "Resume content here",
-      project: "work",
-      kind: "fact",
-    });
+    writeWork(home, "work", "Goal: Resume content here");
 
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;
@@ -207,11 +202,7 @@ describe("OMP extension", () => {
     const compact = handlers.get("session_compact")!;
     const contextHandler = handlers.get("context")!;
 
-    createNote(home, {
-      text: "Test resume",
-      project: "omp",
-      kind: "fact",
-    });
+    writeWork(home, "work", "Goal: Test resume");
 
     const session = "s-dedup";
     const c = ctx(session);
@@ -241,12 +232,7 @@ describe("OMP extension", () => {
     mkdirSync(join(workDir, ".git"), { recursive: true });
     writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
 
-    mkdirSync(join(home, "notes", "work"), { recursive: true });
-    createNote(home, {
-      text: "Fallback resume",
-      project: "work",
-      kind: "fact",
-    });
+    writeWork(home, "work", "Goal: Fallback resume");
 
     const { handlers } = load();
     const compact = handlers.get("session_compact")!;
@@ -262,6 +248,7 @@ describe("OMP extension", () => {
     const result = start({ prompt: "after compact" }, c) as any;
     expect(result).toBeDefined();
     expect(result.message.customType).toBe(CARD_TYPE);
+    expect(result.message.details.resume).toBe(true);
     expect(result.message.content).toContain("Fallback resume");
 
     // Resume should be cleared after fallback
@@ -379,8 +366,8 @@ describe("OMP extension", () => {
     for (let i = 1; i <= 5; i++) {
       toolResult(
         {
-          toolName: "write",
-          input: { path: `file${i}.ts` },
+          toolName: "edit",
+          input: { input: `*** Begin Patch\n[file${i}.ts#ABCD]\nPUT 1.=1:\n+updated\n*** End Patch` },
           isError: false,
           content: [],
         },
@@ -570,6 +557,75 @@ describe("OMP extension", () => {
     const result2 = contextHandler({ messages: "not-an-array" }, c);
     expect(result2).toBeUndefined();
   });
+
+  it("subagent brain_state cannot overwrite the parent's plan", () => {
+    const plan = writeWork(home, "work", "Goal: parent owns this plan");
+    const before = readFileSync(plan.path, "utf8");
+    const { tools } = load({ SECOND_BRAIN_HOME: home }, true);
+    const stateTool = tools.find((t: any) => t.name === "brain_state") as any;
+    const child = { ...ctx("child"), hasUI: false, sessionManager: { getSessionId: () => "child", getSessionFile: () => "child.jsonl", getHeader: () => ({ parentSession: "parent.jsonl" }) } };
+    const result = stateTool.execute("id", { text: "Goal: child task" }, undefined, undefined, child);
+    expect(result.content[0].text).toBe("not saved: working state belongs to the parent session");
+    expect(readFileSync(plan.path, "utf8")).toBe(before);
+    expect(existsSync(join(home, "state"))).toBe(false);
+  });
+
+  it("compaction freezes only bounded working state and preserves it on fork", () => {
+    writeWork(home, "work", "Goal: ship release. Next: run integration.");
+    createNote(home, { project: "work", text: "Unrelated durable fact " + "detail ".repeat(100) });
+    const { handlers } = load();
+    const c = ctx("parent");
+    handlers.get("before_agent_start")!({ prompt: "ship release" }, c);
+    handlers.get("context")!({ messages: [] }, c);
+    handlers.get("session_compact")!({}, c);
+    const messages = [{ role: "compactionSummary", content: "summary" }, { role: "user", content: "continue" }];
+    const result = handlers.get("context")!({ messages }, c) as any;
+    const resume = result.messages[1];
+    expect(estimateTokens(resume.content)).toBeLessThanOrEqual(150);
+    expect(resume.content).toContain("Next: run integration");
+    expect(resume.content).not.toContain("Unrelated durable fact");
+    writeWork(home, "work", "Goal: a newer plan not in the frozen context");
+    handlers.get("session_before_switch")!({ reason: "fork" }, c);
+    const fork = ctx("fork");
+    handlers.get("session_switch")!({ reason: "fork" }, fork);
+    const forked = handlers.get("context")!({ messages }, fork) as any;
+    expect(forked?.messages[1]).toEqual(resume);
+  });
+
+  it("bash cwd attributes the event and known fix to the command's project", () => {
+    const a = join(root, "a");
+    const b = join(root, "b");
+    mkdirSync(a); mkdirSync(b);
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { a: { paths: [a] }, b: { paths: [b] } } }));
+    createNote(home, { project: "b", text: "Use the project B compiler", errors: ["compiler missing"], tested: true });
+    const { handlers } = load();
+    const result = handlers.get("tool_result")!({ toolName: "bash", input: { command: "build", cwd: "../b" }, isError: true, content: [{ type: "text", text: "compiler missing" }] }, ctx("cwd", a)) as any;
+    expect(result?.content[1].text).toContain("Use the project B compiler");
+    const eventsDir = join(home, "state", "events");
+    const rows = readdirSync(eventsDir).flatMap(f => readFileSync(join(eventsDir, f), "utf8").trim().split("\n").map(row => JSON.parse(row)));
+    expect(rows[0].cwd).toBe(b);
+  });
+
+  it("hashline edits track source and move destination but not patch body headers", () => {
+    expect(editedPaths({ input: "*** Begin Patch\n[src/a.ts#1A2B]\nPUT 1.=1:\n+[fake.ts#ABCD]\nMV src/b.ts\n[src/c.ts#ABCD]\nREM\n*** End Patch" })).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+  });
+
+  it("child startup omits the parent plan and measures child cards and recall hits", () => {
+    writeWork(home, "work", "Goal: private parent plan");
+    createNote(home, { project: "work", text: "Compiler wiring uses the plugin registry" });
+    const { tools, handlers } = load({ SECOND_BRAIN_HOME: home }, true);
+    const child = { ...ctx("child-card"), hasUI: false };
+    const result = handlers.get("before_agent_start")!({ prompt: "compiler wiring" }, child) as any;
+    expect(result.message.content).not.toContain("private parent plan");
+    expect(result.message.content).not.toContain("brain_state(");
+    const recall = tools.find((t: any) => t.name === "brain_recall") as any;
+    recall.execute("hit", { query: "compiler wiring" }, undefined, undefined, child);
+    recall.execute("miss", { query: "zzzyyyxxx" }, undefined, undefined, child);
+    const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(row => JSON.parse(row));
+    expect(rows.find(row => row.kind === "card").sub).toBe(true);
+    expect(rows.filter(row => row.kind === "recall").map(row => row.hits)).toEqual([1, 0]);
+  });
+
 });
 
 describe("tool plumbing", () => {

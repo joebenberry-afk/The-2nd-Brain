@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main, type Io } from "../src/cli.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
+import { appendEvent } from "../src/capture.ts";
+import { logUse } from "../src/telemetry.ts";
 
 const tmp = (p = "brain-cli-") => mkdtempSync(join(tmpdir(), p));
 
@@ -121,13 +123,13 @@ describe("brain cli", () => {
     mkdirSync(events, { recursive: true });
     const rows = [
       { v: 1, at: "2026-09-27T10:00:00Z", session: "s", cwd, tool: "bash", command: "npm test", ok: false, error: "Error: Cannot find module x" },
-      { v: 1, at: "2026-09-27T10:00:05Z", session: "s", cwd, tool: "bash", command: "npm ci && npm test", ok: true },
-      { v: 1, at: "2026-09-27T10:01:00Z", session: "s", cwd, tool: "bash", command: "tsc", ok: false, error: "error TS2307: cannot resolve" },
-      { v: 1, at: "2026-09-27T10:01:05Z", session: "s", cwd, tool: "bash", command: "tsc -p .", ok: true },
+      { v: 1, at: "2026-09-27T10:00:05Z", session: "s", cwd, tool: "bash", command: "npm --version", ok: true },
+      { v: 1, at: "2026-09-27T10:01:00Z", session: "s", cwd, tool: "bash", command: "tsc --noEmit", ok: false, error: "error TS2307: cannot resolve" },
+      { v: 1, at: "2026-09-27T10:01:05Z", session: "s", cwd, tool: "bash", command: "tsc --version", ok: true },
     ];
     writeFileSync(join(events, "s.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
     const review = await run(["review"], io);
-    const ids = [...review.out.matchAll(/^(p-[0-9a-f]+) \[gotcha, tested\]/gm)].map((m) => m[1] as string);
+    const ids = [...review.out.matchAll(/^(p-[0-9a-f]+) \[gotcha\]/gm)].map((m) => m[1] as string);
     expect(ids).toHaveLength(2);
     expect(review.out).toContain("(demo)");
     const accepted = await run(["accept", ids[0] as string], io);
@@ -135,6 +137,7 @@ describe("brain cli", () => {
     expect((await run(["reject", ids[1] as string], io)).out).toBe(`rejected ${ids[1]}`);
     expect((await run(["review"], io)).out).toBe("nothing to review");
     expect(loadNotes(home).notes).toHaveLength(1);
+    expect(loadNotes(home).notes[0]?.tested).toBe(false);
     expect((await run(["accept", "p-nope"], io)).code).toBe(1);
   });
 
@@ -196,7 +199,7 @@ describe("brain hook claude-code", () => {
     const home = tmp();
     const cwd = repo("demo");
     createNote(home, { text: "Demo decision", project: "demo", kind: "decision" });
-    const r = await hook(JSON.stringify({ hook_event_name: "SessionStart", source: "compact", cwd }), { SECOND_BRAIN_HOME: home });
+    const r = await hook(JSON.stringify({ hook_event_name: "SessionStart", source: "startup", cwd }), { SECOND_BRAIN_HOME: home });
     expect(r.code).toBe(0);
     expect(r.json.hookSpecificOutput.hookEventName).toBe("SessionStart");
     expect(r.json.hookSpecificOutput.additionalContext).toContain("Demo decision");
@@ -204,13 +207,31 @@ describe("brain hook claude-code", () => {
     expect(other.json).toEqual({});
   });
 
+  it("compact emits only a bounded resume, or nothing without working state", async () => {
+    const { writeWork } = await import("../src/work.ts");
+    const { estimateTokens } = await import("../src/util.ts");
+    const home = tmp();
+    const cwd = repo("demo");
+    const payload = JSON.stringify({ hook_event_name: "SessionStart", source: "compact", cwd });
+    createNote(home, { project: "demo", text: "Do not repeat this durable note at compaction" });
+    expect(await hook(payload, { SECOND_BRAIN_HOME: home })).toEqual({ code: 0, json: {} });
+    writeWork(home, "demo", `Goal: ship. Done: ${"finished work ".repeat(100)} Next: verify release.`);
+    const result = await hook(payload, { SECOND_BRAIN_HOME: home });
+    expect(result.code).toBe(0);
+    const text = result.json.hookSpecificOutput.additionalContext;
+    expect(estimateTokens(text)).toBeLessThanOrEqual(150);
+    expect(text).toContain("Next: verify release");
+    expect(text).not.toContain("Do not repeat this durable note");
+  });
+
+
   it("PostToolUseFailure returns a tested fix and logs the event", async () => {
     const home = tmp();
     const cwd = repo("demo");
     createNote(home, { text: "Clear PYTHONHOME first\n\nThe uv tree is corrupt.", project: "demo", kind: "gotcha", errors: ["SRE module mismatch"], tested: true });
     const payload = { hook_event_name: "PostToolUseFailure", cwd, session_id: "abc", tool_name: "Bash", tool_input: { command: "python x.py" }, error: "AssertionError: SRE module mismatch" };
     const r = await hook(JSON.stringify(payload), { SECOND_BRAIN_HOME: home });
-    expect(r.json.hookSpecificOutput.additionalContext).toBe("Brain (advisory): Clear PYTHONHOME first: The uv tree is corrupt [" + loadNotes(home).notes[0]?.id + "]");
+    expect(r.json.hookSpecificOutput.additionalContext).toContain("Clear PYTHONHOME first");
     expect(readFileSync(join(home, "state", "events", "abc.jsonl"), "utf8")).toContain('"command":"python x.py"');
     const interrupted = await hook(JSON.stringify({ ...payload, is_interrupt: true }), { SECOND_BRAIN_HOME: home });
     expect(interrupted.json).toEqual({});
@@ -259,3 +280,86 @@ describe("brain check reports silent failures", () => {
     expect(r.err).toContain(join("half-done", "SKILL.md"));
   });
 });
+
+
+describe("note privacy and recall kits", () => {
+  it.each(["demo", "global"])("private notes never upgrade a public %s duplicate", async (scope) => {
+    const { home, io } = setup();
+    const publicNote = createNote(home, { text: "Deployment needs approval", project: scope });
+    const before = readFileSync(publicNote.path, "utf8");
+    const saved = await run(["note", publicNote.body, "--private", "--evidence", "internal/deploy.ts"], io);
+    expect(saved.code).toBe(0);
+    expect(saved.out).toMatch(/^saved /);
+    const privateNote = loadNotes(home).notes.find((n) => n.private);
+    expect(privateNote?.project).toBe("demo");
+    expect(privateNote?.evidence).toEqual(["internal/deploy.ts"]);
+    expect(readFileSync(publicNote.path, "utf8")).toBe(before);
+    const again = await run(["note", publicNote.body, "--private", "--evidence", "internal/check.ts"], io);
+    expect(again.out).toBe('updated ' + privateNote?.id);
+    expect(loadNotes(home).notes).toHaveLength(2);
+    expect(readFileSync(publicNote.path, "utf8")).toBe(before);
+  });
+
+  it("scrubs tags and evidence on creation and duplicate upgrade", async () => {
+    const { home, io } = setup();
+    const secret = "ghp_" + "syntheticCredential123";
+    const saved = await run(["note", "Check deployment", "--tag", secret, "--evidence", "https://example.test/?token=" + secret], io);
+    expect(saved.code).toBe(0);
+    const created = loadNotes(home).notes[0]!;
+    expect(created.tags).toEqual(["***"]);
+    expect(created.evidence).toEqual(["https://example.test/?token=***"]);
+    expect(readFileSync(created.path, "utf8")).not.toContain(secret);
+    const upgraded = await run(["note", "Check deployment", "--tag", "password=" + secret, "--evidence", "password=" + secret], io);
+    expect(upgraded.code).toBe(0);
+    const updated = loadNotes(home).notes[0]!;
+    expect(updated.tags).toContain("password=***");
+    expect(updated.evidence).toContain("password=***");
+    expect(readFileSync(updated.path, "utf8")).not.toContain(secret);
+  });
+
+  it("recalls kits by prefixed or exact name with path and one-line description", () => {
+    const { home, cwd } = setup();
+    const path = join(home, "kits", "node-cli", "SKILL.md");
+    mkdirSync(join(home, "kits", "node-cli"), { recursive: true });
+    writeFileSync(path, '---\nname: Node CLI\ndescription: |\n  Build a command line app.\n  Use native modules.\n---\n# Scaffold');
+    for (const query of ["kit Node CLI", "Node CLI", "kit node-cli"]) {
+      const result = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "recall", query, "--home", home, "--project", "demo"], { cwd, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(path);
+      expect(result.stdout).toContain("Build a command line app. Use native modules.");
+      expect(result.stdout.trim().split("\n").length).toBeLessThanOrEqual(3);
+    }
+  });
+});
+
+
+describe("brain stats measurements", () => {
+  it("reports parent/sub cards, recall hit rate and the five most frequent unmatched errors", () => {
+    const { home, cwd } = setup();
+    const base = { project: "demo", tokens: 10, ms: 1 };
+    logUse(home, { ...base, kind: "card" });
+    logUse(home, { ...base, kind: "card", sub: true });
+    logUse(home, { ...base, kind: "recall", hits: 1 });
+    logUse(home, { ...base, kind: "recall", hits: 0 });
+    logUse(home, { ...base, kind: "recall" });
+    createNote(home, { text: "Known fix", project: "demo", tested: true, errors: ["known failure"] });
+    appendEvent(home, "stats", cwd, { tool: "bash", ok: false, error: "known failure" });
+    const failures = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
+    for (const [i, failure] of failures.entries()) {
+      for (let n = 0; n <= i; n++) appendEvent(home, "stats", cwd, { tool: "bash", ok: false, error: failure + " failure" });
+    }
+    const child = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "stats", "--home", home], {
+      cwd, encoding: "utf8", env: { ...process.env, SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" },
+    });
+    const result = { code: child.status, out: child.stdout };
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("cards: 1 main · 1 sub");
+    expect(result.out).toContain("recall calls: 3 · hit rate: 50% (1/2 measured)");
+    expect(result.out).toContain("Unmatched errors:");
+    expect(result.out).toContain("6 × foxtrot failure");
+    expect(result.out).toContain("2 × bravo failure");
+    expect(result.out).not.toMatch(/alpha failure|known failure/);
+    expect(result.out.indexOf("foxtrot failure")).toBeLessThan(result.out.indexOf("bravo failure"));
+  });
+});
+

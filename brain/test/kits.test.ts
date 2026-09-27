@@ -1,11 +1,12 @@
 import * as notesModule from "../src/notes.ts";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { draftKit, findKit, KIT_BUDGET, kitsDir, kitsFor, loadKits, KitError } from "../src/kits.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 
+import { estimateTokens } from "../src/util.ts";
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-kits-"));
 
 describe("kits", () => {
@@ -344,5 +345,29 @@ Body`,
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(kit.body).toContain("- Old tested gotcha — symptom: `boom!`");
+  });
+});
+
+
+describe("complete kit budget", () => {
+  it("reserves frontmatter section headings and checklist within 600 tokens", () => {
+    const home = tmp();
+    const notes = Array.from({ length: 6 }, (_, i) => createNote(home, {
+      text: String(i) + " use the proven stack".repeat(33), project: "demo", kind: "decision",
+    }));
+    const kit = draftKit(home, "bounded", "demo", notes, ["typescript"]);
+    const content = readFileSync(kit.path, "utf8");
+    expect(estimateTokens(content)).toBeLessThanOrEqual(KIT_BUDGET);
+    for (const section of ["When to use", "Stack and why", "Scaffold", "Gotchas", "MVP done when"]) {
+      expect(content).toContain("## " + section);
+    }
+    expect(content).toContain("- [ ]");
+    expect(content).toContain("use the proven stack");
+  });
+
+  it("refuses oversized mandatory metadata without writing an over-budget kit", () => {
+    const home = tmp();
+    expect(() => draftKit(home, "metadata", "demo".repeat(1000), [], ["node"])).toThrow(KitError);
+    expect(existsSync(join(home, "kits", "metadata", "SKILL.md"))).toBe(false);
   });
 });

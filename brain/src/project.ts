@@ -10,7 +10,7 @@
  * git remote repo name → git root folder name → cwd folder name. Tags are the declared ones plus
  * the stack implied by manifest files at the root (package.json → node, pyproject.toml → python, …).
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
 import { slug, tagKey, tagList, writeAtomic } from "./util.ts";
@@ -33,10 +33,19 @@ export interface ProjectEntry {
 /** Comparable path: forward slashes, no trailing slash, case-folded for Windows paths. */
 export function normalizePath(value: string): string {
   const text = value.trim();
-  if (/^[A-Za-z]:[\\/]/.test(text) || text.includes("\\")) {
+  if (/^[A-Za-z]:[\\/]/.test(text) || text.includes("\\") || text.startsWith("//")) {
     return text.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
   return text.replace(/\/+$/, "") || "/";
+}
+
+/** Resolve junctions/symlinks when available; offline registrations retain lexical matching. */
+function canonicalPath(value: string): string {
+  try {
+    return normalizePath(realpathSync.native(value));
+  } catch {
+    return normalizePath(value);
+  }
 }
 
 /** `git@github.com:o/r.git` / `https://user@github.com/o/r` → `github.com/o/r`. */
@@ -193,12 +202,12 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
   const explicit = env.BRAIN_PROJECT?.trim();
   if (explicit) return projectById(home, explicit, cwd);
 
-  const here = normalizePath(resolve(cwd));
+  const here = canonicalPath(resolve(cwd));
   let best: { len: number; id: string } | null = null;
   for (const [id, entry] of Object.entries(projects)) {
     for (const declared of Array.isArray(entry.paths) ? entry.paths : []) {
       if (typeof declared !== "string" || !declared.trim()) continue;
-      const root = normalizePath(declared);
+      const root = canonicalPath(declared);
       if ((here === root || here.startsWith(root + "/")) && (!best || root.length > best.len)) {
         best = { len: root.length, id };
       }

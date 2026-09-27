@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { RELATIVE_FLOOR, STOPWORDS, recall, renderHit, tokens } from "../src/search.ts";
-import type { Note } from "../src/notes.ts";
+import { RELATIVE_FLOOR, STOPWORDS, answer, answerWithHits, recall, renderHit, tokens } from "../src/search.ts";
+import { displayLine, findSameHeadline, formatNote, parseNote, type Note } from "../src/notes.ts";
 
 function note(id: string, over: Partial<Note> = {}): Note {
   return {
@@ -272,5 +272,78 @@ describe("bm25 parity with SQLite FTS5 (hand-computed)", () => {
     expect(hits.map((h) => h.note.id)).toEqual(["n-a", "n-b"]);
     expect(Math.abs((hits[0]?.score ?? 0) - bm(5, 5))).toBeLessThan(1e-9); // title weight 5 × 1
     expect(Math.abs((hits[1]?.score ?? 0) - bm(2, 6))).toBeLessThan(1e-9); // body weight 1 × 2
+  });
+});
+
+
+describe("recall and note boundaries", () => {
+  const project = { id: "test", tags: [], root: null };
+
+  it("does not merge distinct full first lines sharing the display prefix", () => {
+    const prefix = "x".repeat(159);
+    const stored = note("note-1", { body: prefix + " keep the cache" });
+    expect(findSameHeadline([stored], prefix + " drop the cache", "test")).toBeUndefined();
+    expect(findSameHeadline([stored], prefix + " KEEP  the cache", "test")?.id).toBe("note-1");
+  });
+
+  it("dedupes private requests only within their private project scope", () => {
+    const corpus = [
+      note("global-private", { project: "global", private: true, body: "Deployment rule" }),
+      note("other-private", { project: "other", private: true, body: "Deployment rule" }),
+      note("public", { body: "Deployment rule" }),
+      note("local-private", { private: true, body: "Deployment rule" }),
+    ];
+    expect(findSameHeadline(corpus, "Deployment rule", "test", [], true)?.id).toBe("local-private");
+    expect(findSameHeadline(corpus.slice(0, 3), "Deployment rule", "test", [], true)).toBeUndefined();
+  });
+
+  it("preserves quoted hashes commas and escaped quotes in inline lists", () => {
+    const text = '---\nid: note-1\nerrors: ["unexpected # token", "unexpected, comma", "say \\"hi\\", now", \'it\'\'s # quoted\'] # comment\n---\nFix parser';
+    const parsed = parseNote(text, "note-1.md", "test", false);
+    expect(parsed.errors).toEqual(["unexpected # token", "unexpected, comma", 'say "hi", now', "it's # quoted"]);
+    expect(parseNote(formatNote(parsed), "note-1.md", "test", false).errors).toEqual(parsed.errors);
+  });
+
+  it("recalls custom stored ids exactly while preserving visibility", () => {
+    const stored = note("note-1", { kind: "fact", body: "Restart the service" });
+    expect(answer([stored], " note-1 ", { project })).toContain("Restart the service");
+    expect(answer([stored], "note-1", { project: { ...project, id: "other" } })).not.toContain("Restart the service");
+    expect(answer([stored], "note-1", { project: { ...project, id: "other" }, all: true })).toContain("Restart the service");
+  });
+
+  it("suggests all only when an otherwise empty scoped recall has related notes", () => {
+    const stored = [note("elsewhere", { project: "other", body: "quartz migration" })];
+    expect(answer(stored, "quartz", { project })).toBe("no match here; 1 related in other projects (all: true)");
+    expect(answer(stored, "quartz", { project, all: true })).toContain("quartz migration");
+    expect(answer(stored, "nonexistent", { project })).toBe("no match");
+  });
+
+  it("suggests widening when the only related answer is retired history", () => {
+    const stored = [note("retired-elsewhere", { project: "other", body: "quartz migration", retired: "2026-09-01" })];
+    expect(answer(stored, "quartz", { project, all: true })).toContain("retired 2026-09-01");
+    expect(answer(stored, "quartz", { project })).toBe("no match here; 1 related in other projects (all: true)");
+  });
+
+  it("counts shown hits including exact ids and history but not widening hints", () => {
+    const corpus = [
+      note("current", { body: "quartz migration" }),
+      note("old", { body: "quartz migration", retired: "2026-09-01" }),
+    ];
+    expect(answerWithHits(corpus, "current", { project }).hits).toBe(1);
+    expect(answerWithHits(corpus, "quartz", { project, history: true }).hits).toBe(2);
+    expect(answerWithHits(corpus, "quartz", { project: { ...project, id: "other" } }).hits).toBe(0);
+    expect(answerWithHits(corpus, "nonexistent", { project }).hits).toBe(0);
+  });
+
+  it("counts related notes independently of the requested display limit", () => {
+    const corpus = Array.from({ length: 12 }, (_, i) => note(String(i), { project: "other", body: "quartz migration" }));
+    expect(answer(corpus, "quartz", { project, limit: 1 })).toBe("no match here; 12 related in other projects (all: true)");
+  });
+
+  it("cuts display lines at words without splitting code points", () => {
+    expect(displayLine({ body: "# alpha beta gamma" }, 12)).toBe("alpha beta…");
+    expect(displayLine({ body: "alpha beta" }, 10)).toBe("alpha beta");
+    expect(displayLine({ body: "𐐀𐐁𐐂𐐃" }, 3)).toBe("𐐀𐐁…");
+    expect(displayLine({ body: "alpha" }, 0)).toBe("");
   });
 });

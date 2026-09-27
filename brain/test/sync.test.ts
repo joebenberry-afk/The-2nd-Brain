@@ -60,6 +60,26 @@ function pairRepos(): { bare: string; a: string; b: string } {
 }
 
 describe("sync", () => {
+  it("refuses to push after an autostash conflict outside a nested Brain home", () => {
+    const { a, b, bare } = pairRepos();
+    writeFileSync(join(a, "outside.txt"), "original\n");
+    gitCmd(a, "add", "outside.txt");
+    gitCmd(a, "commit", "-m", "outside base");
+    gitCmd(a, "push", "origin", "HEAD:main");
+    gitCmd(b, "pull", "--rebase");
+    writeFileSync(join(a, "outside.txt"), "upstream\n");
+    gitCmd(a, "commit", "-am", "outside upstream");
+    gitCmd(a, "push", "origin", "HEAD:main");
+    const remoteHead = gitCmd(bare, "rev-parse", "refs/heads/main");
+    writeFileSync(join(b, "outside.txt"), "local uncommitted\n");
+    const home = join(b, "brain-home");
+    createNote(home, { text: "Local durable note", project: "demo" });
+    expect(() => sync(home)).toThrow(/uncommitted changes to .*outside\.txt conflict/);
+    expect(gitCmd(bare, "rev-parse", "refs/heads/main")).toBe(remoteHead);
+    expect(gitCmd(b, "diff", "--name-only", "--diff-filter=U")).toContain("outside.txt");
+    expect(gitCmd(b, "stash", "list")).toContain("autostash");
+  });
+
   it("raises when not a git repository", () => {
     const home = tmp();
     expect(() => sync(home)).toThrow(SyncError);

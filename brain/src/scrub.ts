@@ -56,6 +56,10 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   result = result.replace(/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, "***"); // SendGrid
 
   // Private key blocks (PEM, OpenSSH), also when the output was cut before the END line
+  // A retained tail can contain an END marker without its BEGIN: discard the orphaned span.
+  const endKey = /-----END [A-Z0-9 ]*PRIVATE KEY-----/.exec(result);
+  const beginKey = result.search(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/);
+  if (endKey && (beginKey < 0 || beginKey > endKey.index)) result = "***" + result.slice(endKey.index + endKey[0].length);
   result = result.replace(/(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g, "$1 *** -----END PRIVATE KEY-----");
 
   // Authorization headers and schemes: Bearer ***, Basic ***, Authorization: Token ***
@@ -67,7 +71,13 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   // Credentials in URLs and curl: https://user:***@host, redis://:***@host, curl -u user:***
   // (the scheme's start is anchored by a lookbehind: "a.a.a.…" must not be retried at every dot)
   result = result.replace(/((?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s@/]+@/gi, "$1***@");
-  result = result.replace(/((?:^|\s)(?:-u\s*|--user[=\s]\s*)[^\s:]+:)\S+/g, "$1***");
+  result = result.replace(/((?:^|\s)(?:-u\s*|--user[=\s]\s*))(?:(['"])((?:\\.|(?!\2)[^\\\n])*)\2|([^\s]+))/g, (match, flag: string, quote: string | undefined, quoted: string | undefined, plain: string | undefined) => {
+    const value = quoted ?? plain ?? "";
+    const colon = value.indexOf(":");
+    return colon < 0 ? match : flag + (quote ?? "") + value.slice(0, colon + 1) + "***" + (quote ?? "");
+  });
+  // Explicit long credential flags only: -p commonly names a port.
+  result = result.replace(/((?:^|\s)--(?:password|token|api-key|secret|client-secret|auth)(?:\s+|=))(?:(['"])(?:\\.|(?!\2)[^\\\n])*\2|[^\s]+)/gi, "$1***");
 
   // Windows: setx NAME value, [Environment]::SetEnvironmentVariable("NAME", "value", …)
   result = result.replace(/\b(setx\s+)(\S+)(\s+)("[^"]*"|\S+)/gi, (match, cmd: string, name: string, space: string, value: string) =>

@@ -175,43 +175,26 @@ export function draftKit(
   // When to use
   lines.push("## When to use", "- TODO: the kind of project this kit starts, in one line.", "");
 
-  // Add sections with budget control
-  let totalTokens = estimateTokens(lines.join("\n"));
+  // Reserve every heading and the checklist before spending room on optional note content.
+  const ending = ["## MVP done when", "- [ ] TODO: the check that proves the MVP runs.", ""];
+  let remaining = KIT_BUDGET * 4 - [...lines, ...sections.flatMap((s) => [s.name, ""]), ...ending].join("\n").length;
+  if (remaining < 0) throw new KitError("kit metadata exceeds the 600-token budget");
   for (const section of sections) {
-    if (section.items.length === 0) {
-      lines.push(section.name);
-      lines.push("- none recorded yet");
-      lines.push("");
-      totalTokens = estimateTokens(lines.join("\n"));
-      if (totalTokens > KIT_BUDGET) break;
-      continue;
-    }
-
     lines.push(section.name);
-    const isNumbered = section.name.includes("Scaffold");
     let itemNum = 1;
     for (const item of section.items) {
-      if (isNumbered) {
-        lines.push(`${itemNum}. ${item.headline}${item.detail}`);
-        itemNum++;
-      } else {
-        lines.push(`- ${item.headline}${item.detail}`);
-      }
-      totalTokens = estimateTokens(lines.join("\n"));
-      if (totalTokens > KIT_BUDGET) {
-        lines.pop();
-        break;
-      }
+      const prefix = section.name.includes("Scaffold") ? `${itemNum}. ` : "- ";
+      const line = prefix + item.headline + item.detail;
+      if (line.length + 1 > remaining) break;
+      lines.push(line);
+      remaining -= line.length + 1;
+      itemNum++;
     }
     lines.push("");
-    totalTokens = estimateTokens(lines.join("\n"));
-    if (totalTokens > KIT_BUDGET) break;
   }
-
-  // MVP done when section
-  lines.push("## MVP done when", "- [ ] TODO: the check that proves the MVP runs.", "");
-
+  lines.push(...ending);
   const content = lines.join("\n");
+  if (estimateTokens(content) > KIT_BUDGET) throw new KitError("kit exceeds the 600-token budget");
   writeAtomic(skillPath, content);
 
   // Parse and return the Kit

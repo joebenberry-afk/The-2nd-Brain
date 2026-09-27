@@ -11,7 +11,8 @@ export function estimateTokens(text: string): number {
 
 /** Cut `text` to at most `budget` tokens, ending with "…" when cut. */
 export function cutToTokens(text: string, budget: number): string {
-  const max = budget * 4;
+  const max = Math.floor(budget) * 4;
+  if (max <= 0) return "";
   if (text.length <= max) return text;
   return text.slice(0, Math.max(0, max - 1)).trimEnd() + "…";
 }

@@ -3,6 +3,7 @@ import { firstLine, restOfBody, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
+import { findKit, loadKits } from "./kits.ts";
 
 export const STOPWORDS = new Set([
   "the",
@@ -253,9 +254,8 @@ export function scoreQuery(notes: Note[], query: string): Scored {
 }
 
 /** The cheap half of recall: visibility, history, the match rule, the relative floor, the limit. */
-export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
+function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
   const q = scored.q;
-  const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
   const hits: Hit[] = [];
   for (const { note, score, words: text } of scored.candidates) {
     // Visibility filter
@@ -289,7 +289,11 @@ export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
     }
   }
 
-  return hits.slice(0, limit);
+  return hits;
+}
+
+export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
+  return matchingHits(scored, opts).slice(0, Math.max(1, Math.min(10, opts.limit ?? 3)));
 }
 
 /** Recall over notes with BM25 ranking. */
@@ -323,29 +327,47 @@ export function renderHits(hits: Hit[]): string {
   return hits.map((hit, i) => renderHit(hit, i === 0 ? FIRST_HIT_CHARS : 240)).join("\n");
 }
 
-/**
- * One call answers: a note id returns that note in full (cut to FULL_NOTE_TOKENS); anything else is
- * a search. `opts` as for `recall`.
- */
-export function answer(notes: Note[], query: string, opts: RecallOptions): string {
+export interface AnswerOptions extends RecallOptions {
+  /** Explicit Brain home enables kit recall without consulting process-global state. */
+  home?: string;
+}
+
+/** One call answers: exact ids, named kits, then scoped note search. */
+export function answer(notes: Note[], query: string, opts: AnswerOptions): string {
+  return answerWithHits(notes, query, opts).text;
+}
+
+/** Hit count measures results actually shown, not cross-project suggestions. */
+export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions): { text: string; hits: number } {
   const id = query.trim();
-  const note = /^[a-z]+-[0-9a-f]{6,}$/.test(id) ? notes.find((n) => n.id === id) : undefined;
-  if (note && (opts.all || visibleTo(note, opts.project))) {
+  const note = notes.find((n) => n.id === id);
+  if (note) {
+    if (!opts.all && !visibleTo(note, opts.project)) return { text: "no match", hits: 0 };
     const retiredMeta = note.retired ? `retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""}` : "";
     const meta = [note.kind, note.tested ? "tested" : "", retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
-    return cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS);
+    return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS), hits: 1 };
+  }
+  if (opts.home && id) {
+    const kit = findKit(loadKits(opts.home), id.replace(/^kit\s+/i, ""));
+    if (kit) {
+      const description = kit.description.replace(/\s+/g, " ").trim();
+      return { text: `${kit.path}\n${description}`, hits: 1 };
+    }
   }
   const scored = scoreQuery(notes, query);
-  const hits = filterHits(scored, opts);
-  if (opts.history) return renderHits(hits);
-  // A retired note that answers better than anything current is the truth the agent needs:
-  // "that changed on <date>" (and what replaced it), not an unrelated current note.
-  const retired = filterHits(scored, { ...opts, history: true, limit: 10 }).find((h) => h.note.retired);
-  if (retired && (!hits.length || retired.score > (hits[0]?.score ?? 0))) {
-    // It leads, the current hits keep the relative floor against it, and the limit still holds.
-    const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
-    const current = hits.filter((h) => h.score >= RELATIVE_FLOOR * retired.score);
-    return renderHits([retired, ...current].slice(0, limit));
+  let hits = filterHits(scored, opts);
+  if (!opts.history) {
+    // Keep a better retired answer visible so obsolete advice is not silently replaced.
+    const retired = filterHits(scored, { ...opts, history: true, limit: 10 }).find((h) => h.note.retired);
+    if (retired && (!hits.length || retired.score > (hits[0]?.score ?? 0))) {
+      const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
+      hits = [retired, ...hits.filter((h) => h.score >= RELATIVE_FLOOR * retired.score)].slice(0, limit);
+    }
   }
-  return renderHits(hits);
+  if (!hits.length && !opts.all) {
+    const related = matchingHits(scored, { ...opts, all: true }).length
+      || (!opts.history ? matchingHits(scored, { ...opts, all: true, history: true }).length : 0);
+    if (related) return { text: `no match here; ${related} related in other projects (all: true)`, hits: 0 };
+  }
+  return { text: renderHits(hits), hits: hits.length };
 }

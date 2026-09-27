@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createNote, formatNote, headline, loadNotes, parseNote, retireNote, saveNote, type Note } from "../src/notes.ts";
-import { normalizeRemote, resolveProject, visibleTo } from "../src/project.ts";
+import { normalizePath, normalizeRemote, resolveProject, visibleTo } from "../src/project.ts";
 import { cutToTokens, estimateTokens, slug } from "../src/util.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-"));
@@ -82,6 +82,31 @@ describe("notes", () => {
 });
 
 describe("project", () => {
+  it("matches registered paths through directory junctions in either direction", () => {
+    const home = tmp();
+    const root = tmp();
+    const target = join(root, "repository");
+    const link = join(root, "shortcut");
+    mkdirSync(join(target, "sub"), { recursive: true });
+    symlinkSync(target, link, "junction");
+    for (const [registered, cwd] of [[target, link], [link, target]] as const) {
+      writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { app: { paths: [registered] } } }));
+      expect(resolveProject(home, join(cwd, "sub"), {}).id).toBe("app");
+    }
+  });
+
+  it("keeps lexical matching for missing registered paths", () => {
+    const home = tmp();
+    const missing = join(home, "not-created");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { app: { paths: [missing] } } }));
+    expect(resolveProject(home, join(missing, "sub"), {}).id).toBe("app");
+  });
+
+  it("normalizes forward-slash UNC paths like backslash UNC paths", () => {
+    expect(normalizePath("//NAS/Share/App/")).toBe("//nas/share/app");
+    expect(normalizePath(String.raw`\\NAS\Share\App`)).toBe(normalizePath("//NAS/Share/App"));
+  });
+
   it("normalizes remotes", () => {
     expect(normalizeRemote("git@github.com:Owner/Repo.git")).toBe("github.com/owner/repo");
     expect(normalizeRemote("https://user@github.com/owner/repo/")).toBe("github.com/owner/repo");

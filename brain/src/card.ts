@@ -1,20 +1,9 @@
-/**
- * The start card: what an agent gets on a session's first turn and again after compaction.
- *
- *   Brain · <project> — advisory memory, verify before relying on it
- *   Where we left off (…):          working state, the thing compaction would otherwise lose
- *   Known here:                      up to 5 notes, ranked for this project and the current work
- *   Kits: …                          MVP kits for this kind of project (all kits on a new project)
- *   N proposals waiting → brain review
- *   Memory: …                        how to recall, note and update the state
- *
- * Push only what is scoped: project notes and global notes that share a tag with the project.
- * Untagged global notes are reachable by recall and by known fixes, never pushed on the card.
- * Nothing to say → "" (the host adds nothing).
- */
+/** Start-of-session memory: complete facts, scoped context, and a hard total budget. */
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pendingCount } from "./capture.ts";
 import { kitsDir, kitsFor, loadKits, type Kit } from "./kits.ts";
-import { GLOBAL, headline, type Note } from "./notes.ts";
+import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { recall } from "./search.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
@@ -25,16 +14,18 @@ export const CARD_NOTES = 5;
 
 const KIND_WEIGHT: Record<string, number> = { gotcha: 3, decision: 3, procedure: 2, fact: 1, note: 1 };
 const DAY_MS = 86_400_000;
-/** A note about the current work outranks a tested gotcha about something else. */
 const RELEVANCE_WEIGHT = 6;
 
 export interface CardOptions {
   /** The host exposes the brain_* tools (OMP); otherwise the card names the CLI. */
   tools?: boolean;
   now?: Date;
+  subagent?: boolean;
+  /** First user prompt, used only for ranking, never persisted. */
+  prompt?: string;
 }
 
-/** Active notes the card may push for `project`: its own, plus global notes sharing a tag. */
+/** Active project notes and global notes sharing a project tag; untagged globals stay pull-only. */
 export function cardCandidates(notes: Note[], project: Project): Note[] {
   return notes.filter((n) => {
     if (n.retired) return false;
@@ -43,72 +34,108 @@ export function cardCandidates(notes: Note[], project: Project): Note[] {
   });
 }
 
-/** Rank candidates: tested and actionable kinds first, recent work next, relevance to the working state on top. */
-export function rankForCard(notes: Note[], candidates: Note[], project: Project, workText: string, now: Date): Note[] {
+/** Prompt relevance first, then working-state relevance and the static tested/kind/recency rank. */
+export function rankForCard(notes: Note[], candidates: Note[], project: Project, workText: string, now: Date, prompt = ""): Note[] {
   const relevance = new Map<string, number>();
   if (workText.trim()) {
     const hits = recall(notes, workText, { project, limit: 10 });
     const top = hits[0]?.score ?? 0;
     for (const hit of hits) if (top > 0) relevance.set(hit.note.id, hit.score / top);
   }
+  const promptScores = new Map(prompt.trim()
+    ? recall(notes, prompt, { project, limit: candidates.length }).map((hit) => [hit.note.id, hit.score])
+    : []);
   const score = (n: Note): number => {
     const age = (now.getTime() - Date.parse(n.at)) / DAY_MS;
     const recent = age <= 14 ? 2 : age <= 60 ? 1 : 0;
     return (n.tested ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
   };
-  const scored = candidates.map((n) => ({ n, s: score(n) }));
-  scored.sort((a, b) => b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));
+  const scored = candidates.map((n) => ({ n, s: score(n), p: promptScores.get(n.id) ?? 0 }));
+  scored.sort((a, b) => b.p - a.p || b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));
   return scored.map((x) => x.n);
 }
 
-function noteLine(n: Note): string {
-  return `- [${n.kind}${n.tested ? ", tested" : ""}] ${headline(n)} (${n.id})`;
+/** Never turn an essential fact into a clipped pointer requiring a second recall. */
+function noteLine(n: Note, room: number): string {
+  const prefix = `- [${n.kind}${n.tested ? ", tested" : ""}] `;
+  const suffix = ` (${n.id})`;
+  const text = displayLine(n, Math.max(0, room - prefix.length - suffix.length));
+  if (!text || text !== firstLine(n)) return "";
+  const line = prefix + text + suffix;
+  return line.length <= room ? line : "";
 }
 
+/** Inspect git metadata without spawning git on the host's first-turn hot path. */
+function freshRoot(root: string | null): boolean {
+  if (!root) return false;
+  try {
+    if (readdirSync(root).filter((name) => name !== ".git").length <= 3) return true;
+    let gitdir = join(root, ".git");
+    if (statSync(gitdir).isFile()) {
+      const target = /^gitdir:\s*(.+)$/m.exec(readFileSync(gitdir, "utf8"))?.[1];
+      if (!target) return false;
+      gitdir = resolve(root, target.trim());
+    }
+    const head = readFileSync(join(gitdir, "HEAD"), "utf8").trim();
+    const ref = /^ref: (refs\/.+)$/.exec(head)?.[1];
+    if (!ref) return false; // Detached HEAD, or unreadable metadata: not known to be fresh.
+    const commonPath = join(gitdir, "commondir");
+    const common = existsSync(commonPath) ? resolve(gitdir, readFileSync(commonPath, "utf8").trim()) : gitdir;
+    if (existsSync(join(common, ref))) return false;
+    const packed = join(common, "packed-refs");
+    return !existsSync(packed) || !readFileSync(packed, "utf8").split("\n").some((line) => line.trimEnd().endsWith(` ${ref}`));
+  } catch {
+    return false;
+  }
+}
+
+/** Include only complete names and a usable path, reserving at most 64 tokens for kits. */
 function kitsLine(kits: Kit[], fresh: boolean, home: string): string {
-  if (!kits.length) return "";
-  const names = kits.slice(0, 5).map((k) => k.name).join(", ");
-  const where = `read ${kitsDir(home).replace(/\\/g, "/")}/<name>/SKILL.md`;
-  return fresh ? `New project? MVP kits: ${names} → ${where}` : `Kits for this kind of project: ${names} → ${where}`;
+  const label = fresh ? "New project? MVP kits: " : "Kits for this kind of project: ";
+  const where = ` → read ${kitsDir(home).replace(/\\/g, "/")}/<name>/SKILL.md`;
+  const names: string[] = [];
+  for (const kit of kits) {
+    if (/[\r\n]/.test(kit.name)) continue;
+    if (estimateTokens(label + [...names, kit.name].join(", ") + where) > 64) continue;
+    names.push(kit.name);
+    if (names.length === 5) break;
+  }
+  return names.length ? label + names.join(", ") + where : "";
 }
 
-function footer(tools: boolean): string {
-  return tools
-    ? "Memory: brain_recall(query) · brain_note(text) · brain_state(goal/done/next — update it when the plan changes)"
-    : 'Memory: `brain recall "<query>"` · `brain note "<text>"` · `brain state "<goal/done/next>"` (update it when the plan changes)';
+function footer(tools: boolean, subagent: boolean): string {
+  const base = tools ? "Memory: brain_recall(query) · brain_note(text)" : 'Memory: `brain recall "<query>"` · `brain note "<text>"`';
+  return base + (subagent ? "" : tools ? " · brain_state(goal/done/next)" : ' · `brain state "<goal/done/next>"`');
 }
 
-/** Build the card for `project` from the notes already loaded; "" when there is nothing to say. */
+/** Complete card including header and tail fits CARD_BUDGET; nothing useful means no injection. */
 export function renderCard(home: string, notes: Note[], project: Project, opts: CardOptions = {}): string {
   const now = opts.now ?? new Date();
-  const work = readWork(home, project.id);
+  const work = opts.subagent ? null : readWork(home, project.id);
   const resume = resumeText(work);
   const candidates = cardCandidates(notes, project);
-  const ranked = rankForCard(notes, candidates, project, work?.text ?? "", now);
-  const allKits = loadKits(home);
-  const fresh = !resume && candidates.length === 0;
-  const kits = fresh ? allKits : kitsFor(allKits, project);
+  const ranked = rankForCard(notes, candidates, project, work?.text ?? "", now, opts.prompt);
+  const allKits = opts.subagent ? [] : loadKits(home);
+  const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
+  const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), fresh, home);
   const pending = pendingCount(home, project.id);
-  if (!resume && !ranked.length && !kits.length && !pending) return "";
-
-  const head = `Brain · ${project.id} — advisory memory, verify before relying on it`;
-  const tail = [kitsLine(kits, fresh, home), pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", footer(opts.tools === true)].filter(Boolean);
+  const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — memory from earlier sessions; the repo wins on conflict`;
+  const tail = [kits, pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
   const lines = [head];
-  const fits = (extra: string[]): boolean => estimateTokens([...lines, ...extra, ...tail].join("\n")) <= CARD_BUDGET;
+  const room = (extra: string[] = []): number => CARD_BUDGET * 4 - [...lines, ...extra, ...tail].join("\n").length - 1;
   if (resume) {
-    // The working state is what compaction would lose: cut it to the room left, never drop it.
-    const room = CARD_BUDGET - estimateTokens([...lines, ...tail].join("\n")) - 1;
-    const text = fits([resume]) ? resume : cutToTokens(resume, Math.max(0, room));
+    const text = cutToTokens(resume, Math.floor(room() / 4));
     if (text.trim()) lines.push(text);
   }
-  const known = ranked.slice(0, CARD_NOTES).map(noteLine);
-  if (known.length && fits(["Known here:", known[0] as string])) {
-    lines.push("Known here:");
-    for (const line of known) {
-      if (!fits([line])) break;
-      lines.push(line);
-    }
+  let count = 0;
+  for (const note of ranked) {
+    const label = count ? [] : ["Known here:"];
+    const line = noteLine(note, room(label));
+    if (!line) continue;
+    lines.push(...label, line);
+    if (++count === CARD_NOTES) break;
   }
-  lines.push(...tail);
-  return lines.join("\n");
+  if (lines.length === 1 && !kits && !pending) return "";
+  const card = [...lines, ...tail].join("\n");
+  return estimateTokens(card) <= CARD_BUDGET ? card : "";
 }

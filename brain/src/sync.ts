@@ -1,7 +1,7 @@
 /** Git sync of the Brain home, and sharing a note across projects. */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, posix } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
 import { addProjectTag } from "./project.ts";
@@ -184,9 +184,11 @@ function stampOf(text: string): string {
   return `${/^at:\s*(\S+)/m.exec(text)?.[1] ?? ""} ${/^auto_at:\s*(\S+)/m.exec(text)?.[1] ?? ""}`;
 }
 
-/** Unmerged paths, relative to the home. */
+/** Repository-wide unmerged paths, translated to home-relative paths (outside paths start ../). */
 function unmerged(home: string): string[] {
-  return git(home, "diff", "--name-only", "--relative", "--diff-filter=U", "-z").stdout.split("\0").filter(Boolean);
+  const prefix = git(home, "rev-parse", "--show-prefix").stdout.trimEnd();
+  return git(home, "diff", "--name-only", "--no-relative", "--diff-filter=U", "-z").stdout
+    .split("\0").filter(Boolean).map((file) => posix.relative(prefix || ".", file));
 }
 
 /** Files the Brain can merge without asking: working states (newer wins) and the rejected list (union). */

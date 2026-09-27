@@ -1,11 +1,13 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CARD_BUDGET, cardCandidates, rankForCard, renderCard } from "../src/card.ts";
 import { createNote, loadNotes, saveNote, type Note } from "../src/notes.ts";
 import type { Project } from "../src/project.ts";
-import { estimateTokens } from "../src/util.ts";
+import { cutToTokens, estimateTokens } from "../src/util.ts";
+import { logUse, stats, telemetryPath } from "../src/telemetry.ts";
 import { writeAuto, writeWork } from "../src/work.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-card-"));
@@ -71,7 +73,10 @@ describe("card", () => {
     const home = tmp();
     kit(home, "fastapi-mvp", ["python"]);
     kit(home, "vite-react", ["web"]);
-    const fresh = renderCard(home, [], project, { now: NOW });
+    const root = tmp();
+    execFileSync("git", ["init", root]);
+    for (let i = 0; i < 4; i++) writeFileSync(join(root, "file" + i), "new source");
+    const fresh = renderCard(home, [], { ...project, root }, { now: NOW });
     expect(fresh).toContain("New project? MVP kits: fastapi-mvp, vite-react");
     createNote(home, { text: "we use vite", project: "demo", kind: "decision" });
     const known = renderCard(home, loadNotes(home).notes, project, { now: NOW });
@@ -89,3 +94,129 @@ describe("card", () => {
     expect(renderCard(home, [], project, { now: NOW })).toContain("1 proposal waiting");
   });
 });
+
+
+describe("card completeness and scope", () => {
+  it("renders long facts completely and skips oversized facts without hiding later facts", () => {
+    const home = tmp();
+    const long = "OMP compaction must retain the active session plan and insert the continuation after the compaction summary; " + "the complete instruction remains useful only when its final clause is visible.";
+    createNote(home, { text: "Oversized " + "instruction ".repeat(200), project: "demo", kind: "gotcha", tested: true });
+    createNote(home, { text: long, project: "demo", kind: "fact" });
+    const card = execFileSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "card", "--home", home, "--project", "demo"], {
+      encoding: "utf8", env: { ...process.env, SECOND_BRAIN_HOME: home },
+    }).trimEnd();
+    expect(card).toContain(long);
+    expect(card).not.toContain("Oversized");
+    expect(card).not.toContain("…");
+    expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
+  });
+
+  it("bounds pathological kit names without losing useful notes or the footer", () => {
+    const home = tmp();
+    kit(home, "normal", ["web"]);
+    writeFileSync(join(home, "kits", "normal", "SKILL.md"), "---\nname: " + "k".repeat(2000) + "\ndescription: kit\ntags: [web]\n---\nbody");
+    const note = createNote(home, { text: "A useful complete fact", project: "demo" });
+    const card = renderCard(home, [note], project, { tools: true });
+    expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
+    expect(card).toContain(note.body);
+    expect(card).toContain("brain_state(");
+  });
+
+  it("keeps parent plans and kits out of subagent cards", () => {
+    const home = tmp();
+    kit(home, "web-kit", ["web"]);
+    writeWork(home, "demo", "Goal: parent private plan");
+    writeAuto(home, "demo", { edited: ["parent.ts"] });
+    const note = createNote(home, { text: "Shared fact", project: "demo" });
+    const card = renderCard(home, [note], project, { tools: true, subagent: true });
+    expect(card).toContain(note.body);
+    expect(card).toContain("brain_recall(");
+    expect(card).toContain("brain_note(");
+    expect(card).not.toMatch(/parent|Where we left off|brain_state|web-kit/);
+  });
+
+  it("ranks the first prompt ahead of unrelated static rank and previous work", () => {
+    const home = tmp();
+    const unrelated = createNote(home, { text: "Compiler bundler release cache", project: "demo", kind: "gotcha", tested: true });
+    const relevant = createNote(home, { text: "Authentication cookie expiration", project: "demo", kind: "fact" });
+    writeWork(home, "demo", "Goal: compiler bundler release cache");
+    const card = renderCard(home, [unrelated, { ...relevant, at: "2025-01-01T00:00:00Z" }], project, { prompt: "Authentication cookie expiration", now: NOW });
+    expect(card.indexOf(relevant.id)).toBeLessThan(card.indexOf(unrelated.id));
+    expect(card).toContain(relevant.id);
+  });
+
+  it("does not advertise unrelated MVP kits in an established foreign repository", () => {
+    const home = tmp();
+    const root = tmp();
+    execFileSync("git", ["init", root]);
+    for (let i = 0; i < 4; i++) writeFileSync(join(root, "file" + i), "existing source");
+    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-m", "existing project"]);
+    kit(home, "python-kit", ["python"]);
+    expect(renderCard(home, [], { ...project, root })).toBe("");
+    kit(home, "web-kit", ["web"]);
+    const card = renderCard(home, [], { ...project, root });
+    expect(card).toContain("web-kit");
+    expect(card).not.toMatch(/New project|python-kit/);
+  });
+
+  it("returns nothing for zero or negative token room", () => {
+    expect(cutToTokens("hello", 0)).toBe("");
+    expect(cutToTokens("hello", -2)).toBe("");
+  });
+
+  it("prefers four complete facts over five clipped facts", () => {
+    const home = tmp();
+    const notes = Array.from({ length: 5 }, (_, i) => createNote(home, { text: "Fact " + i + ": " + "complete words ".repeat(19).trim(), project: "demo" }));
+    const card = renderCard(home, notes, project, { tools: true });
+    expect(card.split("\n").filter((line) => line.startsWith("- [note]"))).toHaveLength(4);
+    expect(card).not.toContain("…");
+    for (const line of card.split("\n").filter((line) => line.startsWith("- [note]"))) {
+      expect(notes.some((note) => line.includes(note.body))).toBe(true);
+    }
+  });
+
+  it("does not mistake packed refs or linked worktrees for unborn repositories", () => {
+    const home = tmp();
+    const root = tmp();
+    execFileSync("git", ["init", root]);
+    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-m", "existing"]);
+    execFileSync("git", ["-C", root, "pack-refs", "--all"]);
+    kit(home, "python-kit", ["python"]);
+    const linked = join(tmp(), "linked");
+    execFileSync("git", ["-C", root, "worktree", "add", "-b", "linked", linked]);
+    execFileSync("git", ["-C", root, "pack-refs", "--all"]);
+    for (const dir of [root, linked]) {
+      for (let i = 0; i < 4; i++) writeFileSync(join(dir, "file" + i), "existing");
+      expect(renderCard(home, [], { ...project, root: dir })).toBe("");
+    }
+  });
+
+});
+
+describe("local usage telemetry", () => {
+  it("separates parent and subagent cards and counts measured recall hits", () => {
+    const home = tmp();
+    const base = { project: "demo", tokens: 12, ms: 1 };
+    logUse(home, { ...base, kind: "card" }, NOW);
+    logUse(home, { ...base, kind: "card", sub: true }, NOW);
+    logUse(home, { ...base, kind: "recall", hits: 2 }, NOW);
+    logUse(home, { ...base, kind: "recall", hits: 0 }, NOW);
+    logUse(home, { ...base, kind: "recall" }, NOW);
+    const s = stats(home, 7, NOW);
+    expect(s.cards).toEqual({ main: 1, sub: 1 });
+    expect(s.recalls).toEqual({ calls: 3, measured: 2, matched: 1 });
+  });
+
+  it("bounds telemetry growth while retaining newest complete rows", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state"), { recursive: true });
+    const old = JSON.stringify({ at: NOW.toISOString(), kind: "card", project: "old", tokens: 1, ms: 1 }) + "\n";
+    writeFileSync(telemetryPath(home), old.repeat(Math.ceil(1_100_000 / old.length)));
+    logUse(home, { kind: "note", project: "newest", tokens: 1, ms: 1 }, NOW);
+    expect(statSync(telemetryPath(home)).size).toBeLessThanOrEqual(1_048_576);
+    const rows = readFileSync(telemetryPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(rows.at(-1).project).toBe("newest");
+    expect(rows[0].project).toBe("old");
+  });
+});
+

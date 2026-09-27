@@ -5,17 +5,18 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { acceptProposal, appendEvent, findFix, listProposals, rejectProposal, renderFix, scanCommits, scanEvents } from "./capture.ts";
+import { acceptProposal, appendEvent, findFix, listProposals, rejectProposal, renderFix, scanCommits, scanEvents, unmatchedErrors } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { draftKit, findKit, kitsDir, loadKits } from "./kits.ts";
-import { createNote, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, parseFrontmatter, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
+import { createNote, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, parseFrontmatter, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
 import { gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
-import { answer } from "./search.ts";
+import { answerWithHits } from "./search.ts";
+import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
 import { logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, slug, tagKey } from "./util.ts";
-import { readWork, resumeText, writeWork } from "./work.ts";
+import { readWork, renderResume, resumeText, writeWork } from "./work.ts";
 
 export interface Io {
   out: (text: string) => void;
@@ -114,14 +115,15 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
 
   recall(c) {
     const query = need(c.args.join(" "), "a query");
-    const text = answer(loadNotes(c.home).notes, query, {
+    const { text, hits } = answerWithHits(loadNotes(c.home).notes, query, {
       project: c.project,
+      home: c.home,
       all: c.opts.all === true,
       history: c.opts.history === true,
       limit: positiveInt(c.opts.limit, 3),
     });
     c.io.out(text);
-    use(c, "recall", text);
+    logUse(c.home, { kind: "recall", project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, hits });
     return 0;
   },
 
@@ -131,7 +133,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
     if (c.opts.global && c.opts.private) throw new UsageError("--global and --private exclude each other");
     const scope = c.opts.global ? GLOBAL : c.project.id;
-    const same = findSameHeadline(loadNotes(c.home).notes, text, scope, c.project.tags);
+    const same = findSameHeadline(loadNotes(c.home).notes, text, scope, c.project.tags, c.opts.private === true);
     if (same) {
       const changed = upgradeNote(c.home, same, {
         kind: c.opts.kind ? (kind as Kind) : undefined,
@@ -223,7 +225,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
       c.io.out("nothing to review");
       return 0;
     }
-    for (const p of pending) c.io.out(`${p.id} [${p.kind}${p.tested ? ", tested" : ""}] ${headline({ body: p.text })} (${p.project})`);
+    for (const p of pending) c.io.out(`${p.id} [${p.kind}${p.tested ? ", tested" : ""}] (${p.project})\n${scrub(p.text).text.slice(0, 800)}`);
     c.io.out("accept: brain accept <pid>… · reject: brain reject <pid>…");
     return 0;
   },
@@ -278,6 +280,14 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const s = stats(c.home, positiveInt(c.opts.days, 7));
     c.io.out(`last ${s.days} days · ${s.sessions} sessions`);
     for (const [kind, v] of Object.entries(s.byKind).sort()) c.io.out(`${kind}: ${v.count} (${v.tokens} tokens)`);
+    c.io.out(`cards: ${s.cards.main} main · ${s.cards.sub} sub`);
+    const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
+    c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
+    const unmatched = unmatchedErrors(c.home, loadNotes(c.home).notes, { days: s.days }).slice(0, 5);
+    if (unmatched.length) {
+      c.io.out("Unmatched errors:");
+      for (const error of unmatched) c.io.out(`${error.count} × ${error.signature}`);
+    }
     return 0;
   },
 
@@ -395,14 +405,19 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       const event = p.hook_event_name;
       const session = typeof p.session_id === "string" && p.session_id ? p.session_id : undefined;
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
-        const { notes } = loadNotes(home);
-        // Pair up failures and fixes from earlier sessions, so the card can say what waits for review.
-        try {
-          scanEvents(home, notes);
-        } catch {
-          // the card matters more than the count
+        let card: string;
+        if (p.source === "compact") {
+          card = renderResume(readWork(home, project.id));
+        } else {
+          const { notes } = loadNotes(home);
+          // Startup capture remains incremental and separate from the compact resume.
+          try {
+            scanEvents(home, notes);
+          } catch {
+            // the card matters more than the count
+          }
+          card = renderCard(home, notes, project, { tools: false });
         }
-        const card = renderCard(home, notes, project, { tools: false });
         if (card) {
           output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
           logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0, session });

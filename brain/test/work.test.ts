@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, resumeText, workPath, writeAuto, writeWork } from "../src/work.ts";
+import { describe, expect, it, vi } from "vitest";
+import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, renderResume, resumeText, workPath, writeAuto, writeWork } from "../src/work.ts";
+import * as util from "../src/util.ts";
 import { estimateTokens } from "../src/util.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-work-"));
@@ -191,14 +192,74 @@ describe("work", () => {
     expect(work2?.auto).toContain("timeout");
   });
 
-  it("auto at section exactly", () => {
+  it("auto observations remain local and leave the synced plan byte-identical", () => {
     const home = tmp();
-    writeWork(home, "p", "text content");
-    writeAuto(home, "p", { edited: ["a.ts"] });
-
-    const content = readFileSync(join(home, "work", "p.md"), "utf8");
-    expect(content).toContain("## auto");
-    // The exact line "## auto" should be on its own line
-    expect(content).toMatch(/\n## auto\n/);
+    const plan = writeWork(home, "p", "Goal: ship safely");
+    const before = readFileSync(plan.path, "utf8");
+    writeAuto(home, "p", { edited: ["a.ts"], failure: "npm test failed" });
+    expect(readFileSync(plan.path, "utf8")).toBe(before);
+    expect(readFileSync(join(home, "state", "work", "p.auto.md"), "utf8")).toContain("npm test failed");
   });
+
+  it("an explicit plan written during an auto write cannot be lost", () => {
+    const home = tmp();
+    writeWork(home, "p", "Goal: old plan");
+    const atomic = util.writeAtomic;
+    const hook = vi.spyOn(util, "writeAtomic").mockImplementationOnce((path, text) => {
+      hook.mockRestore();
+      writeWork(home, "p", "Goal: concurrent new plan");
+      atomic(path, text);
+    });
+    try {
+      writeAuto(home, "p", { ask: "continue" });
+    } finally {
+      hook.mockRestore();
+    }
+    expect(readWork(home, "p")).toMatchObject({ text: "Goal: concurrent new plan", auto: "- last ask: continue" });
+  });
+
+  it("resume preserves a late Next after a long Done within the complete budget", () => {
+    const home = tmp();
+    writeWork(home, "p", `Goal: ship migration. Done: ${"completed step ".repeat(100)} Next: run integration. Watch out: preserve data.`);
+    writeAuto(home, "p", { edited: ["db.ts"], failure: "test failed", ask: "ship it" });
+    const text = renderResume(readWork(home, "p"));
+    expect(estimateTokens(text)).toBeLessThanOrEqual(150);
+    expect(text).toContain("Goal: ship migration");
+    expect(text).toContain("Next: run integration");
+    expect(text.indexOf("Next:")).toBeLessThan(text.indexOf("Done:"));
+  });
+
+  it("stale plan and current auto context display their own timestamps", () => {
+    const work = { project: "p", path: "", at: "2026-09-20T12:00:00Z", autoAt: "2026-09-27T15:00:00Z", text: "Goal: migrate DB", auto: "- last ask: export CSV" };
+    for (const text of [resumeText(work), renderResume(work)]) {
+      expect(text).toContain("plan may be stale");
+      expect(text).toContain("2026-09-20 12:00");
+      expect(text).toContain("2026-09-27 15:00");
+    }
+    expect(resumeText({ ...work, autoAt: "2026-09-23T12:00:00Z" })).not.toContain("plan may be stale");
+  });
+
+  it("legacy auto is readable, overridden locally, and dropped on the next plan write", () => {
+    const home = tmp();
+    mkdirSync(join(home, "work"));
+    writeFileSync(workPath(home, "p"), "---\nat: 2026-09-20T12:00:00Z\nauto_at: 2026-09-21T12:00:00Z\n---\n\nGoal: old\n\n## auto\n- last ask: legacy\n");
+    expect(readWork(home, "p")?.auto).toContain("legacy");
+    writeAuto(home, "p", { ask: "local" });
+    expect(readWork(home, "p")?.auto).toContain("local");
+    writeWork(home, "p", "Goal: new");
+    expect(readFileSync(workPath(home, "p"), "utf8")).not.toContain("legacy");
+    expect(readWork(home, "p")?.auto).toContain("local");
+  });
+
+  it("resume handles slash-separated labels and bounds unlabeled fallback text", () => {
+    const work = { project: "p", path: "", at: "", autoAt: "", text: "Goal ship / Done " + "completed ".repeat(100) + "/ Next verify / Watch out data", auto: "" };
+    const labeled = renderResume(work);
+    expect(labeled).toContain("Next: verify");
+    expect(labeled.indexOf("Next:")).toBeLessThan(labeled.indexOf("Done:"));
+    const fallback = renderResume({ ...work, text: "Continue from checkpoint. " + "detail ".repeat(200) });
+    expect(fallback).toContain("Continue from checkpoint.");
+    expect(estimateTokens(fallback)).toBeLessThanOrEqual(150);
+    expect(renderResume(null)).toBe("");
+  });
+
 });

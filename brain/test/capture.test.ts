@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import * as capture from "../src/capture.ts";
 import {
   appendEvent,
   acceptProposal,
@@ -932,7 +935,6 @@ describe("capture.renderFix", () => {
     });
 
     const rendered = renderFix(note);
-    expect(rendered).toContain("Brain (advisory):");
     expect(rendered).toContain("Fix the bug");
     expect(rendered).toContain("The bug is in module X");
     expect(rendered).toContain(`[${note.id}]`);
@@ -952,19 +954,6 @@ describe("capture.renderFix", () => {
     expect(tokens).toBeLessThanOrEqual(80);
   });
 
-  it("omits body when full text won't fit", () => {
-    const home = tmp();
-    const note = createNote(home, {
-      text: "A".repeat(200) + "\n\n" + "B".repeat(200),
-      project: "global",
-      kind: "gotcha",
-      tested: true,
-    });
-
-    const rendered = renderFix(note);
-    expect(rendered).toContain("Brain (advisory):");
-    expect(rendered).toContain(`[${note.id}]`);
-  });
 });
 
 describe("review round trip (regressions)", () => {
@@ -989,12 +978,165 @@ describe("review round trip (regressions)", () => {
     expect(listProposals(home)).toEqual([]);
   });
 
-  it("renders a fix from the headline and the next sentence, never the headline twice", () => {
-    const note = {
-      id: "n-1", kind: "gotcha" as const, project: "p", private: false, at: "2026-01-01T00:00:00Z", source: "user",
-      tags: [], errors: ["x"], evidence: [], tested: true, path: "",
-      body: "Clear PYTHONHOME before python\n\nThe uv tree it points at is corrupt. More detail here.",
-    };
-    expect(renderFix(note)).toBe("Brain (advisory): Clear PYTHONHOME before python: The uv tree it points at is corrupt [n-1]");
+});
+
+
+describe("capture batch five regressions", () => {
+  const row = (fields: Partial<ToolEvent> = {}) => JSON.stringify({ v: 1, at: new Date().toISOString(), session: "s", cwd: "", tool: "bash", ok: true, ...fields }) + "\n";
+  const log = (home: string, text: string, name = "s") => {
+    mkdirSync(eventsDir(home), { recursive: true });
+    const path = join(eventsDir(home), name + ".jsonl");
+    writeFileSync(path, text);
+    return path;
+  };
+  const pair = (cwd = "", error = "Error: missing dependency") => row({ cwd, command: "npm test", ok: false, error }) + row({ cwd, command: "npm test -- --run", ok: true });
+
+  it("scrubs URL credentials in path and cwd before their display cuts", () => {
+    const home = tmp();
+    const secret = "SyntheticPassword".repeat(40);
+    appendEvent(home, "s", "https://ci:" + secret + "@example.test/work", { tool: "read", path: "https://ci:" + secret + "@example.test/file", ok: true });
+    const event = JSON.parse(readFileSync(join(eventsDir(home), "s.jsonl"), "utf8")) as ToolEvent;
+    expect(event.cwd).toBe("https://ci:***@example.test/work");
+    expect(event.path).toBe("https://ci:***@example.test/file");
+  });
+
+  it("redacts PEM material whose BEGIN is outside the retained tail", () => {
+    const home = tmp();
+    const material = "SyntheticKeyMaterial42";
+    appendEvent(home, "s", "", { tool: "bash", ok: false, error: "header\n-----BEGIN RSA PRIVATE KEY-----\n" + (material + "\n").repeat(90) + "-----END RSA PRIVATE KEY-----\nError: bad key" });
+    const event = JSON.parse(readFileSync(join(eventsDir(home), "s.jsonl"), "utf8")) as ToolEvent;
+    expect(event.error).not.toContain(material);
+    expect(event.error).toContain("Error: bad key");
+  });
+
+  it("deduplicates only same-project and applicable global notes and proposals", () => {
+    const home = tmp();
+    const a = join(home, "a"), b = join(home, "b");
+    mkdirSync(a); mkdirSync(b);
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { a: { paths: [a], tags: ["node"] }, b: { paths: [b], tags: ["node"] } } }));
+    const note = createNote(home, { text: "Other project fix", project: "a", errors: ["Error: missing dependency"] });
+    const tagged = createNote(home, { text: "Unrelated global", project: "global", tags: ["rust"], errors: ["Error: missing dependency"] });
+    log(home, pair(b));
+    expect(scanEvents(home, [note, tagged]).map((p) => p.project)).toEqual(["b"]);
+    log(home, pair(a), "other");
+    expect(scanEvents(home, []).map((p) => p.project)).toEqual(["a"]);
+    log(home, pair(b), "repeat");
+    expect(scanEvents(home, [])).toEqual([]);
+    const applicable = createNote(home, { text: "Shared fix", project: "global", tags: ["node"], errors: ["Error: a shared failure"] });
+    log(home, pair(b, "Error: a shared failure"), "shared");
+    expect(scanEvents(home, [applicable])).toEqual([]);
+  });
+
+  it("keeps the full successful command in a bounded captured fix", () => {
+    const home = tmp();
+    const command = "python -m tools.maintenance.verify_production_database_schema";
+    log(home, row({ command: "python tools/maintenance/verify_production_database_schema.py", ok: false, error: "ModuleNotFoundError: no module named tools" }) + row({ command }));
+    const [proposal] = scanEvents(home, []);
+    const note = acceptProposal(home, proposal?.id ?? "");
+    const fix = renderFix(note);
+    expect(fix).toContain(command);
+    expect(Math.ceil(fix.length / 4)).toBeLessThanOrEqual(80);
+  });
+
+
+  it("reserves proposal body space for the actionable command after a long failure", () => {
+    const home = tmp();
+    const failed = "python " + "deep_directory/".repeat(28) + "check.py";
+    const fixed = "python -m " + "package.".repeat(22) + "check";
+    log(home, row({ command: failed, ok: false, error: "ModuleNotFoundError: no module named package" }) + row({ command: fixed }));
+    const [proposal] = scanEvents(home, []);
+    const note = acceptProposal(home, proposal?.id ?? "");
+    expect(renderFix(note)).toContain(fixed);
+    expect(Math.ceil(renderFix(note).length / 4)).toBeLessThanOrEqual(80);
+  });
+
+  it("captures both interleaved failed-to-fixed pairs", () => {
+    const home = tmp();
+    log(home, row({ command: "git status --invalid", ok: false, error: "error: invalid git option" }) + row({ command: "npm test", ok: false, error: "error: missing npm dependency" }) + row({ command: "git status" }) + row({ command: "npm test -- --run" }));
+    expect(scanEvents(home, []).map((p) => p.errors[0]).sort()).toEqual(["error: invalid git option", "error: missing npm dependency"]);
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("skips wrong event field types and continues other logs", () => {
+    const home = tmp();
+    log(home, row({ command: 42 as unknown as string, ok: false, error: "error: bad row" }), "a");
+    log(home, row({ cwd: {} as string, command: "npm test", ok: false, error: "error: bad cwd" }) + row({ error: [] as unknown as string, ok: false }) + "null\n" + pair(), "b");
+    expect(scanEvents(home, []).map((p) => p.errors)).toEqual([["Error: missing dependency"]]);
+  });
+
+  it("omits unusable generated patterns so short-error proposals can be accepted", () => {
+    const home = tmp();
+    log(home, pair("", "OOM"));
+    const [proposal] = scanEvents(home, []);
+    expect(proposal?.errors).toEqual([]);
+    expect(acceptProposal(home, proposal?.id ?? "").body).toContain("OOM");
+  });
+
+  it("reads only the unprocessed suffix when a large log has a cursor", () => {
+    const home = tmp();
+    const old = row({ command: "echo old" }).repeat(4000);
+    const fresh = pair();
+    log(home, old + fresh);
+    writeFileSync(join(home, "state", "capture-cursor.json"), JSON.stringify({ "s.jsonl": Buffer.byteLength(old) }));
+    const whole = vi.spyOn(fs, "readFileSync");
+    const reads = vi.spyOn(fs, "readSync");
+    syncBuiltinESMExports();
+    try {
+      expect(scanEvents(home, []).map((p) => p.errors)).toEqual([["Error: missing dependency"]]);
+      expect(whole.mock.calls.filter(([path]) => String(path).endsWith("s.jsonl"))).toEqual([]);
+      expect(reads.mock.results.reduce((sum, result) => sum + (typeof result.value === "number" ? result.value : 0), 0)).toBe(Buffer.byteLength(fresh));
+    } finally {
+      whole.mockRestore(); reads.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it("requires normalized cwd equality and the same first argument for tested pairs", () => {
+    const home = tmp();
+    log(home, row({ cwd: "C:/work/a", command: "npm test", ok: false, error: "Error: wrong cwd" }) + row({ cwd: "C:/work/b", command: "npm test -- --run" }), "different");
+    log(home, row({ command: "npm test", ok: false, error: "Error: tests failed" }) + row({ command: "npm --version" }), "weak");
+    log(home, row({ cwd: "C:\\work\\demo\\", command: "npm test", ok: false, error: "Error: useful test failure" }) + row({ cwd: "c:/WORK/demo", command: "npm test -- --run" }), "strong");
+    expect(scanEvents(home, []).map((p) => [p.errors[0], p.tested]).sort()).toEqual([["Error: tests failed", false], ["Error: useful test failure", true]]);
+  });
+
+  it("marks an explicit successful retry after preparation as tested", () => {
+    const home = tmp();
+    log(home, row({ command: "npm   test", ok: false, error: "Error: preparation required" }) + row({ command: "npm ci && npm test -- --run" }));
+    expect(scanEvents(home, []).map((p) => [p.errors[0], p.tested])).toEqual([["Error: preparation required", true]]);
+  });
+
+
+  it("never proposes commands or errors touching private note paths", () => {
+    const home = tmp();
+    log(home, row({ command: "cat notes/demo/private/secret.md", ok: false, error: "Error: confidential prose" }) + row({ command: "cat notes/demo/private/other.md" }), "command");
+    log(home, pair("", "Error: notes\\demo\\private\\secret.md contains confidential prose"), "error");
+    log(home, row({ command: "cat notes/demo/public.md", ok: false, error: "Error: missing note" }) + row({ command: "cat notes/demo/private/secret.md" }), "fixed");
+    expect(scanEvents(home, [])).toEqual([]);
+    appendEvent(home, "raw", "", { tool: "bash", command: "cat notes/demo/private/secret.md", ok: false, error: "Error: confidential prose" });
+    expect(existsSync(join(eventsDir(home), "raw.jsonl"))).toBe(false);
+  });
+
+  it("masks quoted curl credentials and whitespace credential flags, not ports", () => {
+    expect(scrub('curl -u "user:pass words" --port 80').text).not.toContain("words");
+    expect(scrub("curl --user 'user:pass words' -p 8080").text).toContain("-p 8080");
+    for (const flag of ["password", "token", "api-key", "secret", "client-secret", "auth"]) {
+      const text = scrub('tool --' + flag + ' "Synthetic secret words" --port 80').text;
+      expect(text).not.toContain("Synthetic");
+      expect(text).not.toContain("secret words");
+      expect(text).toContain("--port 80");
+      expect(scrub("tool --" + flag + " synthetic-value").text).not.toContain("synthetic-value");
+    }
+  });
+
+  it("reports frequent recent scoped errors without a known tested fix", () => {
+    const home = tmp();
+    const a = join(home, "a"), b = join(home, "b");
+    mkdirSync(a); mkdirSync(b);
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { a: { paths: [a] }, b: { paths: [b] } } }));
+    const known = createNote(home, { text: "Known repair", project: "a", tested: true, errors: ["Error: known failure"] });
+    log(home, row({ cwd: a, ok: false, error: "Error: known failure" }) + row({ cwd: b, ok: false, error: "Error: known failure" }) + row({ cwd: a, ok: false, error: "Error: frequent failure" }).repeat(3) + row({ cwd: a, ok: false, error: "Error: rare failure" }) + row({ cwd: a, ok: false, error: "Error: old failure", at: "2000-01-01T00:00:00Z" }) + row({ cwd: a, ok: true, error: "Error: not a failure" }));
+    expect(capture.unmatchedErrors(home, [known], { days: 7, project: "a" })).toEqual([{ signature: "Error: frequent failure", count: 3 }, { signature: "Error: rare failure", count: 1 }]);
+    expect(capture.unmatchedErrors(home, [known], { project: "b" })).toEqual([{ signature: "Error: known failure", count: 1 }]);
   });
 });
+

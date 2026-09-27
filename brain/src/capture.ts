@@ -4,6 +4,10 @@
  */
 import {
   appendFileSync,
+  closeSync,
+  fstatSync,
+  openSync,
+  readSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -15,7 +19,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
-import { cutToTokens, estimateTokens, nowIso, writeAtomic } from "./util.ts";
+import { cutToTokens, nowIso, writeAtomic } from "./util.ts";
 
 export { scrub };
 import {
@@ -23,11 +27,12 @@ import {
   type Kind,
   createNote,
   errorPatternProblem,
-  headline,
+  displayLine,
+  firstLine,
   isActive,
   type Note,
 } from "./notes.ts";
-import { type Project, resolveProject, visibleTo } from "./project.ts";
+import { type Project, normalizePath, projectById, resolveProject, visibleTo } from "./project.ts";
 
 export const EVENT_CAP_BYTES = 5 * 1024 * 1024;
 export const EVENT_RETENTION_DAYS = 14;
@@ -96,14 +101,9 @@ export function headAndTail(text: string, keep: number): string {
   return text.length <= keep * 2 + 5 ? text : `${text.slice(0, keep)}\n…\n${text.slice(-keep)}`;
 }
 
-/**
- * headAndTail with credentials masked (long runs kept). Each end is scrubbed with a margin before
- * it is cut, so a secret the cut goes through is masked, not half-kept.
- */
+/** Scrub with bounded context before retaining the small display head and tail. */
 export function scrubCut(text: string, keep: number): string {
-  const clean = (part: string) => scrub(part, { longRuns: false }).text;
-  if (text.length <= keep * 2 + 5) return clean(text);
-  return `${clean(text.slice(0, keep + 400)).slice(0, keep)}\n…\n${clean(text.slice(-(keep + 400))).slice(-keep)}`;
+  return headAndTail(scrub(headAndTail(text, 32_768), { longRuns: false }).text, keep);
 }
 
 /**
@@ -195,7 +195,7 @@ export function toolEventFrom(
  * `$env:X = …` assignments, wrappers (sudo, env and its options, time, `cmd /c`), PowerShell's
  * call operator `&`, and a notebook's `%%bash` line or `!` shell escape. Quoted paths are one word.
  */
-export function program(command: string): string {
+function commandIdentity(command: string): { program: string; argument: string } {
   const text = command.trim().replace(/^%%\w+[^\n]*\n/, "").replace(/^!/, "");
   // The last segment of "cd X && …", "pushd X; …" is what ran.
   const segments = text.split(/&&|\|\||;|\n/).map((s) => s.trim()).filter(Boolean);
@@ -213,9 +213,13 @@ export function program(command: string): string {
       continue;
     }
     const prog = (part.replace(/\\/g, "/").split("/").pop() ?? "").toLowerCase();
-    return prog.replace(/\.(exe|cmd|bat|ps1|com)$/, "");
+    return { program: prog.replace(/\.(exe|cmd|bat|ps1|com)$/, ""), argument: parts[i + 1] ?? "" };
   }
-  return "";
+  return { program: "", argument: "" };
+}
+
+export function program(command: string): string {
+  return commandIdentity(command).program;
 }
 
 /** Tools that run code cells (python, ipython, a notebook, a JS REPL): their "command" is code, not a shell command. */
@@ -239,9 +243,48 @@ export function errorSignature(error: string): string {
   return hit ? clean(hit) : "";
 }
 
+/** A private path in any event field must never become a public proposal. */
+function touchesPrivate(event: Pick<ToolEvent, "cwd" | "command" | "path" | "error">): boolean {
+  return [event.cwd, event.command, event.path, event.error].some((text) =>
+    text !== undefined && /(?:^|[\\/\s"'=:(])notes[\\/][^\\/\s]+[\\/]private(?:[\\/]|$)/i.test(text),
+  );
+}
+
+/** JSON is not a ToolEvent until every consumed field has the expected type. */
+function parseEvent(line: string): ToolEvent | null {
+  try {
+    const value = asRecord(JSON.parse(line));
+    if (value.v !== 1 || typeof value.ok !== "boolean" ||
+        !["at", "session", "cwd", "tool"].every((key) => typeof value[key] === "string") ||
+        !["command", "path", "error"].every((key) => value[key] === undefined || typeof value[key] === "string")) return null;
+    return value as unknown as ToolEvent;
+  } catch {
+    return null;
+  }
+}
+
+/** Read only the unprocessed bytes; an externally truncated log starts over. */
+function readEventTail(path: string, cursor: number): { bytes: Buffer; offset: number; mtimeMs: number; size: number } {
+  const fd = openSync(path, "r");
+  try {
+    const { size, mtimeMs } = fstatSync(fd);
+    const offset = Number.isSafeInteger(cursor) && cursor >= 0 && cursor <= size ? cursor : 0;
+    const bytes = Buffer.allocUnsafe(size - offset);
+    let read = 0;
+    while (read < bytes.length) {
+      const count = readSync(fd, bytes, read, bytes.length - read, offset + read);
+      if (!count) break;
+      read += count;
+    }
+    return { bytes: bytes.subarray(0, read), offset, mtimeMs, size };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * Append one tool event to the session's event log.
- * Scrubs command and error to 500 chars, path to 300. Never throws.
+ * Scrubs command, error, path and cwd; retains bounded command/error/path text. Never throws.
  * Skips silently when file is already ≥ EVENT_CAP_BYTES.
  */
 export function appendEvent(
@@ -257,6 +300,7 @@ export function appendEvent(
   },
   now?: Date
 ): void {
+  if (touchesPrivate({ cwd, ...fields })) return;
   try {
     const dir = eventsDir(home);
     mkdirSync(dir, { recursive: true });
@@ -274,17 +318,16 @@ export function appendEvent(
     // Scrub and truncate fields
     // The log is local (state/): credentials are masked, long runs are kept so the signatures
     // derived from it match future raw errors. Proposals made from it get the full scrub.
-    // Cut before scrubbing (scrubbing megabytes of output would block the session). An error keeps
-    // its head and its tail: compilers report first, Python tracebacks end with the actual error.
-    const command = fields.command ? cutToTokens(scrub(fields.command.slice(0, 2000), { longRuns: false }).text, 125) : undefined;
+    // Bound expensive error scrubbing, preserving context before the small head/tail cut.
+    const command = fields.command ? cutToTokens(scrubCut(fields.command, 1000), 125) : undefined;
     const error = fields.error ? scrubCut(fields.error, 300) : undefined;
-    const path = fields.path ? fields.path.slice(0, 300) : undefined;
+    const path = fields.path ? scrub(fields.path, { longRuns: false }).text.slice(0, 300) : undefined;
 
     const line: ToolEvent = {
       v: 1,
       at: nowIso(now),
       session,
-      cwd,
+      cwd: scrub(cwd, { longRuns: false }).text,
       tool: fields.tool,
       command,
       path,
@@ -351,10 +394,10 @@ function readRejected(home: string): Set<string> {
   return keys;
 }
 
-/** What must not be proposed again: active notes, pending proposals, rejected ones (lower-cased). */
+/** Retired notes also prevent re-proposing an accepted learning, within its visible scope. */
 interface Seen {
-  headlines: Set<string>;
-  errors: Set<string>;
+  notes: Note[];
+  proposals: Proposal[];
   rejected: Set<string>;
 }
 
@@ -367,33 +410,33 @@ function readJson<T>(path: string, fallback: T): T {
 }
 
 function seenBefore(home: string, notes: Note[]): Seen {
-  const seen: Seen = { headlines: new Set(), errors: new Set(), rejected: readRejected(home) };
-  const add = (headlineText: string, errors: string[]) => {
-    seen.headlines.add(headlineText.toLowerCase());
-    for (const e of errors) seen.errors.add(e.toLowerCase());
-  };
-  // Retired notes count too: an accepted-then-retired learning is not proposed again.
-  for (const note of notes) add(headline(note), note.errors);
-  for (const p of listProposals(home)) add(headline({ body: p.text }), p.errors);
-  return seen;
+  return { notes, proposals: listProposals(home), rejected: readRejected(home) };
 }
 
-/** Record a new proposal unless it repeats something seen; returns whether it was kept. */
-function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[]): boolean {
-  const head = headline({ body: proposal.text }).toLowerCase();
-  if (seen.headlines.has(head) || proposal.errors.some((e) => seen.errors.has(e.toLowerCase()))) return false;
+/** Full first-line identity; display truncation must never cause deduplication. */
+function identity(body: string): string {
+  return firstLine({ body }).replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Record a new proposal unless it repeats a learning applicable to its project. */
+function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[], project: Project | null): boolean {
+  if (touchesPrivate({ cwd: "", command: proposal.text })) return false;
+  const head = identity(proposal.text);
+  const errors = new Set(proposal.errors.map((error) => error.toLowerCase()));
+  const matches = (body: string, patterns: string[]) => identity(body) === head || patterns.some((error) => errors.has(error.toLowerCase()));
+  if (seen.notes.some((note) => visibleTo(note, project) && matches(note.body, note.errors))) return false;
+  if (seen.proposals.some((p) => (p.project === GLOBAL || p.project === proposal.project) && matches(p.text, p.errors))) return false;
   if (seen.rejected.has(rejectKey("h", head)) || proposal.errors.some((e) => seen.rejected.has(rejectKey("e", e)))) return false;
-  seen.headlines.add(head);
-  for (const e of proposal.errors) seen.errors.add(e.toLowerCase());
+  seen.proposals.push(proposal);
   saveProposal(home, proposal);
   out.push(proposal);
   return true;
 }
 
 /**
- * Turn new tool events into proposals: a failure followed, within 6 events of the same log, by a
- * successful different command of the same program and tool is a failed→fixed pair. The cursor
- * (`state/capture-cursor.json`) makes each event count once; fully processed logs older than
+ * Turn new tool events into proposals: a failure followed within 6 events by a successful changed
+ * command of the same program (or an explicit retry after preparation), tool and normalized cwd.
+ * The cursor makes each event count once; fully processed logs older than
  * EVENT_RETENTION_DAYS are deleted.
  */
 export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): Proposal[] {
@@ -407,84 +450,85 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
 
   for (const fileName of readdirSync(dir).filter((n) => n.endsWith(".jsonl")).sort()) {
     const filePath = join(dir, fileName);
-    let bytes: Buffer;
+    let log: ReturnType<typeof readEventTail>;
     try {
-      bytes = readFileSync(filePath);
+      log = readEventTail(filePath, cursor[fileName] ?? 0);
     } catch {
       continue;
     }
-    const offset = cursor[fileName] ?? 0;
+    const { bytes, offset, mtimeMs, size } = log;
     // Only complete lines: a line still being appended is read next time.
     const end = bytes.lastIndexOf(0x0a) + 1;
-    if (offset < end) {
+    if (end > 0) {
       const events: ToolEvent[] = [];
       const starts: number[] = [];
-      let at = offset;
+      let at = 0;
       while (at < end) {
         const next = bytes.indexOf(0x0a, at) + 1;
         const line = bytes.subarray(at, next).toString("utf8").trim();
-        if (line) {
-          try {
-            events.push(JSON.parse(line) as ToolEvent);
-            starts.push(at);
-          } catch {
-            // a foreign line is skipped
-          }
+        const event = parseEvent(line);
+        if (event) {
+          events.push(event);
+          starts.push(offset + at);
         }
         at = next;
       }
       // In a live log (written within the hour), a failure whose next 6 events have not all arrived
       // may still be fixed: the cursor waits on it. A quiet log's session is over: nothing waits.
-      let live = false;
-      try {
-        live = now.getTime() - statSync(filePath).mtimeMs < 3_600_000;
-      } catch {
-        // unknown: treat as over
-      }
+      const live = now.getTime() - mtimeMs < 3_600_000;
       let waiting: number | undefined;
       for (let i = 0; i < events.length; i++) {
         const failed = events[i];
-        if (!failed || failed.ok !== false || !failed.command || !failed.error) continue;
+        if (!failed || failed.ok !== false || !failed.command || !failed.error || touchesPrivate(failed)) continue;
         // Two code cells are not a failed command and its fix, unless they are shell cells.
         if (CODE_TOOL.test(failed.tool) && !/^(%%(bash|sh|cmd|powershell|pwsh)\b|!)/.test(failed.command.trim())) continue;
-        const prog = program(failed.command);
+        const identity = commandIdentity(failed.command);
+        const prog = identity.program;
         if (!prog) continue;
+        const failedCommand = failed.command.trim().replace(/\s+/g, " ");
         let paired = false;
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
           const fixed = events[j];
-          if (!fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command) continue;
-          if (program(fixed.command) !== prog || fixed.command === failed.command) continue;
+          if (!fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command || touchesPrivate(fixed)) continue;
+          if (normalizePath(fixed.cwd) !== normalizePath(failed.cwd)) continue;
+          const fixedIdentity = commandIdentity(fixed.command);
+          const retriesFailure = fixed.command.split(/&&|;/).some((part) => {
+            const command = part.trim().replace(/\s+/g, " ");
+            return command === failedCommand || command.startsWith(failedCommand + " -");
+          });
+          if ((!retriesFailure && fixedIdentity.program !== prog) || fixed.command === failed.command) continue;
           const failedCmd = scrub(failed.command).text;
-          const fixedCmd = scrub(fixed.command).text;
+          const fixedCmd = cutToTokens(scrub(fixed.command).text, 125);
           const error = scrub(failed.error).text;
           const short = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 60);
           // The signature is matched against future raw errors: only credentials are masked in it.
           const sig = errorSignature(scrub(failed.error, { longRuns: false }).text).slice(0, 60);
           const head = cutToTokens(`${prog}: ${short(failedCmd)} fails (${sig}); ${short(fixedCmd)} works`, 50);
           const evidence = [`events:${fileName}#${starts[i] ?? i}-${starts[j] ?? j}`];
-          const text = `${head}\n\n${failedCmd}\n\n${fixedCmd}\n\nError: ${error}`.slice(0, 800);
+          // Reserve the full retained successful command before filling the 800-character body.
+          const text = `${head}\n\n${cutToTokens(failedCmd, 20)}\n\n${fixedCmd}\n\nError: ${error}`.slice(0, 800);
+          const project = failed.cwd ? resolveProject(home, failed.cwd, {}) : null;
           propose(home, seen, {
             id: proposalId(evidence, text),
             at: nowIso(now),
-            project: failed.cwd ? resolveProject(home, failed.cwd, {}).id : GLOBAL,
+            project: project?.id ?? GLOBAL,
             kind: "gotcha",
             text,
-            errors: sig ? [sig] : [],
-            tested: true,
+            errors: sig && !errorPatternProblem(sig) ? [sig] : [],
+            tested: retriesFailure || (fixedIdentity.program === prog && fixedIdentity.argument === identity.argument),
             source: "capture",
             evidence,
-          }, proposals);
+          }, proposals, project);
           paired = true;
-          i = j;
           break;
         }
         if (live && !paired && waiting === undefined && i + 6 >= events.length) waiting = starts[i];
       }
-      cursor[fileName] = waiting ?? end;
+      cursor[fileName] = waiting ?? offset + end;
     }
     try {
-      const old = now.getTime() - statSync(filePath).mtimeMs > EVENT_RETENTION_DAYS * 86_400_000;
-      if (old && (cursor[fileName] ?? 0) >= bytes.lastIndexOf(0x0a) + 1) {
+      const old = now.getTime() - mtimeMs > EVENT_RETENTION_DAYS * 86_400_000;
+      if (old && (cursor[fileName] ?? 0) >= size) {
         rmSync(filePath);
         delete cursor[fileName];
       }
@@ -535,7 +579,7 @@ export function scanCommits(home: string, repoRoot: string, project: string, not
         tested: false,
         source: "commit",
         evidence: [`commit:${sha.slice(0, 12)}`],
-      }, proposals);
+      }, proposals, project === GLOBAL ? null : projectById(home, project, repoRoot));
     }
   }
   const newest = commits.at(-1);
@@ -637,7 +681,7 @@ export function rejectProposal(home: string, id: string): void {
   }
 
   const rejected = readRejected(home);
-  rejected.add(rejectKey("h", headline({ body: prop.text })));
+  rejected.add(rejectKey("h", identity(prop.text)));
   for (const err of prop.errors) rejected.add(rejectKey("e", err));
   writeAtomic(rejectedPath(home), formatRejected(rejected));
 
@@ -744,41 +788,54 @@ export function findFix(
   return best?.note ?? null;
 }
 
-/**
- * Render a fix as an advisory message within FIX_BUDGET tokens.
- * Format: "Brain (advisory): <headline>: <first sentence>" if room, else just headline.
- * Total ≤ FIX_BUDGET tokens with id suffix.
- */
+/** One advisory fix, successful captured command first, within the complete 80-token budget. */
 export function renderFix(note: Note): string {
-  const hl = headline(note);
-  const idSuffix = ` [${note.id}]`;
-  const prefix = "Brain (advisory): ";
+  const suffix = ` [${note.id}]`;
+  const prefix = "Brain: ";
+  const budget = Math.max(0, FIX_BUDGET * 4 - prefix.length - suffix.length);
+  // Captured bodies retain headline, failed command, successful command, then error.
+  const fixed = note.source === "capture" ? note.body.split(/\n\s*\n/)[2]?.replace(/\s+/g, " ").trim() : undefined;
+  let text = fixed ? `${fixed} works — ${firstLine(note)}` : firstLine(note);
+  if (!fixed) {
+    const rest = note.body.split("\n").slice(1).join(" ").replace(/\s+/g, " ").trim();
+    const sentence = rest.split(/(?<=[.!?])\s+/)[0]?.replace(/\.$/, "");
+    if (sentence && text.length + sentence.length + 2 <= budget) text += `: ${sentence}`;
+  }
+  // displayLine is code-point safe; the token estimator counts UTF-16 units.
+  let content = displayLine({ body: text }, budget);
+  while (content.length > budget) content = displayLine({ body: text }, Array.from(content).length - 1);
+  return prefix + content + suffix;
+}
 
-  // Budget: FIX_BUDGET tokens for entire message
-  // Used: prefix + idSuffix, remaining for content
-  const totalBudgetChars = FIX_BUDGET * 4;
-  const usedChars = estimateTokens(prefix) * 4 + estimateTokens(idSuffix) * 4;
-  const contentBudgetChars = Math.max(1, totalBudgetChars - usedChars);
 
-  // Try to add first sentence of body
-  let text = hl;
-  const rest = note.body.split("\n").slice(1).join(" ").replace(/\s+/g, " ").trim();
-  if (rest) {
-    const parts = rest.split(/(?<=[.!?])\s+/);
-    const firstSentence = (parts[0] ?? "").trim().replace(/\.$/, "");
-    if (firstSentence) {
-      const candidate = `${hl}: ${firstSentence}`;
-      if (candidate.length <= contentBudgetChars) {
-        text = candidate;
+/** Recent failed signatures with no visible tested fix, most frequent first. */
+export function unmatchedErrors(home: string, notes: Note[], opts: { days?: number; project?: string } = {}): { signature: string; count: number }[] {
+  const dir = eventsDir(home);
+  if (!existsSync(dir)) return [];
+  const since = Date.now() - (opts.days ?? EVENT_RETENTION_DAYS) * 86_400_000;
+  const counts = new Map<string, number>();
+  const projects = new Map<string, Project>();
+  for (const name of readdirSync(dir).filter((name) => name.endsWith(".jsonl"))) {
+    let bytes: Buffer;
+    try {
+      bytes = readEventTail(join(dir, name), 0).bytes;
+    } catch {
+      continue;
+    }
+    for (const line of bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1).toString("utf8").split("\n")) {
+      const event = parseEvent(line);
+      if (!event || event.ok || !event.error || touchesPrivate(event) || !(Date.parse(event.at) >= since)) continue;
+      let project: Project | null = null;
+      if (event.cwd) {
+        project = projects.get(event.cwd) ?? resolveProject(home, event.cwd, {});
+        projects.set(event.cwd, project);
       }
+      if (opts.project && opts.project !== (project?.id ?? GLOBAL)) continue;
+      if (findFix(notes, event.error, project)) continue;
+      const signature = errorSignature(scrub(event.error).text);
+      if (signature) counts.set(signature, (counts.get(signature) ?? 0) + 1);
     }
   }
-
-  // Cut to budget if needed
-  const cut =
-    text.length <= contentBudgetChars
-      ? text
-      : text.slice(0, Math.max(1, contentBudgetChars - 1)).trimEnd() + "…";
-
-  return `${prefix}${cut}${idSuffix}`;
+  return [...counts].map(([signature, count]) => ({ signature, count }))
+    .sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));
 }

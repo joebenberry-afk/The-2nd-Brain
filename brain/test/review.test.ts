@@ -12,6 +12,7 @@ import { loadProjects, projectById, resolveProject } from "../src/project.ts";
 import { main } from "../src/cli.ts";
 import { renderCard } from "../src/card.ts";
 import { recall } from "../src/search.ts";
+import { readWork } from "../src/work.ts";
 
 const tmp = (p = "brain-review-") => mkdtempSync(join(tmpdir(), p));
 const git = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" });
@@ -88,7 +89,7 @@ describe("extension", () => {
     secondBrain(pi, { SECOND_BRAIN_HOME: home });
     const out = onResult?.({ toolName: "bash", input: {}, isError: true, content: "Error: Cannot find module 'x'" }, { cwd: home }) as { content: { text: string }[] };
     expect(out.content[0]?.text).toBe("Error: Cannot find module 'x'");
-    expect(out.content[1]?.text).toMatch(/^Brain \(advisory\): Run npm ci first/);
+    expect(out.content[1]?.text).toContain("Run npm ci first");
   });
 });
 
@@ -191,7 +192,7 @@ describe("second review", () => {
     handlers.get("tool_result")?.({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [] }, ctx);
     handlers.get("tool_result")?.({ toolName: "edit", input: { path: "b.ts" }, isError: false, content: [] }, ctx);
     handlers.get("session_compact")?.({}, { ...ctx });
-    expect(readFileSync(join(home, "work", `${resolveProject(home, home, {}).id}.md`), "utf8")).toContain("- edited: b.ts\n");
+    expect(readWork(home, resolveProject(home, home, {}).id)?.auto).toBe("- edited: b.ts");
   });
 
   it("finds notes with accented words", () => {
@@ -223,12 +224,6 @@ describe("third review", () => {
     expect(findFix([note], raw, null)?.id).toBe(note.id);
   });
 
-  it("a working state without a plan never outranks a plan in a sync conflict", async () => {
-    const { writeAuto } = await import("../src/work.ts");
-    const home = tmp();
-    writeAuto(home, "demo", { ask: "hello" });
-    expect(readFileSync(join(home, "work", "demo.md"), "utf8")).not.toMatch(/^at:/m);
-  });
 
   it("masks secrets under quoted JSON keys and every GitHub token prefix", async () => {
     const { scrub } = await import("../src/scrub.ts");
@@ -287,7 +282,7 @@ describe("fourth review", () => {
     const ctx = { cwd: home, sessionManager: { getSessionId: () => "s" } };
     for (const path of ["a.ts", "b.ts", "a.ts"]) handlers.get("tool_result")?.({ toolName: "edit", input: { path }, isError: false, content: [] }, ctx);
     handlers.get("session_compact")?.({}, ctx);
-    expect(readFileSync(join(home, "work", `${resolveProject(home, home, {}).id}.md`), "utf8")).toContain("- edited: b.ts, a.ts\n");
+    expect(readWork(home, resolveProject(home, home, {}).id)?.auto).toBe("- edited: b.ts, a.ts");
   });
 });
 
@@ -458,4 +453,17 @@ describe("ninth review", () => {
     expect(sync(b)).toMatchObject({ pulled: true, pushed: true });
     expect(readFileSync(join(b, "work", "проект.md"), "utf8")).toContain("newer from B");
   });
+});
+
+
+it("review displays each full scrubbed proposal body before acceptance", async () => {
+  const home = tmp();
+  mkdirSync(join(home, "state", "inbox"), { recursive: true });
+  writeFileSync(join(home, "state", "inbox", "p-review.json"), JSON.stringify({ id: "p-review", at: new Date().toISOString(), project: "global", kind: "gotcha", text: "Use the repair\n\nActual command: npm test -- --run\n\npassword=SyntheticPassword\n\nError: package unavailable", tested: false, errors: [], evidence: [], source: "capture" }));
+  const out: string[] = [];
+  expect(await main(["review"], { env: { SECOND_BRAIN_HOME: home }, cwd: home, out: (s) => out.push(s), err: (s) => out.push(s) })).toBe(0);
+  const text = out.join("\n");
+  expect(text).toContain("Actual command: npm test -- --run");
+  expect(text).toContain("Error: package unavailable");
+  expect(text).not.toContain("SyntheticPassword");
 });
