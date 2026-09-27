@@ -10,7 +10,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), "brain-work-"));
 describe("work", () => {
   it("workPath: <home>/work/<project>.md", () => {
     const path = workPath("/tmp/brain", "myproject");
-    expect(path).toBe("/tmp/brain/work/myproject.md");
+    expect(path).toBe(join("/tmp/brain", "work", "myproject.md"));
   });
 
   it("readWork: null when missing", () => {
