@@ -54,7 +54,8 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     const tempFile = join(tmpdir(), `brain-pathspecs-${process.pid}-${Math.random().toString(16).slice(2)}`);
     // Exactly the staged Brain files: a directory with no tracked file (notes/ holding only
     // private notes, an empty kits/) would make git reject the whole pathspec.
-    const staged = spawnSync("git", ["-C", home, "diff", "--cached", "--name-only", "--relative", "-z", "--", ...pathspecs], { encoding: "utf8" });
+    // --no-renames: a moved note must list both its new path and the deletion of its old one
+    const staged = spawnSync("git", ["-C", home, "diff", "--cached", "--name-only", "--no-renames", "--relative", "-z", "--", ...pathspecs], { encoding: "utf8" });
     const pathspecContent = staged.stdout.split("\0").filter(Boolean).map((f) => `:(literal)${f}`).join("\0");
     writeFileSync(tempFile, pathspecContent);
 

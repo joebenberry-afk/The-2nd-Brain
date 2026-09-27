@@ -52,12 +52,13 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   result = result.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s@/]+@/gi, "$1***@");
   result = result.replace(/((?:^|\s)(?:-u\s*|--user[=\s]\s*)[^\s:]+:)\S+/g, "$1***");
 
-  // key = "quoted value" (masked whole, spaces included), then key = value
-  result = result.replace(/([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)(["'])([^"'\n]*)\3/g, (match, name: string, sep: string, quote: string, value: string) =>
+  // key = "quoted value": masked whole — spaces, the other quote and escaped quotes included
+  result = result.replace(/([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)(["'])((?:\\.|(?!\3)[^\\\n])*)\3/g, (match, name: string, sep: string, quote: string, value: string) =>
     value !== "***" && isCredential(name, value) ? `${name}${sep}${quote}***${quote}` : match,
   );
-  result = result.replace(/([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;"'}]+)/g, (match, name: string, sep: string, value: string) =>
-    value !== "***" && !value.startsWith("//") && isCredential(name, value) ? `${name}${sep}***` : match,
+  // key = value: up to whitespace, a comma, a semicolon or a closing brace (quotes inside included)
+  result = result.replace(/([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;}]+)/g, (match, name: string, sep: string, value: string) =>
+    !/^["']?\*\*\*["']?$/.test(value) && !value.startsWith("//") && isCredential(name, value) ? `${name}${sep}***` : match,
   );
 
   if (opts.longRuns === false) return { text: result, scrubbed: result !== original };

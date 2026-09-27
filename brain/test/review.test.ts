@@ -391,3 +391,30 @@ describe("seventh review", () => {
     expect(findSameHeadline(notes, "Use uv for installs", "etl", ["python"])).toBeDefined();
   });
 });
+
+describe("eighth review", () => {
+  it("a moved note is committed as a move, never as two copies", async () => {
+    const { sync } = await import("../src/sync.ts");
+    const home = tmp();
+    git(home, "init", "-q");
+    git(home, "commit", "-q", "--allow-empty", "-m", "init");
+    const out: string[] = [];
+    const io = { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "alpha" }, cwd: home, out: (s: string) => out.push(s), err: (s: string) => out.push(s) };
+    await main(["note", "a note that will move"], io);
+    const id = out[0]?.replace("saved ", "") ?? "";
+    sync(home, { push: false });
+    await main(["move", id, "--to", "beta"], io);
+    sync(home, { push: false });
+    expect(git(home, "ls-tree", "-r", "--name-only", "HEAD").stdout.trim()).toBe(`notes/beta/${id}.md`);
+    expect(git(home, "status", "--porcelain", "--", "notes").stdout).toBe("");
+  });
+
+  it("masks quoted secrets that contain the other quote or an escaped quote", async () => {
+    const { scrub } = await import("../src/scrub.ts");
+    expect(scrub(`DB_PASSWORD="it's-a-secret"`).text).toBe(`DB_PASSWORD="***"`);
+    expect(scrub(`{"password": "don't tell 99", "user": "me"}`).text).toBe(`{"password": "***", "user": "me"}`);
+    expect(scrub(`password='ab"cd ef'`).text).toBe(`password='***'`);
+    expect(scrub(`password="ab\\"cd" next`).text).toBe(`password="***" next`);
+    expect(scrub(`password: it's-secret rest`).text).toBe("password: *** rest");
+  });
+});
