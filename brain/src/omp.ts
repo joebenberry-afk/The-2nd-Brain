@@ -12,7 +12,7 @@ import { appendEvent, errorSignature, findFix, renderFix, scanEvents, scrubCut, 
 import { renderCard } from "./card.ts";
 import { logUse, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
-import { readWork, renderResume, writeAuto, writeWork } from "./work.ts";
+import { readWork, renderResume, stateSaved, writeAuto, writeWork } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
@@ -269,7 +269,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const { params, cwd, ctx } = toolArgs(args, required);
           const session = sessionKey(ctx);
           const result = run(params, cwd, session, ctx);
-          if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, hits: result.hits });
+          if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub: isSubagent(ctx), hits: result.hits });
           return { content: [{ type: "text", text: result.text }], details: {} };
         } catch (error) {
           return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
@@ -334,13 +334,13 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       tool(
         "brain_state",
         "Brain state",
-        "Replace this project's working state (goal, done, next, watch out) so work resumes after compaction or in the next session. Update it when the plan changes; under 120 words.",
+        "Replace this project's working state (Goal:, Done:, Next:, Watch out:) so work resumes after compaction or in the next session. Update it when the plan changes; under 60 words.",
         { text: { type: "string", description: "goal, done, next, watch out" } },
         (params, cwd, _session, ctx) => {
           const project = resolveProject(home, cwd, env);
           if (isSubagent(ctx)) return { text: "not saved: working state belongs to the parent session", project: project.id };
           const work = writeWork(home, project.id, requireString(params.text, "text"));
-          return { text: `state saved (${estimateTokens(work.text)} tokens)`, kind: "state", project: project.id };
+          return { text: stateSaved(work), kind: "state", project: project.id };
         },
       ),
     );
@@ -566,7 +566,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const fixText = renderFix(fix);
           const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
           const resultContent = [...contentArray, { type: "text", text: fixText }];
-          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key });
+          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx) });
           return { content: resultContent };
         }
       }

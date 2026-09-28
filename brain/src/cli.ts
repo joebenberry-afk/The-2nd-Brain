@@ -16,7 +16,7 @@ import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
 import { logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, slug, tagKey } from "./util.ts";
-import { readWork, renderResume, resumeText, writeWork } from "./work.ts";
+import { readWork, renderResume, resumeText, stateSaved, writeWork } from "./work.ts";
 
 export interface Io {
   out: (text: string) => void;
@@ -168,7 +168,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
       return 0;
     }
     const work = writeWork(c.home, c.project.id, c.args.join(" "));
-    c.io.out(`state saved (${estimateTokens(work.text)} tokens)`);
+    c.io.out(stateSaved(work));
     use(c, "state", work.text);
     return 0;
   },
@@ -284,6 +284,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     c.io.out(`cards: ${s.cards.main} main · ${s.cards.sub} sub`);
     const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
+    c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     const unmatched = unmatchedErrors(c.home, loadNotes(c.home).notes, { days: s.days }).slice(0, 5);
     if (unmatched.length) {
       c.io.out("Unmatched errors:");

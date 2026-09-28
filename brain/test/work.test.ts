@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, renderResume, resumeText, workPath, writeAuto, writeWork } from "../src/work.ts";
+import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, renderResume, resumeText, stateSaved, workPath, writeAuto, writeWork } from "../src/work.ts";
 import * as util from "../src/util.ts";
 import { estimateTokens } from "../src/util.ts";
 
@@ -235,6 +235,23 @@ describe("work", () => {
     const text = renderResume(readWork(home, "p"));
     expect(text).toContain("Do not deploy without owner approval");
     expect(text).toContain("Next: run tests");
+  });
+
+  it("resume drops a field it can only stub and never cuts an observation line", () => {
+    const home = tmp();
+    const text = `Goal: ${"make the brain great ".repeat(6)}\nNext: ${"restart and compact ".repeat(8)}\nWatch out: capture precision beats recall for proposals\nDone: ${"round ".repeat(40)}`;
+    writeWork(home, "p", text);
+    writeAuto(home, "p", { edited: ["src/card.ts"], failure: "`ls state/work` → No such file", ask: "where are we?" });
+    const resume = renderResume(readWork(home, "p"));
+    expect(estimateTokens(resume)).toBeLessThanOrEqual(150);
+    for (const line of resume.split("\n")) {
+      expect(line).not.toMatch(/^(Goal|Next|Watch out|Done): .{0,38}…$/);
+      if (line.startsWith("- ")) expect(line).not.toMatch(/…$/);
+    }
+    expect(resume).toContain("Goal: make the brain");
+    expect(stateSaved(readWork(home, "p")!)).toMatch(/after compaction only 100 return, so .*done.* will be cut/);
+    writeWork(home, "p", "Goal: ship. Next: test.");
+    expect(stateSaved(readWork(home, "p")!)).toBe("state saved (6 tokens)");
   });
 
   it("stale plan and current auto context display their own timestamps", () => {

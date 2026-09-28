@@ -229,6 +229,18 @@ describe("local usage telemetry", () => {
     expect(s.recalls).toEqual({ calls: 3, measured: 2, matched: 1 });
   });
 
+  it("counts sessions that used brain tools per role; a subagent is known by any sub row", () => {
+    const home = tmp();
+    const base = { project: "demo", tokens: 1, ms: 1 };
+    logUse(home, { ...base, kind: "card", session: "idle-main" }, NOW);
+    logUse(home, { ...base, kind: "card", session: "busy-main" }, NOW);
+    logUse(home, { ...base, kind: "state", session: "busy-main" }, NOW);
+    logUse(home, { ...base, kind: "fix", session: "fixed-main" }, NOW);
+    logUse(home, { ...base, kind: "card", session: "child", sub: true }, NOW);
+    logUse(home, { ...base, kind: "note", session: "child" }, NOW);
+    expect(stats(home, 7, NOW).toolUse).toEqual({ main: { sessions: 3, using: 1 }, sub: { sessions: 1, using: 1 } });
+  });
+
   it("rotates telemetry past 1 MiB by rename, keeping the previous file readable by stats", () => {
     const home = tmp();
     mkdirSync(join(home, "state"), { recursive: true });

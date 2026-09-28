@@ -48,7 +48,11 @@ export interface Stats {
   byKind: Record<string, { count: number; tokens: number }>;
   cards: { main: number; sub: number };
   recalls: { calls: number; measured: number; matched: number };
+  /** Sessions that called brain_recall, brain_note or brain_state, of all sessions in that role. */
+  toolUse: { main: { sessions: number; using: number }; sub: { sessions: number; using: number } };
 }
+
+const TOOL_KINDS = new Set(["recall", "note", "state"]);
 
 /** Usage over the last days; old recall rows without hit counts are unmeasured, not misses. */
 export function stats(home: string, days = 7, now: Date = new Date()): Stats {
@@ -57,6 +61,7 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
   const cards = { main: 0, sub: 0 };
   const recalls = { calls: 0, measured: 0, matched: 0 };
   const sessions = new Set<string>();
+  const roles = new Map<string, { sub: boolean; using: boolean }>();
   let text = "";
   for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
     try {
@@ -85,7 +90,19 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
         if (row.hits > 0) recalls.matched += 1;
       }
     }
-    if (typeof row.session === "string" && row.session) sessions.add(row.session);
+    if (typeof row.session === "string" && row.session) {
+      sessions.add(row.session);
+      const role = roles.get(row.session) ?? { sub: false, using: false };
+      if (row.sub === true) role.sub = true;
+      if (TOOL_KINDS.has(row.kind)) role.using = true;
+      roles.set(row.session, role);
+    }
   }
-  return { days, sessions: sessions.size, byKind, cards, recalls };
+  const toolUse = { main: { sessions: 0, using: 0 }, sub: { sessions: 0, using: 0 } };
+  for (const role of roles.values()) {
+    const slot = toolUse[role.sub ? "sub" : "main"];
+    slot.sessions += 1;
+    if (role.using) slot.using += 1;
+  }
+  return { days, sessions: sessions.size, byKind, cards, recalls, toolUse };
 }
