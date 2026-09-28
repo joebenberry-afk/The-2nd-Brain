@@ -11,6 +11,7 @@ import { createNote, loadNotes } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
 import { readWork, writeWork } from "../src/work.ts";
 import { estimateTokens } from "../src/util.ts";
+import { stats } from "../src/telemetry.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -825,5 +826,12 @@ describe("OMP extension under a hostile or limited host", () => {
     expect(active).toEqual(["read", "brain_recall", "brain_note", "brain_state"]);
     await handlers.get("session_start")!({}, { ...ctx("child"), agent: { kind: "sub" } });
     expect(active).toEqual(["read", "brain_recall"]);
+  });
+
+  it("fails open but records a swallowed handler error for brain stats", () => {
+    const { handlers } = load();
+    const bad = { get cwd(): string { throw new Error("host ctx broke"); }, sessionManager: { getSessionId: () => "s-err" } };
+    expect(handlers.get("before_agent_start")!({ prompt: "x" }, bad)).toBeUndefined();
+    expect(stats(home).errors.map((e) => e.error)).toEqual(["before_agent_start: Error: host ctx broke"]);
   });
 });

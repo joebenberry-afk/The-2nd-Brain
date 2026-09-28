@@ -217,6 +217,14 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   }
 
   const sessions = new Map<string, SessionState>();
+  /**
+   * Fail open, but never silently: a swallowed handler error becomes a local telemetry row, so
+   * "the card never came" shows up in `brain stats` instead of vanishing.
+   */
+  const failed = (where: string, error: unknown): void => {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    logUse(home, { kind: "error", project: "", tokens: 0, ms: 0, error: `${where}: ${scrubCut(message, 200)}` });
+  };
   const on = (event: string, handler: (event: unknown, ctx: unknown) => unknown): boolean => {
     try {
       pi.on(event, handler);
@@ -328,7 +336,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       }
 
       return undefined;
-    } catch {
+    } catch (error) {
+      failed("before_agent_start", error);
       return undefined;
     }
   });
@@ -362,7 +371,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const resumeMsg = buildResumeMessage(state.resume.content, state.resume.at);
       state.resumeSeen = true;
       return { messages: [...messages.slice(0, at), resumeMsg, ...messages.slice(at)] };
-    } catch {
+    } catch (error) {
+      failed("context", error);
       return undefined;
     }
   });
@@ -433,7 +443,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       state.fixed = undefined;
 
       return undefined;
-    } catch {
+    } catch (error) {
+      failed("session_compact", error);
       return undefined;
     }
   });
@@ -442,7 +453,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     on("session_before_compact", (_event, ctx) => {
       try {
         saveAuto(ctx);
-      } catch {
+      } catch (error) {
+        failed("session_before_compact", error);
         // never block the host's compaction
       }
       return undefined;
@@ -515,7 +527,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       }
 
       return undefined;
-    } catch {
+    } catch (error) {
+      failed("tool_result", error);
       return undefined;
     }
   });
@@ -530,7 +543,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         const active = pi.getActiveTools();
         const keep = active.filter((name) => name !== "brain_note" && name !== "brain_state");
         if (keep.length !== active.length) await pi.setActiveTools(keep);
-      } catch {
+      } catch (error) {
+        failed("session_start", error);
         // the child keeps every tool; nothing else changes
       }
       return undefined;
@@ -541,7 +555,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   on("session_shutdown", (_event, ctx) => {
     try {
       saveAuto(ctx);
-    } catch {
+    } catch (error) {
+      failed("session_shutdown", error);
       // never block the host's exit
     }
     return undefined;
@@ -562,7 +577,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
         logUse(home, { kind: "nudge", project: project.id, tokens: estimateTokens(text), ms: 0, session: key, sub: false });
         return { continue: true, additionalContext: text };
-      } catch {
+      } catch (error) {
+        failed("session_stop", error);
         return undefined;
       }
     });

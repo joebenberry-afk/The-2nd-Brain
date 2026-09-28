@@ -307,6 +307,10 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.hook} hook · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
+    if (s.errors.length) {
+      c.io.out(`Brain errors (swallowed, host unaffected): ${s.errors.length}`);
+      for (const e of s.errors.slice(-3)) c.io.out(`${e.at.slice(0, 16).replace("T", " ")} ${e.error}`);
+    }
     const unmatched = unmatchedErrors(c.home, loadNotes(c.home).notes, { days: s.days }).slice(0, 5);
     if (unmatched.length) {
       c.io.out("Unmatched errors:");

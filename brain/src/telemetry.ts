@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./util.ts";
 
-export type UseKind = "card" | "resume" | "fix" | "recall" | "note" | "state" | "nudge";
+export type UseKind = "card" | "resume" | "fix" | "recall" | "note" | "state" | "nudge" | "error";
 
 export interface Use {
   kind: UseKind;
@@ -22,6 +22,8 @@ export interface Use {
   hits?: number;
   /** The note behind a fix, so stats can say which fixes keep firing. */
   id?: string;
+  /** Where a fail-open handler swallowed an error, and the (scrubbed, cut) message. */
+  error?: string;
 }
 
 /**
@@ -74,6 +76,8 @@ export interface Stats {
   olderBuildRows: number;
   /** Fixes by the number of distinct sessions they fired in, most first. */
   fixes: { id: string; sessions: number }[];
+  /** Errors fail-open handlers swallowed, newest last. */
+  errors: { at: string; error: string }[];
 }
 
 const TOOL_KINDS = new Set(["recall", "note", "state"]);
@@ -126,7 +130,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
       // either file may be missing
     }
   }
-  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown };
+  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown; error?: unknown };
   const rows: Row[] = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -144,6 +148,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const stamps = rows.map((row) => row.v).filter((v): v is string => typeof v === "string" && /^[0-9a-z]+$/.test(v));
   const newest = opts.allBuilds || !stamps.length ? undefined : stamps.reduce((a, b) => (parseInt(b, 36) > parseInt(a, 36) ? b : a));
   const fired = new Map<string, Set<string>>();
+  const errors: Stats["errors"] = [];
   let olderBuildRows = 0;
   for (const row of rows) {
     if (typeof row.kind !== "string") continue;
@@ -151,6 +156,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
       olderBuildRows += 1;
       continue;
     }
+    if (row.kind === "error" && typeof row.error === "string") errors.push({ at: String(row.at), error: row.error });
     if (row.kind === "fix" && typeof row.id === "string") {
       const seen = fired.get(row.id) ?? new Set<string>();
       seen.add(typeof row.session === "string" ? row.session : "");
@@ -187,5 +193,5 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
     if (role.using) slot.using += 1;
   }
   const fixes = [...fired].map(([id, seen]) => ({ id, sessions: seen.size })).sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
-  return { days, sessions: sessions.size, byKind, cards, recalls, toolUse, toolCalls, olderBuildRows, fixes };
+  return { days, sessions: sessions.size, byKind, cards, recalls, toolUse, toolCalls, olderBuildRows, fixes, errors };
 }
