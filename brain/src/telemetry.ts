@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { nowIso } from "./util.ts";
 import { scrub } from "./scrub.ts";
 
-export type UseKind = "card" | "resume" | "fix" | "fixout" | "recall" | "note" | "state" | "nudge" | "error";
+export type UseKind = "card" | "resume" | "fix" | "fixout" | "recall" | "note" | "state" | "error";
 
 export interface Use {
   kind: UseKind;

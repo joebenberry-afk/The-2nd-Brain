@@ -2,7 +2,7 @@
  * Agent benchmark: the same small coding tasks run by headless OMP agents with the Brain off, on,
  * or on with experiments (BRAIN_EXPERIMENT), scored from the agents' own session files.
  *
- *   node scripts/agentbench.ts [--conditions off,on] [--tasks rename,fix,find,scaffold] [--reps 2]
+ *   node scripts/agentbench.ts [--conditions off,on] [--tasks rename,fix,find,scaffold,learn] [--reps 2]
  *                              [--concurrency 4] [--model openai-codex/gpt-6-astra] [--label text]
  *
  * A condition is `off`, `on`, or `on+<experiment>[+<experiment>]`; a `@<preset>` part adds an OMP
@@ -11,6 +11,10 @@
  * projects, telemetry), so conditions never see each other's sessions. Results append to
  * state/agentbench.jsonl; the summary compares every condition with its best earlier run on the
  * same task set. Costs real model usage: meant for GPT models, run deliberately.
+ * `--tasks learn --conditions off,on --reps 6` runs A/B session pairs (default condition: on):
+ * fresh workspaces, one isolated Brain home per pair, no handoff except persisted Brain memory.
+ * Notes and their later card/recall/fix exposure, plus B-only metrics, are retained in each row.
+ * v5-nudge rejected: +11.9% A+B tokens, +4.2% cost vs same-batch control; control wrote notes 6/6.
  */
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
@@ -18,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
-import { createNote } from "../src/notes.ts";
+import { createNote, loadNotes } from "../src/notes.ts";
 
 const PACKAGE = resolve(import.meta.dirname, "..");
 /** Bump when existing fixtures/tasks change; additive tasks already have a distinct taskSet. */
@@ -35,7 +39,7 @@ const RESULTS = join(HOME, "state", "agentbench.jsonl");
 
 const { values } = parseArgs({
   options: {
-    conditions: { type: "string", default: "off,on" },
+    conditions: { type: "string" },
     tasks: { type: "string", default: "rename,fix,find" },
     reps: { type: "string", default: "2" },
     concurrency: { type: "string", default: "4" },
@@ -76,10 +80,37 @@ const testsPass = (dir: string): boolean => {
 interface Task {
   prompt: string;
   empty?: boolean;
+  fixture?: Record<string, string>;
   verify(dir: string, answer: string): boolean;
 }
 
+// The contract belongs to the host, not the repo. Reading/diagnosing it is allowed, editing it is not.
+const LEARN_RUNNER = `import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+if (process.argv.includes("--diagnose")) {
+  console.log("BENCHAPP-E17: this host's cart test channel is amber; set BENCHAPP_CHANNEL=amber when running npm test.");
+  process.exit(0);
+}
+if (process.env.BENCHAPP_CHANNEL !== "amber") {
+  console.error("BENCHAPP-E17: host contract mismatch. The host runner supports --diagnose.");
+  process.exit(17);
+}
+const result = spawnSync(process.execPath, ["--test", "test/cart.test.ts"], { stdio: "inherit" });
+if (result.status === 0) writeFileSync(process.env.BENCHAPP_RECEIPT, "passed");
+process.exit(result.status ?? 1);
+`;
+const LEARN_FIXTURE = {
+  ...FIXTURE,
+  "package.json": JSON.stringify({ name: "benchapp-learn", type: "module", private: true, scripts: { test: "node scripts/check.mjs" } }, null, 2) + "\n",
+  "scripts/check.mjs": 'import { pathToFileURL } from "node:url";\nawait import(pathToFileURL(process.env.BENCHAPP_RUNNER).href);\n',
+};
+
 const TASKS: Record<string, Task> = {
+  learn: {
+    fixture: LEARN_FIXTURE,
+    prompt: "Fix the cart discount calculation and demonstrate a passing npm test. Do not edit tests, package scripts, or the host-managed runner; you may inspect and diagnose the host environment. Keep the source fix small.",
+    verify: (dir) => ["test/cart.test.ts", "package.json", "scripts/check.mjs"].every((p) => read(dir, p) === LEARN_FIXTURE[p as keyof typeof LEARN_FIXTURE]) && testsPass(dir),
+  },
   scaffold: {
     empty: true,
     prompt: "Create a small Node TypeScript CLI named wordcount in this empty directory. Running `node bin/wordcount.mjs <file>` must print just the number of whitespace-separated words in that UTF-8 file (zero for empty/whitespace-only input). Include a test at test/wordcount.test.ts and a non-watch `npm test` script, then run it and demonstrate the CLI. Keep it small; stop once it works.",
@@ -200,11 +231,25 @@ interface Run {
   task: string;
   condition: string;
   rep: number;
+  session?: "A" | "B";
 }
 
-const conditions = values.conditions!.split(",").map((c) => c.trim()).filter(Boolean);
+interface SessionRow extends Run, Score {
+  id: string;
+  ok: boolean;
+  infra: boolean;
+  exit: number | null;
+  seconds: number;
+}
+
+const conditions = (values.conditions ?? (values.tasks === "learn" ? "on" : "off,on")).split(",").map((c) => c.trim()).filter(Boolean);
 const taskNames = values.tasks!.split(",").map((t) => t.trim()).filter((t) => TASKS[t]);
 const reps = Number(values.reps);
+if (taskNames.includes("learn") && (taskNames.length !== 1 || !conditions.length || conditions.some((c) => !["off", "on"].includes(c)))) throw new Error("learn runs alone with off/on conditions");
+if (reps === 0) {
+  console.log(`No runs requested: tasks ${taskNames.join(",")} · conditions ${conditions.join(",")}`);
+  process.exit(0);
+}
 const scratch = mkdtempSync(join(tmpdir(), "agentbench-"));
 /** Session files stay (local, never committed) so the next experiment can study where turns went. */
 const kept = join(HOME, "state", "agentbench", new Date().toISOString().replace(/[:.]/g, "-"));
@@ -222,11 +267,11 @@ for (const condition of conditions) {
   homes.set(condition, home);
 }
 
-function runOne(run: Run): Promise<Record<string, unknown>> {
-  const id = `${run.task}-${run.condition.replace(/[^a-z0-9]+/gi, "_")}-${run.rep}`;
+function runOne(run: Run, pairHome?: string): Promise<SessionRow> {
+  const id = `${run.task}-${run.condition.replace(/[^a-z0-9]+/gi, "_")}-${run.rep}${run.session ? `-${run.session}` : ""}`;
   const ws = join(scratch, "ws", id);
   mkdirSync(ws, { recursive: true });
-  for (const [path, text] of Object.entries(TASKS[run.task]!.empty ? {} : FIXTURE)) {
+  for (const [path, text] of Object.entries(TASKS[run.task]!.empty ? {} : TASKS[run.task]!.fixture ?? FIXTURE)) {
     mkdirSync(join(ws, path, ".."), { recursive: true });
     writeFileSync(join(ws, path), text);
   }
@@ -236,17 +281,24 @@ function runOne(run: Run): Promise<Record<string, unknown>> {
   const experiments = parts.filter((part) => !part.startsWith("@"));
   const presets = parts.filter((part) => part.startsWith("@")).map((part) => part.slice(1));
   // Fresh scaffold projects must not inherit another repetition's working state or notes.
-  const project = run.task === "scaffold" ? id : "benchapp";
-  const env: NodeJS.ProcessEnv = { ...process.env, BRAIN_PROJECT: project, BRAIN_EXPERIMENT: experiments.join(",") };
+  const project = run.task === "scaffold" ? id : run.task === "learn" ? "benchapp-learn" : "benchapp";
+  const env: NodeJS.ProcessEnv = { ...process.env, BRAIN: mode === "off" ? "off" : "on", BRAIN_PROJECT: project, BRAIN_EXPERIMENT: experiments.join(",") };
+  const runner = join(sessions, "host-runner.mjs");
+  const receipt = join(sessions, "test-passed.txt");
+  if (run.task === "learn") {
+    writeFileSync(runner, LEARN_RUNNER);
+    env.BENCHAPP_RUNNER = runner;
+    env.BENCHAPP_RECEIPT = receipt;
+    delete env.BENCHAPP_CHANNEL;
+  }
   if (presets.length) {
     const overlay = join(scratch, `settings-${id}.yml`);
     writeFileSync(overlay, presets.map((name) => SETTINGS[name] ?? "").join(""));
     env.PI_CONFIG_FILES = overlay;
   }
-  if (mode === "off") env.BRAIN = "off";
-  else {
-    env.SECOND_BRAIN_HOME = homes.get(run.condition)!;
-    if (run.task === "scaffold") {
+  if (mode !== "off" || pairHome) {
+    env.SECOND_BRAIN_HOME = pairHome ?? homes.get(run.condition)!;
+    if (run.task === "scaffold" || run.task === "learn") {
       const path = join(env.SECOND_BRAIN_HOME, "projects.json");
       const registry = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
       registry.projects ??= {};
@@ -268,12 +320,46 @@ function runOne(run: Run): Promise<Record<string, unknown>> {
       const answer = s.answer || out.trim().split("\n").slice(-3).join(" ");
       // A dead network or provider says nothing about the task: such runs are left out of scores.
       const infra = code !== 0 && /ERR_TLS|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed|socket hang up|\b429\b|\b5\d\d\b|rate limit|quota/i.test(out.slice(-2000));
-      const ok = code === 0 && TASKS[run.task]!.verify(ws, answer);
+      const ok = code === 0 && TASKS[run.task]!.verify(ws, answer) && (run.task !== "learn" || (existsSync(receipt) && readFileSync(runner, "utf8") === LEARN_RUNNER));
+      writeFileSync(join(sessions, "output.txt"), out);
       const row = { ...run, id, ok, infra, exit: code, seconds: Math.round((Date.now() - started) / 1000), ...s, answer: answer.slice(0, 300) };
       console.log(`${infra ? "INFRA" : ok ? "PASS" : "FAIL"} ${id} ${row.seconds}s turns=${s.turns} tokens=${s.input + s.cacheRead + s.cacheWrite + s.output} $${s.cost.toFixed(3)}`);
       done(row);
     });
   });
+}
+
+/** A and B never share files/session history; only their private Brain home survives. */
+async function runLearnPair(run: Run) {
+  const home = join(scratch, `pair-${run.condition.replace(/[^a-z0-9]+/gi, "_")}-${run.rep}`);
+  if (run.condition === "off") mkdirSync(home, { recursive: true });
+  else cpSync(homes.get(run.condition)!, home, { recursive: true });
+  const before = new Set(loadNotes(home).notes.map((n) => n.id));
+  const telemetryPath = join(home, "state", "telemetry.jsonl");
+  const telemetry = (): { kind: string; id?: string; ids?: string[] }[] => existsSync(telemetryPath) ? readFileSync(telemetryPath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  const a = await runOne({ ...run, session: "A" }, home);
+  const notes = loadNotes(home).notes.filter((n) => !before.has(n.id)).map((n) => ({ id: n.id, text: n.body }));
+  const afterA = telemetry();
+  // Snapshot exactly what B can inherit, before B can add/change anything.
+  cpSync(home, join(kept, a.id, "brain-after-A"), { recursive: true });
+  const b = await runOne({ ...run, session: "B" }, home);
+  const bUses = telemetry().slice(afterA.length);
+  const surfaced: { id: string; via: string }[] = [];
+  for (const note of notes) {
+    for (const via of ["recall", "fix"]) if (bUses.some((u) => u.kind === via && (u.id === note.id || u.ids?.includes(note.id)))) surfaced.push({ id: note.id, via });
+    for (const file of readdirSync(join(kept, b.id)).filter((f) => f.endsWith(".jsonl"))) {
+      const entries = readFileSync(join(kept, b.id, file), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      if (entries.some((e) => e.type === "custom_message" && e.customType === "brain.card" && String(e.content).includes(note.id))) {
+        surfaced.push({ id: note.id, via: "card" });
+        break;
+      }
+    }
+  }
+  cpSync(home, join(kept, b.id, "brain-after-B"), { recursive: true });
+  const pair = { ...a, ...run, session: undefined, id: a.id.slice(0, -2), ok: a.ok && b.ok, infra: a.infra || b.infra, a, b, notes, surfaced };
+  for (const key of ["seconds", "turns", "input", "cacheRead", "cacheWrite", "output", "cost", "toolCalls", "toolResultTokens", "failedTools"] as const) pair[key] = a[key] + b[key];
+  writeFileSync(join(kept, pair.id + ".json"), JSON.stringify(pair, null, 2) + "\n");
+  return pair;
 }
 
 async function pool<T, R>(items: T[], n: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -291,7 +377,7 @@ async function pool<T, R>(items: T[], n: number, fn: (item: T) => Promise<R>): P
 // Interleave conditions so time-of-day and rate limits hit them alike.
 const runs: Run[] = [];
 for (let rep = 1; rep <= reps; rep++) for (const task of taskNames) for (const condition of conditions) runs.push({ task, condition, rep });
-const rows = await pool(runs, Number(values.concurrency), runOne);
+const rows = await pool(runs, Number(values.concurrency), (run) => run.task === "learn" ? runLearnPair(run) : runOne(run));
 
 // ---------------------------------------------------------------- summary vs best earlier run
 
@@ -324,6 +410,23 @@ for (const condition of conditions) {
   const vs = best ? `${now.cost < best.cost && now.pass === now.runs ? "BEAT" : "not beaten"} (${best.cost.toFixed(3)}, ${Math.round(best.tokens)} tokens)` : "first run";
   const rel = condition === conditions[0] ? "control" : `${pct(now.tokens, control.tokens)}, ${pct(now.cost, control.cost)}`;
   console.log(`${condition.padEnd(20)} ${`${now.pass}/${now.runs}`.padStart(4)}  ${now.cost.toFixed(3).padStart(6)}  ${now.turns.toFixed(1).padStart(6)}  ${Math.round(now.tokens).toString().padStart(11)}  ${Math.round(now.uncached).toString().padStart(9)}  ${Math.round(now.output).toString().padStart(7)}  ${Math.round(now.toolResult).toString().padStart(12)}   ${rel.padEnd(22)}  ${vs}`);
+}
+if (taskNames.includes("learn")) {
+  const pairs = rows.filter((r): r is Awaited<ReturnType<typeof runLearnPair>> => "b" in r && !r.infra);
+  const learning = conditions.map((condition) => {
+    const rs = pairs.filter((r) => r.condition === condition);
+    const n = rs.length || 1;
+    const mean = (f: (r: typeof rs[number]) => number) => rs.reduce((sum, r) => sum + f(r), 0) / n;
+    return { condition, n: rs.length, notes: rs.reduce((sum, r) => sum + r.notes.length, 0), wrote: rs.filter((r) => r.notes.length).length,
+      saw: rs.filter((r) => r.surfaced.length).length,
+      landed: rs.reduce((sum, r) => sum + new Set(r.surfaced.filter((s) => s.via !== "card").map((s) => s.id)).size, 0),
+      bTokens: mean((r) => r.b.input + r.b.cacheRead + r.b.cacheWrite + r.b.output), bCost: mean((r) => r.b.cost), bTurns: mean((r) => r.b.turns), bTools: mean((r) => r.b.toolCalls),
+      pass: rs.filter((r) => r.ok).length, bPass: rs.filter((r) => r.b.ok).length,
+      tokens: mean((r) => r.input + r.cacheRead + r.cacheWrite + r.output), cost: mean((r) => r.cost) };
+  });
+  console.log("\nlearn (means per B / pair; landed excludes card-only exposure):");
+  console.log("condition       A notes (pairs)  B saw  landed  B tokens  B cost  B turns  B tools  B pass  pair pass  A+B tokens  A+B cost");
+  for (const r of [...learning].sort((a, b) => a.cost - b.cost)) console.log(`${r.condition.padEnd(15)} ${r.notes} (${r.wrote}/${r.n})          ${r.saw}/${r.n}    ${r.landed}       ${Math.round(r.bTokens)}   ${r.bCost.toFixed(3)}   ${r.bTurns.toFixed(1)}     ${r.bTools.toFixed(1)}     ${r.bPass}/${r.n}     ${r.pass}/${r.n}        ${Math.round(r.tokens)}    ${r.cost.toFixed(3)}`);
 }
 console.log(`raw rows: ${RESULTS} · sessions: ${kept}`);
 // A lingering child process can hold a file on Windows: cleanup must never lose the report.

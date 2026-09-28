@@ -378,54 +378,6 @@ describe("OMP extension", () => {
     expect(fixText()).toContain("Fix for SRE mismatch");
   });
 
-  it.each(["1", "5", "0", "-1", "1.5", "5x", "", "Infinity", "9007199254740992"])("stop nudge threshold %j accepts only positive safe integers", (value) => {
-    const { handlers } = load({ SECOND_BRAIN_HOME: home, BRAIN_STOP_NUDGE: "on", BRAIN_STOP_NUDGE_AFTER: value }, true);
-    const c = { ...ctx(`threshold-${value}`), agent: { kind: "main" } };
-    const threshold = value === "1" ? 1 : value === "5" ? 5 : 30;
-    for (let i = 0; i < threshold; i++) {
-      expect(handlers.get("session_stop")!({}, c)).toBeUndefined();
-      handlers.get("tool_result")!({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [] }, c);
-    }
-    expect(handlers.get("session_stop")!({}, c)).toMatchObject({ continue: true });
-  });
-
-  it("opt-in stop nudge: once per main session, only after 30 results without a Brain write", () => {
-    const env = { SECOND_BRAIN_HOME: home, BRAIN_STOP_NUDGE: "on" };
-    expect(load().handlers.has("session_stop")).toBe(false);
-    const { handlers, tools } = load(env, true);
-    const stop = handlers.get("session_stop")!;
-    const work = (c: unknown, n: number) => {
-      for (let i = 0; i < n; i++) handlers.get("tool_result")!({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [] }, c);
-    };
-    const main = { ...ctx("nudge-main"), agent: { kind: "main" } };
-    work(main, 29);
-    expect(stop({ stop_hook_active: false }, main)).toBeUndefined();
-    const stateTool = tools.find((t: any) => t.name === "brain_state") as any;
-    stateTool.execute("s", { text: "Goal: keep going" }, undefined, undefined, main);
-    work(main, 29);
-    expect(stop({ stop_hook_active: false }, main)).toBeUndefined();
-    work(main, 1);
-    expect(stop({ stop_hook_active: true }, main)).toBeUndefined();
-    const nudge = stop({ stop_hook_active: false }, main) as { continue: boolean; additionalContext: string };
-    expect(nudge.continue).toBe(true);
-    expect(nudge.additionalContext).toContain("brain_note(text)");
-    expect(estimateTokens(nudge.additionalContext)).toBeLessThanOrEqual(80);
-    work(main, 40);
-    expect(stop({ stop_hook_active: false }, main)).toBeUndefined();
-    const child = { ...ctx("nudge-child"), agent: { kind: "sub" } };
-    work(child, 40);
-    expect(stop({ stop_hook_active: false }, child)).toBeUndefined();
-    const shell = { ...ctx("nudge-cli"), agent: { kind: "main" } };
-    const bash = (command: string) => handlers.get("tool_result")!({ toolName: "bash", input: { command }, isError: false, content: [] }, shell);
-    work(shell, 40);
-    bash('node brain/bin/brain.mjs --project app note "Deploys need the VPN"');
-    work(shell, 28);
-    bash("brain state"); // shows the state: not a write
-    expect(stop({ stop_hook_active: false }, shell)).toBeUndefined();
-    work(shell, 1);
-    expect(stop({ stop_hook_active: false }, shell)).toMatchObject({ continue: true });
-  });
-
   it("untested note → no fix appended", () => {
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;

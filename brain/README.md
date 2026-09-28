@@ -109,13 +109,6 @@ notes for repo-invisible learning; state when goal/next changes. OMP subagents k
 child session at `session_start`, saving ~250 schema tokens per child request. A child note
 written another way (CLI) stays untested until a parent confirms it or runs `brain tested <id>`.
 
-**Opt-in: end-of-turn learning nudge.** With `BRAIN_STOP_NUDGE=on` in OMP's environment
-(`[Environment]::SetEnvironmentVariable("BRAIN_STOP_NUDGE", "on", "User")`, then restart OMP),
-a main session that ran 30 tool calls since its last `brain_note`/`brain_state` gets one hidden
-continuation turn when it is about to stop: save the working state or a learning, or reply
-"nothing to save". At most once per session, never for subagents; `brain stats` counts `nudge`.
-This amends plan rule 4 ("never continues host work") for this one moment, by owner decision.
-
 ## 3. Other harnesses
 
 **Claude Code.** In `~/.claude/settings.json` (or a project’s `.claude/settings.json`):

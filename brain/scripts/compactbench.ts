@@ -121,7 +121,7 @@ async function runOne(rep: number, condition: string, goal: string, next: string
     }, null, 2));
   }
   const contextPath = join(dir, "context.jsonl");
-  const env = { ...process.env, SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "compactbench", BRAIN: "on", BRAIN_TOOLS: "on", BRAIN_EXPERIMENT: "", BRAIN_STOP_NUDGE: "off", COMPACTBENCH_CONTEXT: contextPath, COMPACTBENCH_ABLATE: condition === "ablate" ? "on" : "off" };
+  const env = { ...process.env, SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "compactbench", BRAIN: "on", BRAIN_TOOLS: "on", BRAIN_EXPERIMENT: "", COMPACTBENCH_CONTEXT: contextPath, COMPACTBENCH_ABLATE: condition === "ablate" ? "on" : "off" };
   const args = ["--mode", "rpc", "--no-ui", "--no-title", "--no-lsp", "--no-skills", "--no-rules", "--tools", long ? "read,edit" : "read",
     "--no-extensions", "-e", extension, "-e", observer,
     "--config", overlay, "--model", values.model!, "--smol", values.model!, "--slow", values.model!,
