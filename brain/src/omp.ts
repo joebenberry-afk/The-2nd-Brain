@@ -199,12 +199,87 @@ export function toolArgs(args: unknown[], key: string): { params: Json; cwd: str
 }
 
 /**
- * A quoted JS string literal holding an unescaped `\\b`: a backspace at runtime, never the regex
- * word boundary its author meant. Regex literals and String.raw templates are not quoted strings.
+ * JavaScript source with `\b` inside a cooked string ('…', "…" or a template without String.raw):
+ * a backspace at runtime, never the regex word boundary its author meant. A small lexical scan
+ * skips comments, regex literals and String.raw templates, and follows `${…}` interpolation.
  */
 export function hasBackspaceEscape(code: string): boolean {
-  for (const literal of code.matchAll(/(['"])((?:\\.|(?!\1)[^\\\n])*)\1/g)) {
-    if (/(?:^|[^\\])(?:\\\\)*\\b/.test(literal[2] ?? "")) return true;
+  let i = 0;
+  // What precedes a `/`: after a value it divides, otherwise it starts a regex literal.
+  let afterValue = false;
+  const templates: { depth: number; raw: boolean }[] = []; // each open `${`: brace depth, raw?
+  let depth = 0;
+  const cooked = (end: string, raw: boolean): boolean => {
+    // Scans a string body from i (just past its opening quote); true on a cooked `\b`.
+    while (i < code.length) {
+      const ch = code[i]!;
+      if (ch === "\\") {
+        if (!raw && code[i + 1] === "b") return true;
+        i += 2;
+        continue;
+      }
+      if (ch === end) {
+        i += 1;
+        return false;
+      }
+      if (end === "`" && ch === "$" && code[i + 1] === "{") {
+        templates.push({ depth, raw });
+        depth += 1;
+        i += 2;
+        return false;
+      }
+      if (end !== "`" && ch === "\n") return false;
+      i += 1;
+    }
+    return false;
+  };
+  while (i < code.length) {
+    const ch = code[i]!;
+    const next = code[i + 1];
+    if (ch === "/" && next === "/") {
+      i = code.indexOf("\n", i);
+      if (i < 0) break;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i = code.indexOf("*/", i + 2);
+      if (i < 0) break;
+      i += 2;
+      continue;
+    }
+    if (ch === "/" && !afterValue) {
+      // Regex literal: skip to its unescaped closing slash, outside character classes.
+      let inClass = false;
+      for (i += 1; i < code.length && code[i] !== "\n"; i++) {
+        if (code[i] === "\\") i += 1;
+        else if (code[i] === "[") inClass = true;
+        else if (code[i] === "]") inClass = false;
+        else if (code[i] === "/" && !inClass) break;
+      }
+      i += 1;
+      afterValue = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const raw = ch === "`" && /String\.raw\s*$/.test(code.slice(Math.max(0, i - 16), i));
+      i += 1;
+      if (cooked(ch, raw)) return true;
+      afterValue = true;
+      continue;
+    }
+    if (ch === "}" && templates.length && templates[templates.length - 1]!.depth === depth - 1) {
+      // End of `${…}`: back inside the template text, raw or cooked as it opened.
+      const { raw } = templates.pop()!;
+      depth -= 1;
+      i += 1;
+      if (cooked("`", raw)) return true;
+      afterValue = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") depth -= 1;
+    if (!/\s/.test(ch)) afterValue = /[\w$)\]]/.test(ch);
+    i += 1;
   }
   return false;
 }
@@ -547,7 +622,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // boundary silently matches nothing and agents chase a "tool bug" (benchmark autopsy: 15 of
       // 44 GPT runs). With this line the next script dropped the broken pattern every time.
       const code = asObject(input)?.code;
-      if (toolName === "eval" && typeof code === "string" && hasBackspaceEscape(code)) {
+      const language = asObject(input)?.language;
+      // JavaScript only: in Python r'\bword\b' is right, and String.raw is not Python.
+      if (toolName === "eval" && (language === "js" || language === "javascript") && typeof code === "string" && hasBackspaceEscape(code)) {
         const fixed = (state.fixed ??= new Set());
         const hint = fixed.has("rawhint") ? "Brain: quoted '\\b' is a backspace again (see above)." : "Brain: in this script a quoted '\\b' is a backspace, not a word boundary; write String.raw`\\bword\\b` or '\\\\b'.";
         fixed.add("rawhint");

@@ -842,13 +842,22 @@ describe("OMP extension under a hostile or limited host", () => {
     expect(hasBackspaceEscape("await tool.grep({ pattern: String.raw`\\badd\\b` })")).toBe(false);
     expect(hasBackspaceEscape(String.raw`const found = /\badd\b/.test(text)`)).toBe(false);
     expect(hasBackspaceEscape(String.raw`print("tab\tnewline\n")`)).toBe(false);
+    // Review reproductions: comments, regex literals holding quotes, raw templates; cooked templates.
+    expect(hasBackspaceEscape(String.raw`print(/'\bword\b'/.test("'word'"))`)).toBe(false);
+    expect(hasBackspaceEscape("print(String.raw`'\\bword\\b'`)")).toBe(false);
+    expect(hasBackspaceEscape(String.raw`// avoid '\bword\b'` + "\nprint(\"ok\")")).toBe(false);
+    expect(hasBackspaceEscape("const p = `\\b${word}\\b`")).toBe(true);
+    expect(hasBackspaceEscape("const p = String.raw`\\b${word}\\b`")).toBe(false);
+    expect(hasBackspaceEscape("const n = a / b; const s = '\\b'")).toBe(true);
   });
 
   it("appends the backspace hint to an eval whose quoted pattern holds \\b, then only a pointer", () => {
     const { handlers } = load();
     const c = ctx("raw");
-    const run = (code: string) => handlers.get("tool_result")!({ toolName: "eval", toolCallId: "e", input: { code }, isError: false, content: [{ type: "text", text: "(no matches)" }] }, c) as { content: { text: string }[] } | undefined;
+    const run = (code: string, language = "js") => handlers.get("tool_result")!({ toolName: "eval", toolCallId: "e", input: { language, code }, isError: false, content: [{ type: "text", text: "(no matches)" }] }, c) as { content: { text: string }[] } | undefined;
     expect(run(String.raw`await tool.grep({ pattern: String.raw` + "`\\badd\\b`" + " })")).toBeUndefined();
+    // Python raw strings are correct as written; the JavaScript advice would be wrong there.
+    expect(run(String.raw`import re; print(re.search(r'\bword\b', 'word'))`, "py")).toBeUndefined();
     expect(run(String.raw`await tool.grep({ pattern: '\badd\b' })`)?.content.at(-1)?.text).toContain("is a backspace, not a word boundary");
     expect(run(String.raw`await tool.grep({ pattern: '\bsum\b' })`)?.content.at(-1)?.text).toBe("\nBrain: quoted '\\b' is a backspace again (see above).");
   });
