@@ -80,7 +80,11 @@ whole, not as "loop" or "update".
    command).
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
    hit rate, which fixes fired in how many sessions, errors the Brain swallowed to keep the host
-   running (latest three), and frequent errors without a fix.
+   running (latest three), and frequent errors without a fix. Each recall row keeps its query
+   (masked, ≤ 200 chars) and the ids it answered with, locally only (`recall: N queries logged,
+   S silent`). A fired fix is judged by the next run of the same command: `fix outcomes: <id>
+   helped H/missed M`; a fix helped under half the time over 4+ outcomes is listed under
+   `Fixes to review:` in stats and `brain review` (the note is never changed automatically).
    `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI, hooks and
    MCP; old rows lacking attribution are excluded from this split, not guessed to be OMP. Every
    row carries the build that wrote it (newest source mtime); stats read only the newest build

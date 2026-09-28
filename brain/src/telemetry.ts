@@ -8,8 +8,9 @@ import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statS
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./util.ts";
+import { scrub } from "./scrub.ts";
 
-export type UseKind = "card" | "resume" | "fix" | "recall" | "note" | "state" | "nudge" | "error";
+export type UseKind = "card" | "resume" | "fix" | "fixout" | "recall" | "note" | "state" | "nudge" | "error";
 
 export interface Use {
   kind: UseKind;
@@ -20,6 +21,10 @@ export interface Use {
   via?: "tool" | "cli" | "hook" | "mcp";
   sub?: boolean;
   hits?: number;
+  /** Scrubbed at the write boundary; recall answers themselves are never logged. */
+  query?: string;
+  ids?: string[];
+  outcome?: "helped" | "missed";
   /** The note behind a fix, so stats can say which fixes keep firing. */
   id?: string;
   /** Where a fail-open handler swallowed an error, and the (scrubbed, cut) message. */
@@ -51,7 +56,7 @@ export function logUse(home: string, use: Use, now: Date = new Date()): void {
   try {
     mkdirSync(join(home, "state"), { recursive: true });
     const path = telemetryPath(home);
-    const row = JSON.stringify({ at: nowIso(now), ...use, ms: Math.round(use.ms * 10) / 10, ...(BUILD ? { v: BUILD } : {}) }) + "\n";
+    const row = JSON.stringify({ at: nowIso(now), ...use, ...(use.query === undefined ? {} : { query: scrub(use.query).text.slice(0, 200) }), ms: Math.round(use.ms * 10) / 10, ...(BUILD ? { v: BUILD } : {}) }) + "\n";
     try {
       if (statSync(path).size + Buffer.byteLength(row) > MAX_BYTES) renameSync(path, join(home, "state", "telemetry.1.jsonl"));
     } catch {
@@ -69,6 +74,8 @@ export interface Stats {
   byKind: Record<string, { count: number; tokens: number }>;
   cards: { main: number; sub: number };
   recalls: { calls: number; measured: number; matched: number };
+  recallQueries: { logged: number; silent: number };
+  fixOutcomes: { id: string; firings: number; helped: number; missed: number }[];
   /** Sessions that called brain_recall, brain_note or brain_state, of all sessions in that role. */
   toolUse: { main: { sessions: number; using: number }; sub: { sessions: number; using: number } };
   toolCalls: Record<"tool" | "cli" | "hook" | "mcp", number>;
@@ -119,6 +126,8 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const byKind: Stats["byKind"] = Object.create(null);
   const cards = { main: 0, sub: 0 };
   const recalls = { calls: 0, measured: 0, matched: 0 };
+  const recallQueries = { logged: 0, silent: 0 };
+  const outcomes = new Map<string, Stats["fixOutcomes"][number]>();
   const toolCalls = { tool: 0, cli: 0, hook: 0, mcp: 0 };
   const sessions = new Set<string>();
   const roles = new Map<string, { sub: boolean; known: boolean; using: boolean }>();
@@ -130,7 +139,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
       // either file may be missing
     }
   }
-  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown; error?: unknown };
+  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown; error?: unknown; query?: unknown; ids?: unknown; outcome?: unknown };
   const rows: Row[] = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -157,6 +166,12 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
       continue;
     }
     if (row.kind === "error" && typeof row.error === "string") errors.push({ at: String(row.at), error: row.error });
+    if (typeof row.id === "string" && (row.kind === "fix" || row.kind === "fixout")) {
+      const counts = outcomes.get(row.id) ?? { id: row.id, firings: 0, helped: 0, missed: 0 };
+      if (row.kind === "fix") counts.firings += 1;
+      else if (row.outcome === "helped" || row.outcome === "missed") counts[row.outcome] += 1;
+      outcomes.set(row.id, counts);
+    }
     if (row.kind === "fix" && typeof row.id === "string") {
       const seen = fired.get(row.id) ?? new Set<string>();
       seen.add(typeof row.session === "string" ? row.session : "");
@@ -169,6 +184,10 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
     if (TOOL_KINDS.has(row.kind) && (row.via === "tool" || row.via === "cli" || row.via === "hook" || row.via === "mcp")) toolCalls[row.via] += 1;
     if (row.kind === "recall") {
       recalls.calls += 1;
+      if (typeof row.query === "string" && Array.isArray(row.ids) && row.ids.every(id => typeof id === "string")) {
+        recallQueries.logged += 1;
+        if (!row.ids.length) recallQueries.silent += 1;
+      }
       if (typeof row.hits === "number" && Number.isInteger(row.hits) && row.hits >= 0) {
         recalls.measured += 1;
         if (row.hits > 0) recalls.matched += 1;
@@ -193,5 +212,6 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
     if (role.using) slot.using += 1;
   }
   const fixes = [...fired].map(([id, seen]) => ({ id, sessions: seen.size })).sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
-  return { days, sessions: sessions.size, byKind, cards, recalls, toolUse, toolCalls, olderBuildRows, fixes, errors };
+  const fixOutcomes = [...outcomes.values()].filter(f => f.helped + f.missed > 0).sort((a, b) => b.firings - a.firings || a.id.localeCompare(b.id));
+  return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors };
 }

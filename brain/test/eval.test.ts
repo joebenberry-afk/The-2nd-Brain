@@ -80,3 +80,45 @@ describe.skipIf(!hasNotes)("recall eval on the frozen S2 cases", () => {
     expect(perQuery).toBeLessThan(50);
   });
 });
+
+interface RealCase {
+  id: string;
+  project: string;
+  query: string;
+  expect: string[];
+  verdict: "note" | "silence";
+  doc?: string;
+}
+
+describe.skipIf(!hasNotes)("real queries", () => {
+  it("keeps right answers and bounds wrong answers on the frozen session queries", () => {
+    const text = readFileSync(join(import.meta.dirname, "fixtures", "recall-real.jsonl"), "utf8");
+    const set = text.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as RealCase);
+    const { notes } = loadNotes(PACKAGE_HOME);
+    let right = 0, silentMiss = 0, correctSilence = 0;
+    const wrong: string[] = [];
+    for (const c of set) {
+      const ids = recall(notes, c.query, { project: { id: c.project, tags: [], root: null } })
+        .slice(0, 3).map((hit) => hit.note.id);
+      if (c.verdict === "note") {
+        expect(c.expect.length, c.id).toBeGreaterThan(0);
+        for (const id of c.expect) expect(notes.some((note) => note.id === id && !note.retired && !note.private), `${c.id}: ${id}`).toBe(true);
+        if (c.expect.some((id) => ids.includes(id))) right++;
+        else if (!ids.length) silentMiss++;
+        else wrong.push(`${c.id}: ${ids.join(",")}`);
+      } else {
+        expect(c.verdict, c.id).toBe("silence");
+        expect(c.expect, c.id).toEqual([]);
+        if (ids.length) wrong.push(`${c.id}: ${ids.join(",")}`);
+        else correctSilence++;
+      }
+    }
+    console.log(`real-query right ${right}/${set.length}; wrong ${wrong.length}; silent-miss ${silentMiss}; correct-silence ${correctSilence}`);
+    console.log(`real-query wrong ${wrong.length}/${set.length} (target <=10%); cases ${wrong.join("; ")}`);
+    expect(set).toHaveLength(34);
+    expect(right).toBeGreaterThanOrEqual(9);
+    // Frozen 2026-09-28: 9 right, 16 wrong, 0 silent misses, 9 correct silences.
+    // Wrong exceeds the plan's <=10% target: hold today's ceiling, never bless it as target success.
+    expect(wrong.length).toBeLessThanOrEqual(16);
+  });
+});

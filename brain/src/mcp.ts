@@ -97,7 +97,7 @@ export async function runMcp(opts: {
               const started = performance.now();
               // MCP has no child identity: the host must withhold brain_state from its children.
               const used = tool.run(args, { home, cwd, env, sub: false, session });
-              if (used.kind) logUse(home, { kind: used.kind, project: used.project, tokens: estimateTokens(used.text), ms: performance.now() - started, session, sub: false, hits: used.hits, via: "mcp" });
+              if (used.kind) logUse(home, { kind: used.kind, project: used.project, tokens: estimateTokens(used.text), ms: performance.now() - started, session, sub: false, hits: used.hits, query: used.query, ids: used.ids, via: "mcp" });
               result = { content: [{ type: "text", text: used.text }], isError: false };
             } catch (error) {
               result = { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], isError: true };

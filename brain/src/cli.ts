@@ -2,7 +2,8 @@
  * The `brain` command: the same functions the OMP extension uses, for any shell, harness or
  * human. `main(argv, io)` takes injected I/O so tests run it in-process.
  */
-import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { acceptProposal, appendEvent, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, toolEventFrom, unmatchedErrors } from "./capture.ts";
@@ -15,8 +16,8 @@ import { runMcp } from "./mcp.ts";
 import { answerWithHits } from "./search.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
-import { logUse, stats, type UseKind } from "./telemetry.ts";
-import { estimateTokens, findHome, slug, tagKey } from "./util.ts";
+import { logUse, stats, type Stats, type UseKind } from "./telemetry.ts";
+import { estimateTokens, findHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, renderResume, resumeText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 
 export interface Io {
@@ -106,8 +107,15 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
-function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string): void {
-  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits, id });
+function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[]): void {
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits, id, query, ids });
+}
+
+function fixesToReview(io: Io, measured: Stats): number {
+  const fixes = measured.fixOutcomes.filter(f => f.helped + f.missed >= 4 && f.helped < f.missed);
+  if (fixes.length) io.out("Fixes to review:");
+  for (const f of fixes) io.out(`  ${f.id} helped ${f.helped}/missed ${f.missed}`);
+  return fixes.length;
 }
 
 const COMMANDS: Record<string, (c: Ctx) => number> = {
@@ -122,7 +130,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
 
   recall(c) {
     const query = need(c.args.join(" "), "a query");
-    const { text, hits } = answerWithHits(loadNotes(c.home).notes, query, {
+    const { text, hits, ids } = answerWithHits(loadNotes(c.home).notes, query, {
       project: c.project,
       home: c.home,
       tools: false,
@@ -131,7 +139,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
       limit: positiveInt(c.opts.limit, 3),
     });
     c.io.out(text);
-    use(c, "recall", text, hits);
+    use(c, "recall", text, hits, undefined, query, ids);
     return 0;
   },
 
@@ -242,8 +250,9 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const root = gitRoot(c.io.cwd);
     if (root) scanCommits(c.home, root, c.project.id, notes);
     const pending = listProposals(c.home);
+    const reviewFixes = fixesToReview(c.io, stats(c.home, positiveInt(c.opts.days, 7), new Date(), { allBuilds: c.opts["all-builds"] === true }));
     if (!pending.length) {
-      c.io.out("nothing to review");
+      if (!reviewFixes) c.io.out("nothing to review");
       return 0;
     }
     for (const p of pending) c.io.out(`${p.id} [${p.kind}${p.tested ? ", tested" : ""}] (${p.project})\n${scrub(p.text).text.slice(0, 800)}`);
@@ -304,9 +313,12 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     c.io.out(`cards: ${s.cards.main} main · ${s.cards.sub} sub`);
     const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
+    c.io.out(`recall: ${s.recallQueries.logged} queries logged, ${s.recallQueries.silent} silent`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.hook} hook · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
+    for (const f of s.fixOutcomes.slice(0, 5)) c.io.out(`fix outcomes: ${f.id} helped ${f.helped}/missed ${f.missed}`);
+    fixesToReview(c.io, s);
     if (s.errors.length) {
       c.io.out(`Brain errors (swallowed, host unaffected): ${s.errors.length}`);
       for (const e of s.errors.slice(-3)) c.io.out(`${e.at.slice(0, 16).replace("T", " ")} ${e.error}`);
@@ -475,6 +487,11 @@ function saveHookAuto(home: string, project: Project, session: string, transcrip
   writeAuto(home, project.id, fields);
 }
 
+/** Hooks run in separate processes; hash keys so commands and session names never persist. */
+function hookFixDir(home: string, session: string): string {
+  return join(home, "state", "pending-fixes", createHash("sha256").update(session).digest("hex"));
+}
+
 /** Claude Code hook input/output: https://code.claude.com/docs/en/hooks */
 function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
   let output: object = {};
@@ -491,6 +508,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       const key = sub ? `${session ?? "claude-code"}:agent:${String(p.agent_id ?? "unknown")}` : session ?? "claude-code";
       const project = resolveProject(home, cwd, io.env);
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
+        rmSync(hookFixDir(home, key), { recursive: true, force: true });
         let card: string;
         if (p.source === "compact") {
           card = sub ? "" : renderResume(readWork(home, project.id));
@@ -505,19 +523,38 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
           logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0, session, via: "hook", sub });
         }
-      } else if (event === "PostToolUse" || (event === "PostToolUseFailure" && typeof p.error === "string" && p.error.trim() && p.is_interrupt !== true)) {
+      } else if (event === "PostToolUse" || (event === "PostToolUseFailure" && p.is_interrupt !== true)) {
         const fields = toolEventFrom(p.tool_name, p.tool_input, event === "PostToolUseFailure", p.error);
         appendEvent(home, key, cwd, fields);
+        const pendingDir = hookFixDir(home, key);
+        const pendingPath = join(pendingDir, createHash("sha256").update(fields.command || fields.tool).digest("hex") + ".json");
+        if (session) {
+          const claimed = `${pendingPath}.${process.pid}.claimed`;
+          try {
+            // Claim before reading: overlapping hooks must not score one firing twice.
+            renameSync(pendingPath, claimed);
+            const pending: unknown = JSON.parse(readFileSync(claimed, "utf8"));
+            if (pending && typeof pending === "object" && "id" in pending && typeof pending.id === "string" && "project" in pending && typeof pending.project === "string") {
+              logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session, via: "hook", sub });
+            }
+          } catch { /* missing or torn local pending state is unmeasured */ }
+          finally { rmSync(claimed, { force: true }); }
+        }
         if (!fields.ok && fields.error) {
           const fix = findFix(loadNotes(home).notes, fields.error, project);
           if (fix) {
             const text = renderFix(fix);
             output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };
             logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session, via: "hook", sub, id: fix.id });
+            if (session) {
+              try { writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id })); }
+              catch { /* telemetry state must not suppress the fix */ }
+            }
           }
         }
-      } else if (!sub && session && (event === "SessionEnd" || event === "PreCompact")) {
-        saveHookAuto(home, project, session, p.transcript_path);
+      } else if (session && (event === "SessionEnd" || event === "PreCompact" || event === "SubagentStop")) {
+        rmSync(hookFixDir(home, key), { recursive: true, force: true });
+        if (!sub) saveHookAuto(home, project, session, p.transcript_path);
       }
     }
   } catch {

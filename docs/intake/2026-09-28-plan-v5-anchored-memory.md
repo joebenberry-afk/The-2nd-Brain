@@ -1,8 +1,8 @@
 ---
 date: 2026-09-28
 type: plan
-authority: proposal (awaiting owner decisions, §7)
-status: draft; starts after V4 sign-off (§5 P0)
+authority: owner-approved 2026-09-28 ("I support all your recommendation")
+status: accepted 2026-09-28; P1 in progress (P0 sign-off runs in parallel)
 scope: v5
 supersedes: none (extends 2026-09-27-plan-v4-agent-experience.md; V4 §3.2 rules stay binding)
 superseded-by: none
@@ -162,3 +162,5 @@ agentbench or compactbench, judged by cost, not tokens.
 | **D5-3** | Delete capture proposals if none is accepted in two weeks? | Yes. |
 | **D5-4** | Fold kits into procedure notes if the 12 + 12 confirmation fails? | Yes. |
 | **D5-5** | Trim the post-compaction resume if long sessions show no benefit either? | Yes; the start card stays. |
+
+**Answered 2026-09-28:** the owner accepted every recommendation (D5-1 to D5-5).

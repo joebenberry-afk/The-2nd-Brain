@@ -77,6 +77,7 @@ it("negotiates, discovers tools, saves and recalls memory, and recovers after in
   expect(replies[7]!.error?.code).toBe(-32601);
   expect(readWork(home, "demo")?.text).toBe("Goal: ship. Next: test plugin.");
   const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { kind: string; via: string; session: string });
+  expect(rows[1]).toMatchObject({ query: "compiler plugin", ids: [note.id] });
   expect(rows.map(row => ({ kind: row.kind, via: row.via, session: row.session }))).toEqual([
     { kind: "note", via: "mcp", session: "mcp-session" },
     { kind: "recall", via: "mcp", session: "mcp-session" },
@@ -105,6 +106,15 @@ it("rejects malformed calls as protocol errors, failed execution as isError, wit
   expect(readWork(home, "demo")).toBeNull();
   expect(replies[3]!.error?.code).toBe(-32600);
   expect(replies[4]!.result).toEqual({});
+});
+
+it("logs scrubbed silent MCP queries without credential remnants", async () => {
+  const query = "password=" + "syntheticCredential123" + " " + "missing ".repeat(40);
+  const { home, code } = await exchange([{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "brain_recall", arguments: { query } } }]);
+  expect(code).toBe(0);
+  const text = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8");
+  expect(JSON.parse(text)).toMatchObject({ query: ("password=*** " + "missing ".repeat(40)).slice(0, 200), ids: [], via: "mcp" });
+  expect(text).not.toContain("syntheticCredential123");
 });
 
 it("settles without an unhandled stream error when the client disconnects", async () => {

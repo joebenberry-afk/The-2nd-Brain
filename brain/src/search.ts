@@ -373,19 +373,19 @@ export function answer(notes: Note[], query: string, opts: AnswerOptions): strin
 }
 
 /** Hit count measures results actually shown, not cross-project suggestions. */
-export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions): { text: string; hits: number } {
+export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions): { text: string; hits: number; ids: string[] } {
   const id = query.trim();
   const note = notes.find((n) => n.id === id);
   if (note) {
-    if (!opts.all && !visibleTo(note, opts.project)) return { text: NO_MATCH, hits: 0 };
+    if (!opts.all && !visibleTo(note, opts.project)) return { text: NO_MATCH, hits: 0, ids: [] };
     const retiredMeta = note.retired ? `retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""}` : "";
     const meta = [note.kind, note.tested ? "tested" : "", retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
-    return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS), hits: 1 };
+    return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [note.id] };
   }
   if (opts.home && id) {
     const kit = findKit(loadKits(opts.home), id.replace(/^kit\s+/i, ""));
     if (kit) {
-      return { text: cutToTokens(`${kit.path}\n${kit.body}`, FULL_NOTE_TOKENS), hits: 1 };
+      return { text: cutToTokens(`${kit.path}\n${kit.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [kit.name] };
     }
   }
   // Search summaries stay within the three-line budget; explicit id reads above retain history.
@@ -416,7 +416,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
   if (!hits.length && !opts.all) {
     const related = matchingHits(scored, { ...opts, all: true }).length
       || (!opts.history ? matchingHits(scored, { ...opts, all: true, history: true }).length : 0);
-    if (related) return { text: `no match here; ${related} related in other projects (${opts.tools === false ? "--all" : "all: true"})`, hits: 0 };
+    if (related) return { text: `no match here; ${related} related in other projects (${opts.tools === false ? "--all" : "all: true"})`, hits: 0, ids: [] };
   }
-  return { text: renderHits(hits), hits: hits.length };
+  return { text: renderHits(hits), hits: hits.length, ids: hits.map(hit => hit.note.id) };
 }

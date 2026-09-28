@@ -46,6 +46,8 @@ interface SessionState {
   ask?: string;
   /** Notes whose full fix is already in this context; cleared when compaction drops it. */
   fixed?: Set<string>;
+  /** The latest fired fix per command/tool, awaiting its next result. */
+  pendingFixes?: Map<string, { id: string; project: string }>;
   /** Tool results since this session last wrote a note or its working state. */
   sinceWrite?: number;
   /** The one end-of-turn learning nudge this session may get has been sent. */
@@ -376,7 +378,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             const session = sessionKey(ctx);
             const sub = isSubagent(ctx);
             const result = definition.run(params, { home, cwd, env, session, sub });
-            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, via: "tool" });
+            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, via: "tool" });
             if (result.kind === "note" || result.kind === "state") getSession(session).sinceWrite = 0;
             return { content: [{ type: "text", text: result.text }], details: {} };
           } catch (error) {
@@ -463,7 +465,10 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!Array.isArray(messages)) return undefined;
       // A context that shrank (/clear, tree navigation, compaction) may have lost a fix shown
       // earlier: the next matching failure gets the full text again, not a dangling pointer.
-      if (messages.length < (state.contextLength ?? 0)) state.fixed = undefined;
+      if (messages.length < (state.contextLength ?? 0)) {
+        state.fixed = undefined;
+        state.pendingFixes = undefined;
+      }
       state.contextLength = messages.length;
       // Only insert if we have a resume card
       if (!state.resume) return undefined;
@@ -502,6 +507,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       saveAuto(ctx);
       const reason = asObject(event)?.reason;
       const state = getSession(sessionKey(ctx));
+      state.pendingFixes = undefined;
       carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], resume: reason === "fork" ? state.resume : undefined, resumeSeen: reason === "fork" ? state.resumeSeen : false, cardPending: false, fixed: reason === "fork" && state.fixed ? new Set(state.fixed) : undefined } : undefined;
     } catch {
       carry = undefined;
@@ -531,6 +537,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // Written here, not in session_before_compact: /handoff skips that event, and handling it
       // turns off OMP's background compaction.
       saveAuto(ctx);
+      state.pendingFixes = undefined;
       // A card sent with the prompt this compaction runs before is still ahead of the model.
       if (state.cardPending) {
         state.resume = undefined;
@@ -562,6 +569,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     on("session_before_compact", (_event, ctx) => {
       try {
         saveAuto(ctx);
+        getSession(sessionKey(ctx)).pendingFixes = undefined;
       } catch (error) {
         failed("session_before_compact", error);
         // never block the host's compaction
@@ -606,6 +614,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // Track the last failure until the same command (or tool) succeeds; host plumbing (an
       // aborted wait, a cancelled job) says nothing about the project and is not tracked.
       const failureKey = fields.command || fields.tool || "unknown";
+      const pending = state.pendingFixes?.get(failureKey);
+      if (pending) {
+        state.pendingFixes!.delete(failureKey);
+        logUse(home, { kind: "fixout", ...pending, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
+      }
       if (fields.ok && state.failureKey === failureKey) state.failure = state.failureKey = undefined;
       if (!fields.ok && fields.error && !hostNoise(fields.tool, fields.error)) {
         // Masked before the signature cuts it: a cut must not keep half a secret.
@@ -628,6 +641,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           // Hosts join text blocks without a separator: the fix must start on its own line.
           const resultContent = [...contentArray, { type: "text", text: `\n${fixText}` }];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: fix.id });
+          (state.pendingFixes ??= new Map()).set(failureKey, { id: fix.id, project: project.id });
           return { content: resultContent };
         }
       }
@@ -643,7 +657,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         const hint = fixed.has("rawhint") ? "Brain: quoted '\\b' is a backspace again (see above)." : "Brain: in this script a quoted '\\b' is a backspace, not a word boundary; write String.raw`\\bword\\b` or '\\\\b'.";
         fixed.add("rawhint");
         const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
-        logUse(home, { kind: "fix", project: resolveProject(home, cwd, env).id, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "rawhint" });
+        const project = resolveProject(home, cwd, env).id;
+        logUse(home, { kind: "fix", project, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "rawhint" });
+        (state.pendingFixes ??= new Map()).set(failureKey, { id: "rawhint", project });
         return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
       }
 
@@ -676,6 +692,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   on("session_shutdown", (_event, ctx) => {
     try {
       saveAuto(ctx);
+      getSession(sessionKey(ctx)).pendingFixes = undefined;
     } catch (error) {
       failed("session_shutdown", error);
       // never block the host's exit

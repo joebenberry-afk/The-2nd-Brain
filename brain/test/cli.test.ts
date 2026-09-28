@@ -34,6 +34,82 @@ function setup(): { home: string; cwd: string; io: Partial<Io> } {
 }
 
 describe("brain cli", () => {
+  it("logs CLI recall ids, silence and scrubbed queries without private answer text", async () => {
+    const { home, io } = setup();
+    const note = createNote(home, { project: "demo", text: "Private deployment detail", private: true });
+    await run(["recall", note.id], io);
+    await run(["recall", "password=" + "syntheticCredential123" + " " + "missing ".repeat(40)], io);
+    const text = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8");
+    const rows = text.trim().split("\n").map(line => JSON.parse(line));
+    expect(rows[0]).toMatchObject({ via: "cli", query: note.id, ids: [note.id] });
+    expect(rows[1]).toMatchObject({ query: ("password=*** " + "missing ".repeat(40)).slice(0, 200), ids: [] });
+    expect(text).not.toContain(note.body);
+    expect(text).not.toContain("syntheticCredential123");
+  });
+
+  it("reports outcomes and reviews only fixes below half over at least four outcomes", async () => {
+    const { home, io } = setup();
+    const note = createNote(home, { project: "demo", text: "Review this repair", tested: true });
+    const before = readFileSync(note.path, "utf8");
+    const base = { project: "demo", tokens: 0, ms: 0 };
+    for (const [id, outcomes] of [[note.id, ["helped", "missed", "missed", "missed"]], ["half", ["helped", "helped", "missed", "missed"]], ["few", ["missed", "missed", "missed"]]] as const) {
+      for (const outcome of outcomes) {
+        logUse(home, { ...base, kind: "fix", id });
+        logUse(home, { ...base, kind: "fixout", id, outcome });
+      }
+    }
+    await run(["recall", "missing"], io);
+    await run(["recall", note.id], io);
+    const measured = await run(["stats"], io);
+    expect(measured.code).toBe(0);
+    expect(measured.out).toContain(`fix outcomes: ${note.id} helped 1/missed 3`);
+    expect(measured.out).toContain("recall: 2 queries logged, 1 silent");
+    for (const output of [measured.out, (await run(["review"], io)).out]) {
+      const review = output.split("Fixes to review:")[1];
+      expect(review).toContain(`${note.id} helped 1/missed 3`);
+      expect(review).not.toMatch(/half|few|--off|nothing to review/);
+    }
+    expect(readFileSync(note.path, "utf8")).toBe(before);
+  });
+
+  it("ranks outcome lines by total firings, not session counts, and limits them to five", async () => {
+    const { home, io } = setup();
+    const base = { project: "demo", tokens: 0, ms: 0, session: "same" };
+    for (let i = 0; i < 6; i++) {
+      for (let n = 0; n <= i; n++) logUse(home, { ...base, kind: "fix", id: `fix-${i}` });
+      logUse(home, { ...base, kind: "fixout", id: `fix-${i}`, outcome: "helped" });
+    }
+    const measured = await run(["stats"], io);
+    expect(measured.out.split("\n").filter(line => line.startsWith("fix outcomes:"))).toEqual([5, 4, 3, 2, 1].map(i => `fix outcomes: fix-${i} helped 1/missed 0`));
+  });
+
+  it("Claude hooks score retries across processes and clear pending fixes at session boundaries", () => {
+    const { home, cwd } = setup();
+    const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const hook = (hook_event_name: string, session_id: string, tool_input: object = {}, tool_name = "Bash", extra = {}) => {
+      const child = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "hook", "claude-code", "--home", home], { cwd, encoding: "utf8", env: { ...process.env, BRAIN_PROJECT: "demo" }, input: JSON.stringify({ hook_event_name, session_id, cwd, tool_name, tool_input, error: "runtime mismatch", ...extra }) });
+      expect(child.status).toBe(0);
+      return child.stdout;
+    };
+    expect(hook("PostToolUseFailure", "help", { command: "build" })).toContain(note.id);
+    hook("PostToolUse", "other", { command: "build" });
+    hook("PostToolUse", "help", { command: "test" });
+    hook("Stop", "help");
+    hook("PostToolUse", "help", { command: "build" });
+    hook("PostToolUse", "help", { command: "build" });
+    hook("PostToolUseFailure", "miss", {}, "Edit");
+    hook("PostToolUseFailure", "miss", {}, "Edit");
+    hook("PostToolUse", "miss", {}, "Edit");
+    hook("PostToolUseFailure", "empty-error", { command: "build" });
+    hook("PostToolUseFailure", "empty-error", { command: "build" }, "Bash", { error: "" });
+    for (const boundary of ["SessionEnd", "PreCompact"]) {
+      hook("PostToolUseFailure", boundary, { command: "build" });
+      hook(boundary, boundary);
+      hook("PostToolUse", boundary, { command: "build" });
+    }
+    const outcomes = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => row.kind === "fixout");
+    expect(outcomes.map(row => [row.session, row.id, row.outcome, row.via])).toEqual([["help", note.id, "helped", "hook"], ["miss", note.id, "missed", "hook"], ["miss", note.id, "helped", "hook"], ["empty-error", note.id, "missed", "hook"]]);
+  });
   it("prints usage for help and no command; rejects unknown commands and options", async () => {
     const { io } = setup();
     expect((await run([], io)).out).toContain("brain recall");
@@ -352,6 +428,8 @@ describe("note privacy and recall kits", () => {
       expect(result.stdout).toContain("# Scaffold");
       expect(result.stdout).not.toContain("description:");
     }
+    const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.map(row => [row.query, row.ids])).toEqual(["kit Node CLI", "Node CLI", "kit node-cli"].map(query => [query, ["Node CLI"]]));
   });
 });
 

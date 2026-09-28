@@ -1,5 +1,5 @@
 ---
-at: 2026-09-28T07:23:17Z
+at: 2026-09-28T07:48:18Z
 ---
 
-Goal: finish+perfect V4, then V5 plan. Done: 6238a88 fixes+benches gated (557 pass), 7cd5109. Next: README l.112-114/183 + plan §6.1; rerun kit bench label p4-kit-body; compact ablation (--ablate-resume, unbuilt); write V5 plan.
+Goal: V4 sign-off, then V5 (docs/intake/2026-09-28-plan-v5-anchored-memory.md, draft awaiting owner D5-1..5). Done: 28f537a owner-report fixes, 63c16f2 plan/README. Next: owner decisions; a week of daily use then P6 (v2-archive push needs go); V5 P1 measure-first. Watch out: running OMP sessions keep old code until restarted.

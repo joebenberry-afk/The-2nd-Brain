@@ -23,7 +23,7 @@ export interface BrainTool {
   name: string;
   description: string;
   params: Record<string, Param>;
-  run(params: Record<string, unknown>, context: ToolContext): { text: string; kind?: UseKind; project: string; hits?: number };
+  run(params: Record<string, unknown>, context: ToolContext): { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[] };
 }
 
 export function jsonSchema(props: Record<string, Param>) {
@@ -48,7 +48,7 @@ export const brainTools: BrainTool[] = [
     run(params, { home, cwd, env }) {
       const query = requireString(params.query, "query");
       const project = resolveProject(home, cwd, env);
-      return { ...answerWithHits(loadNotes(home).notes, query, { home, project, all: params.all === true }), kind: "recall", project: project.id };
+      return { ...answerWithHits(loadNotes(home).notes, query, { home, project, all: params.all === true }), query, kind: "recall", project: project.id };
     },
   },
   {

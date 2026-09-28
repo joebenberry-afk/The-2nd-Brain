@@ -53,6 +53,51 @@ const ctx = (session: string, cwd = join(root, "work")) => ({
 });
 
 describe("OMP extension", () => {
+  it("logs scrubbed recall queries and private note ids, never returned text", () => {
+    const note = createNote(home, { project: "work", text: "Private deployment detail", private: true });
+    const { tools } = load({ SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" }, true);
+    const recall = tools.find((t: any) => t.name === "brain_recall") as any;
+    recall.execute("a", { query: note.id }, ctx("queries"));
+    const query = "password=" + "syntheticCredential123" + " " + "missing ".repeat(40);
+    recall.execute("b", { query }, ctx("queries"));
+    const text = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8");
+    const rows = text.trim().split("\n").map(line => JSON.parse(line));
+    expect(rows[0]).toMatchObject({ via: "tool", query: note.id, ids: [note.id] });
+    expect(rows[1]).toMatchObject({ query: ("password=*** " + "missing ".repeat(40)).slice(0, 200), ids: [] });
+    expect(text).not.toContain(note.body);
+    expect(text).not.toContain("syntheticCredential123");
+  });
+
+  it("records only ids actually shown, in the displayed order", () => {
+    const { tools } = load({ SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" }, true);
+    for (const suffix of ["primary", "backup", "fallback", "emergency"]) createNote(home, { project: "work", text: `Quartz deployment ${suffix}` });
+    const recall = tools.find((t: any) => t.name === "brain_recall") as any;
+    const shown = recall.execute("ordered", { query: "quartz deployment" }, ctx("queries")).content[0].text as string;
+    const row = JSON.parse(readFileSync(join(home, "state", "telemetry.jsonl"), "utf8"));
+    expect(row.ids).toEqual(shown.split("\n").map(line => line.split(" ")[0]));
+    expect(row.ids).toHaveLength(3);
+  });
+
+  it("scores only the next same-key result in the same session and drops untried fixes", () => {
+    const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const { handlers } = load();
+    const result = (session: string, command: string | undefined, failed: boolean, toolName = "bash") => handlers.get("tool_result")!({ toolName, input: command ? { command } : {}, isError: failed, content: failed ? "runtime mismatch" : "ok" }, ctx(session));
+    result("help", "build", true);
+    result("other", "build", false);
+    result("help", "test", false);
+    result("help", "build", false);
+    result("help", "build", false);
+    result("miss", undefined, true, "edit");
+    result("miss", undefined, true, "edit");
+    result("miss", undefined, false, "edit");
+    for (const event of ["session_compact", "session_shutdown", "session_before_switch"]) {
+      result(event, "build", true);
+      handlers.get(event)!({}, ctx(event));
+      result(event, "build", false);
+    }
+    const outcomes = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => row.kind === "fixout");
+    expect(outcomes.map(row => [row.session, row.id, row.outcome])).toEqual([["help", note.id, "helped"], ["miss", note.id, "missed"], ["miss", note.id, "helped"]]);
+  });
   it("falls back to its own checkout as the home when SECOND_BRAIN_HOME is unset", () => {
     const { handlers } = load({}, false);
     expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "context", "session_before_branch", "session_before_switch", "session_branch", "session_compact", "session_shutdown", "session_switch", "tool_result"]);

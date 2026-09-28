@@ -313,6 +313,30 @@ describe("recurring known fix", () => {
 });
 
 describe("local usage telemetry", () => {
+  it("counts logged recall queries and fix outcomes across rotation, respecting build and time filters", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state"), { recursive: true });
+    const row = (extra: object) => JSON.stringify({ at: NOW.toISOString(), project: "demo", tokens: 0, ms: 0, v: "t00002", ...extra });
+    writeFileSync(join(home, "state", "telemetry.1.jsonl"), [
+      row({ kind: "recall", query: "logged hit", ids: ["n-fix"] }),
+      row({ kind: "fix", id: "n-fix", session: "one" }),
+      row({ kind: "fixout", id: "n-fix", outcome: "helped" }),
+      row({ kind: "fixout", id: "n-fix", outcome: "missed", v: "t00001" }),
+      row({ kind: "recall", query: "old", ids: [], at: "2020-01-01T00:00:00Z" }),
+    ].join("\n") + "\n");
+    writeFileSync(telemetryPath(home), [
+      row({ kind: "recall", query: "silent", ids: [] }),
+      row({ kind: "recall", hits: 0 }),
+      row({ kind: "recall", query: "malformed", ids: [null] }),
+      row({ kind: "fix", id: "n-fix", session: "one" }),
+      row({ kind: "fixout", id: "n-fix", outcome: "missed" }),
+      row({ kind: "fixout", id: "n-fix", outcome: "invalid" }),
+      row({ kind: "fixout", id: "n-fix", outcome: "missed", at: "2020-01-01T00:00:00Z" }),
+    ].join("\n") + "\n");
+    expect(stats(home, 7, NOW)).toMatchObject({ recallQueries: { logged: 2, silent: 1 }, fixOutcomes: [{ id: "n-fix", firings: 2, helped: 1, missed: 1 }] });
+    expect(stats(home, 7, NOW, { allBuilds: true }).fixOutcomes).toEqual([{ id: "n-fix", firings: 2, helped: 1, missed: 2 }]);
+  });
+
   it("an old session appending after a new one never turns stats back to the old build", () => {
     const home = tmp();
     mkdirSync(join(home, "state"), { recursive: true });
