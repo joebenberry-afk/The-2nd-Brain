@@ -243,10 +243,27 @@ real retries of the failed command (today's 17 live proposals were all noise); s
 credential flags and evidence; sync conflicts outside a nested home; `brain stats` reports
 sub/main cards, recall hit rate and unmatched errors.
 
-Next on the owner's machine: restart OMP (running sessions keep the old code), `/compact` once
-and check `brain stats` for a `resume` row, then a week of use. Owner decisions pending from the
-review: prompt-time push if voluntary `brain_recall`/`brain_state` use stays near zero, and
-seeding the plan from OMP's compaction summary when the agent never wrote one.
+Compaction resume verified live (2026-09-28): one `resume` row, 150 tokens, 7 ms.
+
+Round 3 (2026-09-28). Evidence: 0 `brain_recall` tool calls in OMP all week (the 8 recall rows
+were CLI); brain tools used in 2/21 main sessions; ~20 of 47 active second-brain notes described
+V1–V3. Landed: trigger-phrased tool descriptions and card footer (say *when*, not *what*); the
+`brain_state` reply names what compaction will cut; resume keeps whole fields and lines;
+subagents cannot mark notes tested, see only the parent's `Watch out:`, skip the capture scan;
+stale evidence (D4) demotes and marks, never hides, and is judged only for this project and
+global notes; recall answers with an active replacement before a retired note; a same-headline
+write with a different body is refused, not silently dropped; stat-validated note cache (warm
+load 7.8 → 2.8 ms); capture ignores inline scripts and scratch paths; telemetry attributes
+`via` tool/cli/hook/mcp. Host independence: **owner approved `brain mcp`** (stdio MCP, same
+three tools from `src/tools.ts`; amends D8), `brain fix "<error>"`, a complete Claude Code hook
+(PostToolUse success capture, PreCompact/SessionEnd auto state, child sessions never write
+state), and `brain hook agents-md` (the managed AGENTS.md block). Gate split: `npm run test:unit`
+≈ 2 s, full ≈ 26 s; `npm run perf` measures real and synthetic 1000/5000-note corpora. Owner
+retired 17 V1–V3-era and OMP 18.1.15 research notes; the 4 frozen-eval targets stay active.
+
+Owner decisions: a resident ~40-token system-prompt line only if fewer than 20% of main sessions
+use the tools after ~10 sessions (stop-loss). Prompt-time push and seeding the plan from OMP's
+compaction summary stay deferred; the round-3 review recommends against both.
 
 ## 7. Owner decisions needed before P1
 

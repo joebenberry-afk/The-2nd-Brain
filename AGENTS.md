@@ -27,6 +27,7 @@ This file governs agents working **on the Brain itself** (this repo).
 ```text
 cd brain && npm ci
 npx eslint src test && npx tsc --noEmit && npx vitest run
+npm run test:unit               # ~2 s inner loop; the full gate above before committing
 node bin/brain.mjs check        # or `brain check` once installed
 ```
 
