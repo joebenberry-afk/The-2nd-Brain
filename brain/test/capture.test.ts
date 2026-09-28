@@ -1058,7 +1058,9 @@ describe("capture batch five regressions", () => {
     expect(capture.unmatchedErrors(home, [])).toEqual([{ signature: "<path>: error TS2345: invalid argument at <hex>", count: 4 }]);
     expect(errorSignature("import { failure } from 'x';\nConnection refused by server")).toBe("Connection refused by server");
     expect(errorSignature("Error: " + "complete ".repeat(20))).toMatch(/complete$/);
-    expect(errorSignature("❯ test/a.test.ts (2 tests | 1 failed)\n→ Cannot read property value")).toBe("→ Cannot read property value");
+    expect(errorSignature("❯ test/a.test.ts (2 tests | 1 failed)\n→ Cannot read property value")).toBe("Cannot read property value");
+    expect(errorSignature("Command exited with code 1")).toBe("Command exited with code 1");
+    expect(errorSignature("Error: EACCES open lock\nCommand exited with code 1")).toBe("Error: EACCES open lock");
     expect(errorSignature("file:///C:/work/[eval1]:1\nimport { failure } from 'x';\nWall time: 0.17 seconds")).toBe("");
   });
 
@@ -1261,6 +1263,18 @@ describe("capture ignores ephemeral experiments", () => {
     appendEvent(home, "ephemeral", home, { tool: "bash", command, ok: false, error: "Error: synthetic experiment failed" });
     appendEvent(home, "ephemeral", home, { tool: "bash", command: "npm ci && " + command, ok: true });
     expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it.each([
+    "npx vitest run test/cache/x.test.ts",
+    "python scripts/train.py -c config.toml",
+    "node scripts/build.js --eval fixtures/input.json",
+    'npx vitest run test/x.test.ts -t "handles << tokens"',
+  ])("keeps durable retries that only resemble experiments: %s", (command) => {
+    const home = tmp();
+    appendEvent(home, "durable", home, { tool: "bash", command, ok: false, error: "Error: dependency missing" });
+    appendEvent(home, "durable", home, { tool: "bash", command: "npm ci && " + command, ok: true });
+    expect(scanEvents(home, []).map((p) => p.tested)).toEqual([true]);
   });
 
   it("rejects ephemeral preparation even when the final retry is durable", () => {

@@ -81,8 +81,8 @@ untested until a parent confirms them or runs `brain tested <id>`.
 {
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
-    "PostToolUse": [{ "matcher": "^(Bash|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
-    "PostToolUseFailure": [{ "matcher": "^(Bash|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
+    "PostToolUse": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
+    "PostToolUseFailure": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
     "PreCompact": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
     "SessionEnd": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }]
   }

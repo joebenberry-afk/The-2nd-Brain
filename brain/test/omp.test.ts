@@ -296,6 +296,21 @@ describe("OMP extension", () => {
     expect(result.content[1].text).toContain("Fix for SRE mismatch");
   });
 
+  it("a repeated error gets a pointer, the full fix again only after compaction drops it", () => {
+    const workDir = join(root, "work");
+    mkdirSync(workDir, { recursive: true });
+    const { handlers } = load();
+    const note = createNote(home, { text: "Fix for SRE mismatch", project: "global", kind: "gotcha", errors: ["SRE module mismatch"], tested: true });
+    const c = ctx("s-repeat", workDir);
+    const fail = { toolName: "bash", input: { command: "python test.py" }, isError: true, content: [{ type: "text", text: "SRE module mismatch" }] };
+    const fixText = () => (handlers.get("tool_result")!(fail, c) as any).content[1].text as string;
+    expect(fixText()).toContain("Fix for SRE mismatch");
+    expect(fixText()).toBe(`Brain: same fix as above [${note.id}]`);
+    expect((handlers.get("tool_result")!(fail, ctx("other-session", workDir)) as any).content[1].text).toContain("Fix for SRE mismatch");
+    handlers.get("session_compact")!({}, c);
+    expect(fixText()).toContain("Fix for SRE mismatch");
+  });
+
   it("untested note → no fix appended", () => {
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;

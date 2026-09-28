@@ -377,15 +377,18 @@ describe("evidence and replacement answers", () => {
         note("stale", { body: "quartz", evidence: ["missing.ts"] }),
         note("current", { body: "quartz migration uses staged updates", evidence: ["current.ts"] }),
       ];
-      const hits = recall(corpus, "quartz", { project, home });
+      const here = { ...project, root: home };
+      const hits = recall(corpus, "quartz", { project: here, home });
       expect(hits.map((hit) => hit.note.id)).toEqual(["current", "stale"]);
       expect(hits[1]!.score).toBeGreaterThan(hits[0]!.score);
-      const lines = answer(corpus, "quartz", { project, home }).split("\n");
+      const lines = answer(corpus, "quartz", { project: here, home }).split("\n");
       expect(lines).toHaveLength(2);
       expect(lines[0]).not.toContain("(stale evidence)");
       expect(lines[1]).toContain("(stale evidence)");
-      const only = answer([corpus[0]!], "quartz", { project, home });
+      const only = answer([corpus[0]!], "quartz", { project: here, home });
       expect(only).toContain("stale [note] quartz (stale evidence)");
+      // Without this project's checkout a relative path is unknown, not missing.
+      expect(answer([corpus[0]!], "quartz", { project, home })).not.toContain("(stale evidence)");
       const bounded = renderHit({ note: note("long", { body: "quartz " + "detail ".repeat(100) }), score: 1, matched: [], stale: true });
       expect(bounded.length).toBeLessThanOrEqual(240);
       expect(bounded).toContain("(stale evidence)");

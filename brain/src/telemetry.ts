@@ -64,7 +64,7 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
   const recalls = { calls: 0, measured: 0, matched: 0 };
   const toolCalls = { tool: 0, cli: 0, hook: 0, mcp: 0 };
   const sessions = new Set<string>();
-  const roles = new Map<string, { sub: boolean; using: boolean }>();
+  const roles = new Map<string, { sub: boolean; known: boolean; using: boolean }>();
   let text = "";
   for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
     try {
@@ -96,14 +96,18 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
     }
     if (typeof row.session === "string" && row.session) {
       sessions.add(row.session);
-      const role = roles.get(row.session) ?? { sub: false, using: false };
+      const role = roles.get(row.session) ?? { sub: false, known: false, using: false };
       if (row.sub === true) role.sub = true;
+      // A CLI or hook row names a session but not whether it is a child: role stays unknown
+      // until an OMP/MCP row (or a legacy OMP row, which never had `via`) says so.
+      if (typeof row.sub === "boolean" || row.kind === "card" || row.via === undefined) role.known = true;
       if (TOOL_KINDS.has(row.kind)) role.using = true;
       roles.set(row.session, role);
     }
   }
   const toolUse = { main: { sessions: 0, using: 0 }, sub: { sessions: 0, using: 0 } };
   for (const role of roles.values()) {
+    if (!role.known) continue;
     const slot = toolUse[role.sub ? "sub" : "main"];
     slot.sessions += 1;
     if (role.using) slot.using += 1;

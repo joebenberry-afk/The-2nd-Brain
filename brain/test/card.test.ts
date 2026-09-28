@@ -71,7 +71,8 @@ describe("card", () => {
     const home = tmp();
     const stale = createNote(home, { text: "Authentication cookie token refresh middleware", project: "demo", kind: "fact", evidence: ["missing.ts"] });
     const live = createNote(home, { text: "Authentication configuration", project: "demo", kind: "gotcha", tested: true });
-    const ranked = rankForCard([stale, live], project, stale.body, NOW, home);
+    const ranked = rankForCard([stale, live], { ...project, root: home }, stale.body, NOW, home);
+    expect(rankForCard([stale, live], project, stale.body, NOW, home).map(note => note.id)).toEqual([stale.id, live.id]);
     expect(ranked.map(note => note.id)).toEqual([live.id, stale.id]);
   });
 
@@ -283,6 +284,8 @@ describe("local usage telemetry", () => {
     logUse(home, { ...base, kind: "fix", session: "fixed-main" }, NOW);
     logUse(home, { ...base, kind: "card", session: "child", sub: true }, NOW);
     logUse(home, { ...base, kind: "note", session: "child" }, NOW);
+    // A shell `brain recall` with BRAIN_SESSION set cannot say whether it ran in a child.
+    logUse(home, { ...base, kind: "recall", session: "cli-only", via: "cli" }, NOW);
     expect(stats(home, 7, NOW).toolUse).toEqual({ main: { sessions: 3, using: 1 }, sub: { sessions: 1, using: 1 } });
   });
 

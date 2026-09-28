@@ -257,19 +257,39 @@ function positionals(argv: string[]): string[] {
     /^(?:-e|-p|-c|--eval|--print|--command)$/.test(argv[index] ?? "") || /^<</.test(argv[index] ?? ""));
 }
 
+const INLINE_FLAG: Record<string, RegExp> = {
+  python: /^-(?:c|[a-zA-Z]*c)$|^-c./,
+  node: /^(?:-e|-p|--eval|--print)(?:=|$)|^-[ep]./,
+  bun: /^(?:-e|-p|--eval|--print)(?:=|$)/,
+  deno: /^eval$/,
+};
+
+/**
+ * A scratch location: an OS temp root anywhere, or a repo-relative path that starts in tmp/,
+ * temp/, cache/ or .cache/. A deeper folder of that name (test/cache/x.test.ts) is real code.
+ */
+function scratchPath(arg: string): boolean {
+  const path = arg.replace(/^--?[\w-]+=/, "").replace(/^['"]|['"]$/g, "").replace(/\\/g, "/");
+  if (/^(?:\/tmp|\/var\/tmp|%TEMP%|%TMP%|\$TMPDIR|\$\{TMPDIR\})(?:\/|$)/i.test(path)) return true;
+  if (/(?:^|\/)AppData\/Local\/Temp(?:\/|$)/i.test(path)) return true;
+  return /^(?:\.\/)?(?:tmp|temp|cache|\.cache)\//i.test(path);
+}
+
 /** Throwaway scripts and scratch paths describe an experiment, not a reusable repair. */
 function ephemeralCommand(command: string): boolean {
-  if (command.includes("<<")) return true;
   return commandSegments(command).some(({ argv }) => {
     const identity = commandIdentity(argv);
-    if (identity.argv.some((arg) => /^--eval(?:=|$)/.test(arg) ||
-      (/^python[\d.]*$/.test(identity.program) && /^-c/.test(arg)) ||
-      (/^(?:node|bun)$/.test(identity.program) && /^-e/.test(arg)))) return true;
-    return identity.argv.slice(1).some((arg) => {
-      // Include --basetemp=cache/tmp/... as well as positional script paths.
-      const path = arg.replace(/^--?[\w-]+=/, "").replace(/\\/g, "/");
-      return /(?:^|\/)(?:tmp|temp|cache|\.cache|%TEMP%)(?:\/|$)/i.test(path);
-    });
+    // A heredoc is an unquoted shell token; quoted text containing "<<" is an argument.
+    if (identity.argv.some((arg) => /^<<-?\s*['"]?\w/.test(arg) || arg === "<<")) return true;
+    // Interpreter options end at the script: `python train.py -c config.toml` runs a file.
+    const inline = INLINE_FLAG[identity.program.replace(/[\d.]+$/, "")];
+    if (inline) {
+      for (const arg of identity.argv.slice(1)) {
+        if (inline.test(arg)) return true;
+        if (!arg.startsWith("-") && !(identity.program === "deno")) break;
+      }
+    }
+    return identity.argv.slice(1).some(scratchPath);
   });
 }
 
@@ -306,18 +326,24 @@ function retriesCommand(failed: string, fixed: string): boolean {
 /** Tools that run code cells (python, ipython, a notebook, a JS REPL): their "command" is code, not a shell command. */
 const CODE_TOOL = /python|notebook|repl|jupyter|^js$|javascript|eval/i;
 
+/** A host's exit-status wrapper says that a command failed, never why. */
+const EXIT_WRAPPER = /^(?:command|process)? ?exited with (?:code|status) -?\d+\.?$|^exit (?:code|status):? -?\d+$/i;
+
 /** Error-like diagnostic, not an echoed source line; cut only at a word boundary. */
 export function errorSignature(error: string, max = 120): string {
   const lines = error.replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).filter((l) => l.trim());
   const banner = /^(traceback \(most recent call last\):|during handling of the above exception|the above exception was the direct cause|[=_*#~-]{3,}.*[=_*#~-]{3,}$|[=_*#~-]{5,}$)/i;
   const code = /^(?:\d+\s*[|:]\s*)?(?:import\b|from\s+\S+\s+import\b|(?:export\s+)?(?:const|let|var|function|class|interface|type)\b|(?:throw|raise|return)\b|(?:expect|assert)\s*\(|at\s+|Node\.js v\d|[{}^|])/;
   const location = /^(?:(?:file:\/\/\/|(?:[A-Za-z]:)?[\/\\]|[\w.-]+[\/\\]).*:\d+(?::\d+)?|\S+:\d+(?::\d+)?\)?)$/;
-  const useful = lines.map((l) => l.trim()).filter((l) => /[\p{L}\p{N}]/u.test(l) && !/^Wall time:/i.test(l) && !banner.test(l) && !code.test(l) && !location.test(l));
+  const trimmed = lines.map((l) => l.trim());
+  const useful = trimmed.filter((l) => /[\p{L}\p{N}]/u.test(l) && !/^Wall time:/i.test(l) && !banner.test(l) && !code.test(l) && !location.test(l) && !EXIT_WRAPPER.test(l));
   const exception = [...useful].reverse().find((l) => /^(E\s+)?[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b.*:/.test(l));
   const keyword = /error|fail|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable/i;
   const diagnostic = /error|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable/i;
-  const hit = exception?.replace(/^E\s+/, "") ?? useful.find((l) => diagnostic.test(l)) ?? useful.find((l) => keyword.test(l)) ?? useful[0] ?? "";
-  return signatureCut(hit.replace(/\s+/g, " "), max);
+  // The wrapper is the last resort: "exited with code 1" still beats an empty failure line.
+  const hit = exception?.replace(/^E\s+/, "") ?? useful.find((l) => diagnostic.test(l)) ?? useful.find((l) => keyword.test(l)) ?? useful[0] ?? trimmed.find((l) => EXIT_WRAPPER.test(l)) ?? "";
+  // Test runners prefix diagnostics with arrows and bullets (vitest "→", "❯"): not the message.
+  return signatureCut(hit.replace(/^[→❯›»•·*>\s-]+/u, "").replace(/\s+/g, " "), max);
 }
 
 function signatureCut(text: string, max: number): string {
@@ -921,7 +947,8 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
         .replace(/\b[\w.-]+\.[a-z]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)/gi, "<path>")
         .replace(/^\d+:\d+\s+/, "").replace(/\bline\s+\d+\b/gi, "line <n>")
         .replace(/\b0x[\da-f]+\b|\b[\da-f]{8,}\b/gi, "<hex>"), 120);
-      if (signature) counts.set(signature, (counts.get(signature) ?? 0) + 1);
+      // A bare exit status groups unrelated failures: nothing a note could match.
+      if (signature && !EXIT_WRAPPER.test(signature)) counts.set(signature, (counts.get(signature) ?? 0) + 1);
     }
   }
   return [...counts].map(([signature, count]) => ({ signature, count }))

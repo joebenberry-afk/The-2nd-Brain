@@ -310,7 +310,9 @@ interface CachedNote {
 }
 
 const NOTE_CACHE = new Map<string, Map<string, CachedNote>>();
-const EVIDENCE_CACHE = new Map<string, boolean>();
+/** Evidence files change without any note changing: a result is reused only briefly. */
+const EVIDENCE_CACHE = new Map<string, { stale: boolean; at: number }>();
+const EVIDENCE_TTL_MS = 10_000;
 
 function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Note[], errors: string[], previous: Map<string, CachedNote> | undefined, current: Map<string, CachedNote>): void {
   let names: string[];
@@ -565,15 +567,17 @@ export function differentBody(same: Note, text: string): boolean {
 export function staleEvidence(note: Note, roots: string[]): boolean {
   if (!note.evidence.length) return false;
   const key = JSON.stringify([note.id, note.evidence, roots]);
+  const now = Date.now();
   const cached = EVIDENCE_CACHE.get(key);
-  if (cached !== undefined) return cached;
+  if (cached && now - cached.at < EVIDENCE_TTL_MS) return cached.stale;
   const paths: string[] = [];
   for (const entry of note.evidence) {
     // Old evidence often carries a line number, test selector or commit annotation. None is
     // part of its filename. Other schemes (events:, commit:, URLs) are not filesystem evidence.
     const path = entry.trim().replace(/\s+\(.*\)$/, "").replace(/@[a-f\d]{7,40}$/i, "").replace(/::.*$|:\d+(?:-\d+)?$/, "");
     if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) continue;
-    if (path.split(/[\\/]/).includes("..")) continue;
+    // A parent escape or a glob names no single file: unknown, never missing.
+    if (path.split(/[\\/]/).includes("..") || /[*?[\]{}]/.test(path)) continue;
     const absolute = isAbsolute(path) || win32.isAbsolute(path);
     const filename = /(?:^|[\\/])[^\\/]+\.[a-z\d]{1,16}$/i.test(path);
     if (absolute || filename || /^[^\s]+[\\/][^\s]+$/.test(path) || /^(?:README|LICENSE|Makefile|Dockerfile)$/i.test(path)) paths.push(path);
@@ -582,6 +586,6 @@ export function staleEvidence(note: Note, roots: string[]): boolean {
     if (isAbsolute(path) || win32.isAbsolute(path)) return !existsSync(path);
     return roots.length > 0 && roots.every((root) => !existsSync(resolve(root, path.replace(/\\/g, "/"))));
   });
-  EVIDENCE_CACHE.set(key, stale);
+  EVIDENCE_CACHE.set(key, { stale, at: now });
   return stale;
 }

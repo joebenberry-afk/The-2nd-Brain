@@ -5,7 +5,8 @@ import { brainTools, jsonSchema } from "./tools.ts";
 import { logUse } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
 
-const PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18"];
+// 2025-03-26 is left out: it requires JSON-RPC batches, which this server does not accept.
+const PROTOCOLS = ["2024-11-05", "2025-06-18"];
 type Json = Record<string, unknown>;
 
 function object(value: unknown): Json | undefined {
@@ -75,16 +76,23 @@ export async function runMcp(opts: {
             result = { tools: brainTools.map(tool => ({ name: tool.name, description: tool.description, inputSchema: jsonSchema(tool.params) })) };
             break;
           case "tools/call": {
-            try {
-              const tool = brainTools.find(tool => tool.name === params?.name);
-              if (!tool) throw new Error(`unknown tool: ${String(params?.name)}`);
-              const args = params?.arguments === undefined ? {} : object(params.arguments);
-              if (!args) throw new Error("arguments must be an object");
+            // Unknown tools and malformed arguments are protocol errors (-32602); isError is
+            // reserved for a valid call whose execution failed.
+            const tool = brainTools.find(tool => tool.name === params?.name);
+            const args = params?.arguments === undefined ? {} : object(params.arguments);
+            let invalid = !tool ? `unknown tool: ${String(params?.name)}` : !args ? "arguments must be an object" : "";
+            if (tool && args) {
               for (const [key, prop] of Object.entries(tool.params)) {
                 if (!(key in args) && prop.optional) continue;
-                if (typeof args[key] !== prop.type) throw new Error(`${key} must be a ${prop.type}`);
+                if (typeof args[key] !== prop.type) invalid ||= `${key} must be a ${prop.type}`;
               }
-              for (const key of Object.keys(args)) if (!Object.hasOwn(tool.params, key)) throw new Error(`unknown argument: ${key}`);
+              for (const key of Object.keys(args)) if (!Object.hasOwn(tool.params, key)) invalid ||= `unknown argument: ${key}`;
+            }
+            if (invalid || !tool || !args) {
+              await send({ jsonrpc: "2.0", id, error: { code: -32602, message: invalid } });
+              continue;
+            }
+            try {
               if (!home) throw new Error("Brain home not found; set SECOND_BRAIN_HOME");
               const started = performance.now();
               // MCP has no child identity: the host must withhold brain_state from its children.

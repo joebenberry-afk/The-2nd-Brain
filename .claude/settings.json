@@ -20,7 +20,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(Bash|Edit|Write|MultiEdit)$",
+        "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$",
         "hooks": [
           {
             "type": "command",
@@ -31,7 +31,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "^(Bash|Edit|Write|MultiEdit)$",
+        "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$",
         "hooks": [
           {
             "type": "command",

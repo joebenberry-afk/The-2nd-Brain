@@ -298,19 +298,24 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
 }
 
 /**
- * Evidence resolves against this project's checkout and the Brain home. Another project's
- * relative paths belong to a checkout we cannot see here: unknown, never "stale".
+ * Evidence resolves against this project's checkout and the Brain home (capture cites its event
+ * logs there). A project note is judged only when that checkout is known; another project's note
+ * never: its relative paths belong to a checkout we cannot see. Unknown is never "stale".
  */
-function staleHere(note: Note, opts: RecallOptions): boolean {
-  if (note.project !== GLOBAL && note.project !== opts.project?.id) return false;
-  const home = opts.home ?? (note.path ? resolve(note.path, note.private ? "../../../.." : "../../..") : undefined);
-  return staleEvidence(note, [opts.project?.root, home].filter((root): root is string => !!root));
+export function staleHere(note: Note, project: Project | null, home: string | undefined): boolean {
+  const root = project?.root ?? undefined;
+  if (note.project !== GLOBAL && (note.project !== project?.id || !root)) return false;
+  return staleEvidence(note, [root, home].filter((r): r is string => !!r));
+}
+
+function noteHome(note: Note, opts: RecallOptions): string | undefined {
+  return opts.home ?? (note.path ? resolve(note.path, note.private ? "../../../.." : "../../..") : undefined);
 }
 
 export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
   const hits = matchingHits(scored, opts).slice(0, Math.max(1, Math.min(10, opts.limit ?? 3)));
   // Keep the BM25 shortlist (and its relevance floor), but lead with usable evidence.
-  for (const hit of hits) hit.stale = staleHere(hit.note, opts);
+  for (const hit of hits) hit.stale = staleHere(hit.note, opts.project, noteHome(hit.note, opts));
   return hits.sort((a, b) => Number(a.stale) - Number(b.stale));
 }
 
@@ -397,7 +402,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
         replacement = notes.find((n) => n.id === id && (opts.all || visibleTo(n, opts.project)));
       }
       if (replacement) {
-        const next = { note: replacement, score: 0, matched: [], stale: staleHere(replacement, opts) };
+        const next = { note: replacement, score: 0, matched: [], stale: staleHere(replacement, opts.project, noteHome(replacement, opts)) };
         const tombstone = { ...best, tombstone: true, note: { ...best.note, replacedBy: replacement.id } };
         hits = [next, tombstone, ...hits.filter((h) => h.note.id !== replacement.id)].slice(0, opts.limit);
       } else {

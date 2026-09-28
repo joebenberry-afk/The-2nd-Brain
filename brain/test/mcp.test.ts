@@ -40,7 +40,7 @@ async function exchange(messages: unknown[]) {
 
 it("negotiates, discovers tools, saves and recalls memory, and recovers after invalid requests", async () => {
   const { home, code, replies } = await exchange([
-    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } } },
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "1" } } },
     { jsonrpc: "2.0", method: "notifications/initialized" },
     { jsonrpc: "2.0", id: "tools", method: "tools/list" },
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "brain_note", arguments: { text: "Compiler needs a project-local plugin", kind: "gotcha" } } },
@@ -54,7 +54,7 @@ it("negotiates, discovers tools, saves and recalls memory, and recovers after in
   expect(code).toBe(0);
   expect(replies.map(reply => reply.id)).toEqual([1, "tools", 3, 4, 5, null, 6, 7, 8]);
   const init = replies[0]!.result!;
-  expect(init.protocolVersion).toBe("2025-03-26");
+  expect(init.protocolVersion).toBe("2024-11-05");
   expect(init.capabilities).toEqual({ tools: {} });
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
   expect(init.serverInfo).toEqual({ name: "second-brain", version: pkg.version });
@@ -71,7 +71,7 @@ it("negotiates, discovers tools, saves and recalls memory, and recovers after in
   expect(note.body).toBe("Compiler needs a project-local plugin");
   expect(replies[2]!.result!.content).toEqual([{ type: "text", text: "saved " + note.id }]);
   expect(replies[3]!.result!.content![0]!.text).toContain(note.body);
-  expect(replies[4]!.result).toMatchObject({ isError: true });
+  expect(replies[4]!.error?.code).toBe(-32602);
   expect(replies[5]!.error?.code).toBe(-32700);
   expect(replies[6]).toEqual({ jsonrpc: "2.0", id: 6, result: {} });
   expect(replies[7]!.error?.code).toBe(-32601);
@@ -84,12 +84,13 @@ it("negotiates, discovers tools, saves and recalls memory, and recovers after in
   ]);
 });
 
-it.each(["2024-11-05", "2025-06-18", "unsupported"])("negotiates protocol %s", async version => {
+it.each(["2024-11-05", "2025-06-18", "2025-03-26", "unsupported"])("negotiates protocol %s", async version => {
   const { replies } = await exchange([{ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: version } }]);
-  expect(replies[0]!.result!.protocolVersion).toBe(version === "unsupported" ? "2025-06-18" : version);
+  // 2025-03-26 would oblige batch support: the server answers with the version it speaks.
+  expect(replies[0]!.result!.protocolVersion).toBe(version === "2024-11-05" ? version : "2025-06-18");
 });
 
-it("rejects bad arguments without writing and keeps notifications side-effect free", async () => {
+it("rejects malformed calls as protocol errors, failed execution as isError, without writing", async () => {
   const { home, replies } = await exchange([
     { jsonrpc: "2.0", method: "tools/call", params: { name: "brain_note", arguments: { text: "not a request" } } },
     { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "brain_note", arguments: { text: "bad boolean", tested: "yes" } } },
@@ -99,7 +100,7 @@ it("rejects bad arguments without writing and keeps notifications side-effect fr
     { jsonrpc: "2.0", id: 4, method: "ping" },
   ]);
   expect(replies.map(reply => reply.id)).toEqual([1, 2, 3, null, 4]);
-  expect(replies.slice(0, 3).map(reply => reply.result?.isError)).toEqual([true, true, true]);
+  expect(replies.map(reply => reply.error?.code ?? (reply.result?.isError ? "isError" : "ok")).slice(0, 3)).toEqual([-32602, "isError", -32602]);
   expect(loadNotes(home).notes).toEqual([]);
   expect(readWork(home, "demo")).toBeNull();
   expect(replies[3]!.error?.code).toBe(-32600);

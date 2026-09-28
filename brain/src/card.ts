@@ -3,9 +3,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pendingCount } from "./capture.ts";
 import { kitsFor, loadKits, type Kit } from "./kits.ts";
-import { displayLine, firstLine, GLOBAL, staleEvidence, type Note } from "./notes.ts";
+import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
-import { recall } from "./search.ts";
+import { recall, staleHere } from "./search.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
 import { planFit, readWork, resumeText } from "./work.ts";
 
@@ -40,7 +40,6 @@ export function cardCandidates(notes: Note[], project: Project): Note[] {
  * card can never show cannot take the top-10 relevance slots.
  */
 export function rankForCard(candidates: Note[], project: Project, workText: string, now: Date, home: string, prompt = ""): Note[] {
-  const roots = [project.root, home].filter((root): root is string => !!root);
   const relevance = new Map<string, number>();
   if (workText.trim()) {
     const hits = recall(candidates, workText, { project, limit: 10 });
@@ -53,7 +52,7 @@ export function rankForCard(candidates: Note[], project: Project, workText: stri
   const score = (n: Note): number => {
     const age = (now.getTime() - Date.parse(n.at)) / DAY_MS;
     const recent = age <= 14 ? 2 : age <= 60 ? 1 : 0;
-    return (n.tested ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent - (staleEvidence(n, roots) ? 3 : 0) + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
+    return (n.tested ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent - (staleHere(n, project, home) ? 3 : 0) + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
   };
   const scored = candidates.map((n) => ({ n, s: score(n), p: promptScores.get(n.id) ?? 0 }));
   scored.sort((a, b) => b.p - a.p || b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));

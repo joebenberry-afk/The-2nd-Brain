@@ -34,6 +34,8 @@ interface SessionState {
   edited: string[];
   failure?: string;
   ask?: string;
+  /** Notes whose full fix is already in this context; cleared when compaction drops it. */
+  fixed?: Set<string>;
 }
 
 function asObject(value: unknown): Json | undefined {
@@ -362,7 +364,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       saveAuto(ctx);
       const reason = asObject(event)?.reason;
       const state = getSession(sessionKey(ctx));
-      carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], resume: reason === "fork" ? state.resume : undefined, resumeSeen: reason === "fork" ? state.resumeSeen : false, cardPending: false } : undefined;
+      carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], resume: reason === "fork" ? state.resume : undefined, resumeSeen: reason === "fork" ? state.resumeSeen : false, cardPending: false, fixed: reason === "fork" && state.fixed ? new Set(state.fixed) : undefined } : undefined;
     } catch {
       carry = undefined;
     }
@@ -409,6 +411,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       } else {
         state.resume = undefined;
       }
+      state.fixed = undefined;
 
       return undefined;
     } catch {
@@ -478,7 +481,10 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         const fix = findFix(notes, fields.error, project);
 
         if (fix) {
-          const fixText = renderFix(fix);
+          // The full fix once per context: a repeat of the same error costs a pointer, not the text.
+          const fixed = (state.fixed ??= new Set());
+          const fixText = fixed.has(fix.id) ? `Brain: same fix as above [${fix.id}]` : renderFix(fix);
+          fixed.add(fix.id);
           const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
           const resultContent = [...contentArray, { type: "text", text: fixText }];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx) });
