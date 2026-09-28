@@ -1,5 +1,5 @@
 ---
-at: 2026-09-28T02:39:16Z
+at: 2026-09-28T03:37:00Z
 ---
 
-Goal: agent's best friend (tokens, speed, reliability), host-neutral. Next: owner restarts OMP; week of use; read `brain stats` (tool use per main session, via split). Watch out: system-prompt line only if <20% of main sessions use tools after ~10. Done: round 3 committed (5d8f596, f76d55c, 1adedbc); MCP, brain fix, CC hook, stale evidence, 17 notes retired.
+Goal: agent's best friend, host-neutral. Next: owner restarts OMP; check a task child has only brain_recall and stats say `newest build only`; E1: hashline grammar line in next editing subagent batch (baseline 15/17 first-edit failures). Watch out: Laya/Jev need no Brain feature. Done: f174f0e.
