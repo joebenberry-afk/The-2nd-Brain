@@ -72,7 +72,8 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    heredocs (`python -c`, `node -e`, `<<EOF` before the script) and scripts under OS temp roots or
    a top-level `tmp/`, `temp/`, `cache/`, `.cache/` are never proposed.
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
-   hit rate, which fixes fired in how many sessions, and frequent errors without a fix.
+   hit rate, which fixes fired in how many sessions, errors the Brain swallowed to keep the host
+   running (latest three), and frequent errors without a fix.
    `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI, hooks and
    MCP; old rows lacking attribution are excluded from this split, not guessed to be OMP. Every
    row carries the build that wrote it (newest source mtime); stats read only the newest build
