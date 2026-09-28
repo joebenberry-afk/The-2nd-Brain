@@ -50,6 +50,10 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    kits); later prompts add nothing. Subagents inherit only the parent plan’s Watch out field
    (≤40 tokens), never Goal/Next/Done, auto observations or kits, and cannot overwrite state.
    Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
+   A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
+   the card up front (`Often hit lately …`), before the first attempt; it drops off by itself
+   once the mistake stops. Measured on GPT subagents: the OMP edit-grammar mistake fell from
+   8/8 first edits to 2/8 with that line in the task.
 2. **Working state.** Ask the agent to set the plan (`brain_state`). Then force a compaction
    (`/compact`) and ask "where are we?": the answer should give goal and next step without
    re-reading files. Compaction re-injects only the working state (≤ 150 tokens: Goal and Next
