@@ -309,6 +309,11 @@ describe("OMP extension", () => {
     expect((handlers.get("tool_result")!(fail, ctx("other-session", workDir)) as any).content[1].text).toContain("Fix for SRE mismatch");
     handlers.get("session_compact")!({}, c);
     expect(fixText()).toContain("Fix for SRE mismatch");
+    // /clear keeps the session id and fires no compaction: a shrinking context is the signal.
+    handlers.get("context")!({ messages: [{}, {}, {}] }, c);
+    expect(fixText()).toBe(`\nBrain: same fix as above [${note.id}]`);
+    handlers.get("context")!({ messages: [{}] }, c);
+    expect(fixText()).toContain("Fix for SRE mismatch");
   });
 
   it("opt-in stop nudge: once per main session, only after 30 results without a Brain write", () => {
@@ -337,6 +342,15 @@ describe("OMP extension", () => {
     const child = { ...ctx("nudge-child"), agent: { kind: "sub" } };
     work(child, 40);
     expect(stop({ stop_hook_active: false }, child)).toBeUndefined();
+    const shell = { ...ctx("nudge-cli"), agent: { kind: "main" } };
+    const bash = (command: string) => handlers.get("tool_result")!({ toolName: "bash", input: { command }, isError: false, content: [] }, shell);
+    work(shell, 40);
+    bash('node brain/bin/brain.mjs --project app note "Deploys need the VPN"');
+    work(shell, 28);
+    bash("brain state"); // shows the state: not a write
+    expect(stop({ stop_hook_active: false }, shell)).toBeUndefined();
+    work(shell, 1);
+    expect(stop({ stop_hook_active: false }, shell)).toMatchObject({ continue: true });
   });
 
   it("untested note → no fix appended", () => {

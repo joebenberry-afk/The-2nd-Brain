@@ -19,6 +19,8 @@ const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename
 const STOP_NUDGE_AFTER = 30;
 const STOP_NUDGE_TOOLS = "Brain: before you stop, save what the next session needs. If the goal or next step changed: brain_state(text). If you learned what the repo cannot tell (a decision and why, an environment gotcha with its error line): brain_note(text). Otherwise reply \"nothing to save\".";
 const STOP_NUDGE_CLI = STOP_NUDGE_TOOLS.replace("brain_state(text)", "`brain state \"<text>\"`").replace("brain_note(text)", "`brain note \"<text>\"`");
+/** A shell `brain note …` / `brain state …` (installed shim or bin/brain.mjs) is a Brain write too. */
+const CLI_WRITE = /(?:^|[\s;&|(])(?:\S*[\\/])?brain(?:\.mjs|\.cmd)?\s+(?:--\S+\s+(?:\S+\s+)?)*(?:note|state)\s+\S/;
 
 export interface HostLike {
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
@@ -43,6 +45,8 @@ interface SessionState {
   sinceWrite?: number;
   /** The one end-of-turn learning nudge this session may get has been sent. */
   nudged?: boolean;
+  /** Messages in the last context this session sent; a drop means earlier text may be gone. */
+  contextLength?: number;
 }
 
 function asObject(value: unknown): Json | undefined {
@@ -333,11 +337,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const state = getSession(key);
       state.cardPending = false;
 
-      // Only insert if we have a resume card and event.messages is an array
-      if (!state.resume) return undefined;
-
       const messages = asObject(event)?.messages;
       if (!Array.isArray(messages)) return undefined;
+      // A context that shrank (/clear, tree navigation, compaction) may have lost a fix shown
+      // earlier: the next matching failure gets the full text again, not a dangling pointer.
+      if (messages.length < (state.contextLength ?? 0)) state.fixed = undefined;
+      state.contextLength = messages.length;
+
+      // Only insert if we have a resume card
+      if (!state.resume) return undefined;
 
       // After the compaction summary: Anthropic's native compaction drops every block before it.
       const at = messages.findLastIndex((m) => asObject(m)?.role === "compactionSummary") + 1;
@@ -459,7 +467,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
       // Log the event
       appendEvent(home, key, cwd, fields);
-      state.sinceWrite = (state.sinceWrite ?? 0) + 1;
+      const brainWrite = fields.ok && (/^brain_(?:note|state)$/.test(fields.tool) || (!!fields.command && CLI_WRITE.test(fields.command)));
+      state.sinceWrite = brainWrite ? 0 : (state.sinceWrite ?? 0) + 1;
 
       // Track edited path on success
       // Only tools that change files count as edits; reads and searches also carry a path.

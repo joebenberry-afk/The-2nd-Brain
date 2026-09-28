@@ -1267,6 +1267,7 @@ describe("capture ignores ephemeral experiments", () => {
 
   it.each([
     "npx vitest run test/cache/x.test.ts",
+    "deno run scripts/task.ts eval",
     "python scripts/train.py -c config.toml",
     "node scripts/build.js --eval fixtures/input.json",
     'npx vitest run test/x.test.ts -t "handles << tokens"',

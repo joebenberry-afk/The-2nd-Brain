@@ -261,6 +261,7 @@ const INLINE_FLAG: Record<string, RegExp> = {
   python: /^-(?:c|[a-zA-Z]*c)$|^-c./,
   node: /^(?:-e|-p|--eval|--print)(?:=|$)|^-[ep]./,
   bun: /^(?:-e|-p|--eval|--print)(?:=|$)/,
+  // `deno eval <code>`: the subcommand is the first non-flag argument, so the loop stops there.
   deno: /^eval$/,
 };
 
@@ -286,7 +287,7 @@ function ephemeralCommand(command: string): boolean {
     if (inline) {
       for (const arg of identity.argv.slice(1)) {
         if (inline.test(arg)) return true;
-        if (!arg.startsWith("-") && !(identity.program === "deno")) break;
+        if (!arg.startsWith("-")) break;
       }
     }
     return identity.argv.slice(1).some(scratchPath);
