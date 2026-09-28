@@ -1,5 +1,5 @@
 ---
-at: 2026-09-28T03:41:48Z
+at: 2026-09-28T04:11:28Z
 ---
 
-Goal: agent's best friend, host-neutral. Next: after OMP restart, E2: 8 GPT children edit scratch files without hint; later ones should show "Often hit lately" and fail less. Watch out: children run code loaded at process start. Done: f2cd7e2.
+Goal: agent's best friend, host-neutral. Next: watch `brain stats` "fixes fired" + card "Often hit lately" retire itself; owner clears 6 old proposals via brain review. Watch out: never script git stash push/pop (owner stashes). Done: 01019ef.
