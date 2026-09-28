@@ -305,7 +305,7 @@ describe("OMP extension", () => {
     const fail = { toolName: "bash", input: { command: "python test.py" }, isError: true, content: [{ type: "text", text: "SRE module mismatch" }] };
     const fixText = () => (handlers.get("tool_result")!(fail, c) as any).content[1].text as string;
     expect(fixText()).toContain("Fix for SRE mismatch");
-    expect(fixText()).toBe(`Brain: same fix as above [${note.id}]`);
+    expect(fixText()).toBe(`\nBrain: same fix as above [${note.id}]`);
     expect((handlers.get("tool_result")!(fail, ctx("other-session", workDir)) as any).content[1].text).toContain("Fix for SRE mismatch");
     handlers.get("session_compact")!({}, c);
     expect(fixText()).toContain("Fix for SRE mismatch");

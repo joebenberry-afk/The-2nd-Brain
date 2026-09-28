@@ -486,7 +486,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const fixText = fixed.has(fix.id) ? `Brain: same fix as above [${fix.id}]` : renderFix(fix);
           fixed.add(fix.id);
           const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
-          const resultContent = [...contentArray, { type: "text", text: fixText }];
+          // Hosts join text blocks without a separator: the fix must start on its own line.
+          const resultContent = [...contentArray, { type: "text", text: `\n${fixText}` }];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx) });
           return { content: resultContent };
         }

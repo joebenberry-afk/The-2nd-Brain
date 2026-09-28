@@ -83,7 +83,7 @@ it("a failure fixed in one session becomes the known fix, the card and the resum
   const failed = day2.fire("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: true, content: [{ type: "text", text: "Error: Cannot find module 'left-pad'\n  at require" }] }, s2) as {
     content: { text: string }[];
   };
-  expect(failed.content.at(-1)?.text).toMatch(/^Brain: .*npm ci && npm test works/);
+  expect(failed.content.at(-1)?.text).toMatch(/^\nBrain: .*npm ci && npm test works/);
 
   // Another project does not see the app's gotcha unless asked across projects.
   const other = { cwd: tool, sessionManager: { getSessionId: () => "s3" } };
