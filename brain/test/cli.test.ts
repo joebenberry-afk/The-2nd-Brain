@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -47,10 +47,11 @@ describe("brain cli", () => {
     expect(text).not.toContain("syntheticCredential123");
   });
 
-  it("reports outcomes and reviews only fixes below half over at least four outcomes", async () => {
+  it("pauses a fix that helped under half of 4+ runs until its note is edited", async () => {
     const { home, io } = setup();
-    const note = createNote(home, { project: "demo", text: "Review this repair", tested: true });
+    const note = createNote(home, { project: "demo", text: "Review this repair", tested: true, errors: ["Error: widget registry locked"] });
     const before = readFileSync(note.path, "utf8");
+    expect((await run(["fix", "Error: widget registry locked"], io)).out).toContain(note.id);
     const base = { project: "demo", tokens: 0, ms: 0 };
     for (const [id, outcomes] of [[note.id, ["helped", "missed", "missed", "missed"]], ["half", ["helped", "helped", "missed", "missed"]], ["few", ["missed", "missed", "missed"]]] as const) {
       for (const outcome of outcomes) {
@@ -65,11 +66,17 @@ describe("brain cli", () => {
     expect(measured.out).toContain(`fix outcomes: ${note.id} helped 1/missed 3`);
     expect(measured.out).toContain("recall: 2 queries logged, 1 silent");
     for (const output of [measured.out, (await run(["review"], io)).out]) {
-      const review = output.split("Fixes to review:")[1];
-      expect(review).toContain(`${note.id} helped 1/missed 3`);
-      expect(review).not.toMatch(/half|few|--off|nothing to review/);
+      const listed = (output.split("Fixes to review")[1] ?? "").split("\n").slice(1).filter((line) => line.startsWith("  ")).map((line) => line.trim());
+      expect(listed).toEqual([note.id]);
+      expect(output).not.toContain("nothing to review");
     }
+    // Paused: the failing fix no longer fires, and its note file is untouched.
+    expect((await run(["fix", "Error: widget registry locked"], io)).out).toBe("");
     expect(readFileSync(note.path, "utf8")).toBe(before);
+    // Editing the note starts a new trial.
+    const later = new Date(Date.now() + 5000);
+    utimesSync(note.path, later, later);
+    expect((await run(["fix", "Error: widget registry locked"], io)).out).toContain(note.id);
   });
 
   it("ranks outcome lines by total firings, not session counts, and limits them to five", async () => {

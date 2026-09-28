@@ -316,6 +316,17 @@ describe("recall and note boundaries", () => {
     expect(recall(notes, "Absolute Laya git checkout", { project: laya }).map((h) => h.note.id)).toEqual(["n-git"]);
   });
 
+  it("answers a keyword list only with notes whose headline it is about", () => {
+    const notes = [
+      note("n-body", { body: "Agent-written tests can pass without checking anything\nSeen in round 3 review of notes cache search." }),
+      note("n-head", { body: "Notes cache is stat-validated per process\nSearch reuses parsed notes." }),
+      note("n-other", { body: "Unrelated filler about deployment regions and ports" }),
+    ];
+    expect(recall(notes, "round 3 notes cache staleEvidence search card review", { project }).map((h) => h.note.id)).toEqual(["n-head"]);
+    // Short queries keep the body-match rule: two words are not a keyword list.
+    expect(recall(notes, "review round", { project }).map((h) => h.note.id)).toEqual(["n-body"]);
+  });
+
   it("does not merge distinct full first lines sharing the display prefix", () => {
     const prefix = "x".repeat(159);
     const stored = note("note-1", { body: prefix + " keep the cache" });

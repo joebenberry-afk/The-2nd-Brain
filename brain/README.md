@@ -46,7 +46,8 @@ weak match: two words of a longer query must match, the project's own name ("Abs
 does not count inside that project, and file names and versions (`LOOP.md`, `18.4.1`) match
 whole, not as "loop" or "update". The matched words must also carry at least a fifth of the
 query's information (half for one- or two-word queries), so words common across the notes count
-for little. When no note answers, recall names the best heading of the project's plan docs
+for little. A keyword list (five or more words) must also be about the note's subject: two of its
+words in the note's first line, or half of a short one. When no note answers, recall names the best heading of the project's plan docs
 instead: `docs/LOOP.md › Goals (line 12)`.
 
 **Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`)
@@ -93,8 +94,9 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
    running (latest three), and frequent errors without a fix. Each recall row keeps its query
    (masked, ≤ 200 chars) and the ids it answered with, locally only (`recall: N queries logged,
    S silent`). A fired fix is judged by the next run of the same command: `fix outcomes: <id>
-   helped H/missed M`; a fix helped under half the time over 4+ outcomes is listed under
-   `Fixes to review:` in stats and `brain review` (the note is never changed automatically).
+   helped H/missed M`; a fix that helped under half the time over 4+ runs since its note last
+   changed is paused (no longer fired) and listed under `Fixes to review` in stats and
+   `brain review`. The note file is never changed; editing it gives the fix a new trial.
    `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI, hooks and
    MCP; old rows lacking attribution are excluded from this split, not guessed to be OMP. Every
    row carries the build that wrote it (newest source mtime); stats read only the newest build

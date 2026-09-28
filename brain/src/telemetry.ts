@@ -215,3 +215,63 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const fixOutcomes = [...outcomes.values()].filter(f => f.helped + f.missed > 0).sort((a, b) => b.firings - a.firings || a.id.localeCompare(b.id));
   return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors };
 }
+
+/** Outcome rows (fix id, time, helped?) parsed once per telemetry file version. */
+let outcomeCache: { key: string; rows: { id: string; at: number; helped: boolean }[] } | undefined;
+
+/**
+ * Fixes that stopped earning their place: helped less than half the time over 4+ judged runs since
+ * the note last changed (`changed` gives a note's file mtime; editing the fix starts a new trial).
+ * They are no longer fired and are listed for review; the note files are never touched.
+ */
+export function demotedFixes(home: string, changed: (id: string) => number | undefined): Set<string> {
+  const demoted = new Set<string>();
+  try {
+    const files = [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)];
+    const key = files.map((file) => {
+      try {
+        const s = statSync(file);
+        return `${s.size}:${s.mtimeMs}`;
+      } catch {
+        return "-";
+      }
+    }).join("|");
+    if (outcomeCache?.key !== key) {
+      const rows: { id: string; at: number; helped: boolean }[] = [];
+      for (const file of files) {
+        let text = "";
+        try {
+          text = readFileSync(file, "utf8");
+        } catch {
+          continue;
+        }
+        for (const line of text.split("\n")) {
+          if (!line.includes('"fixout"')) continue;
+          try {
+            const row = JSON.parse(line) as { kind?: unknown; id?: unknown; at?: unknown; outcome?: unknown };
+            const at = typeof row.at === "string" ? Date.parse(row.at) : NaN;
+            if (row.kind === "fixout" && typeof row.id === "string" && Number.isFinite(at) && (row.outcome === "helped" || row.outcome === "missed")) rows.push({ id: row.id, at, helped: row.outcome === "helped" });
+          } catch {
+            // a torn line from a concurrent append
+          }
+        }
+      }
+      outcomeCache = { key, rows };
+    }
+    const counts = new Map<string, { helped: number; total: number }>();
+    const since = new Map<string, number>();
+    for (const row of outcomeCache.rows) {
+      if (!since.has(row.id)) since.set(row.id, changed(row.id) ?? 0);
+      // Rows are whole seconds: a note written in the same second as an outcome started before it.
+      if (row.at + 1000 <= (since.get(row.id) ?? 0)) continue;
+      const c = counts.get(row.id) ?? { helped: 0, total: 0 };
+      c.total += 1;
+      if (row.helped) c.helped += 1;
+      counts.set(row.id, c);
+    }
+    for (const [id, c] of counts) if (c.total >= 4 && c.helped * 2 < c.total) demoted.add(id);
+  } catch {
+    // demotion is advisory: on any error every fix stays eligible
+  }
+  return demoted;
+}

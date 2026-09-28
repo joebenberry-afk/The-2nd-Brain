@@ -630,7 +630,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!fields.ok && fields.error) {
         const project = resolveProject(home, cwd, env);
         const { notes } = loadNotes(home);
-        const fix = findFix(notes, fields.error, project);
+        const fix = findFix(notes, fields.error, project, home);
 
         if (fix) {
           // The full fix once per context: a repeat of the same error costs a pointer, not the text.

@@ -20,6 +20,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
 import { cutToTokens, nowIso, writeAtomic } from "./util.ts";
+import { demotedFixes } from "./telemetry.ts";
 
 export { scrub };
 import {
@@ -862,7 +863,9 @@ function safeRegex(pattern: string): RegExp | null {
 export function findFix(
   notes: Note[],
   errorText: string,
-  project: Project | null
+  project: Project | null,
+  /** The Brain home whose telemetry judges fixes: given, a fix that stopped helping is skipped. */
+  home?: string
 ): Note | null {
   if (!errorText.trim()) return null;
 
@@ -876,10 +879,22 @@ export function findFix(
   let split: string[] | undefined;
   const lines = () => (split ??= `${errorText}\n${scrubbed}\n${flat(errorText)}`.split("\n").map((l) => l.slice(0, 500)));
   let best: { len: number; id: string; note: Note } | null = null;
+  let demoted: Set<string> | undefined;
 
   for (const note of notes) {
     if (!isActive(note) || !note.tested || !note.errors.length) continue;
     if (!visibleTo(note, project)) continue;
+    if (home) {
+      demoted ??= demotedFixes(home, (id) => {
+        const path = notes.find((n) => n.id === id)?.path;
+        try {
+          return path ? statSync(path).mtimeMs : undefined;
+        } catch {
+          return undefined;
+        }
+      });
+      if (demoted.has(note.id)) continue;
+    }
 
     for (const pattern of note.errors) {
       let matchLen = 0;

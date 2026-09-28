@@ -378,6 +378,17 @@ describe("OMP extension", () => {
     expect(fixText()).toContain("Fix for SRE mismatch");
   });
 
+  it.each(["1", "5", "0", "-1", "1.5", "5x", "", "Infinity", "9007199254740992"])("stop nudge threshold %j accepts only positive safe integers", (value) => {
+    const { handlers } = load({ SECOND_BRAIN_HOME: home, BRAIN_STOP_NUDGE: "on", BRAIN_STOP_NUDGE_AFTER: value }, true);
+    const c = { ...ctx(`threshold-${value}`), agent: { kind: "main" } };
+    const threshold = value === "1" ? 1 : value === "5" ? 5 : 30;
+    for (let i = 0; i < threshold; i++) {
+      expect(handlers.get("session_stop")!({}, c)).toBeUndefined();
+      handlers.get("tool_result")!({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [] }, c);
+    }
+    expect(handlers.get("session_stop")!({}, c)).toMatchObject({ continue: true });
+  });
+
   it("opt-in stop nudge: once per main session, only after 30 results without a Brain write", () => {
     const env = { SECOND_BRAIN_HOME: home, BRAIN_STOP_NUDGE: "on" };
     expect(load().handlers.has("session_stop")).toBe(false);

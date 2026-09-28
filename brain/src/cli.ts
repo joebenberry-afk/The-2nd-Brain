@@ -16,7 +16,7 @@ import { runMcp } from "./mcp.ts";
 import { answerWithHits } from "./search.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
-import { logUse, stats, type Stats, type UseKind } from "./telemetry.ts";
+import { demotedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, renderResume, resumeText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 
@@ -112,11 +112,20 @@ function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, qu
   logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits, id, query, ids });
 }
 
-function fixesToReview(io: Io, measured: Stats): number {
-  const fixes = measured.fixOutcomes.filter(f => f.helped + f.missed >= 4 && f.helped < f.missed);
-  if (fixes.length) io.out("Fixes to review:");
-  for (const f of fixes) io.out(`  ${f.id} helped ${f.helped}/missed ${f.missed}`);
-  return fixes.length;
+/** Fixes that stopped helping (see demotedFixes): no longer fired until their note is edited. */
+function fixesToReview(c: Ctx): number {
+  const { notes } = loadNotes(c.home);
+  const paused = [...demotedFixes(c.home, (id) => {
+    const path = notes.find((n) => n.id === id)?.path;
+    try {
+      return path ? statSync(path).mtimeMs : undefined;
+    } catch {
+      return undefined;
+    }
+  })].filter((id) => notes.some((n) => n.id === id && n.tested)).sort();
+  if (paused.length) c.io.out("Fixes to review (helped under half of 4+ runs; paused until the note is edited):");
+  for (const id of paused) c.io.out(`  ${id}`);
+  return paused.length;
 }
 
 const COMMANDS: Record<string, (c: Ctx) => number> = {
@@ -157,7 +166,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
   },
 
   fix(c) {
-    const fix = findFix(loadNotes(c.home).notes, need(c.args.join(" "), "error text"), c.project);
+    const fix = findFix(loadNotes(c.home).notes, need(c.args.join(" "), "error text"), c.project, c.home);
     const text = fix ? renderFix(fix) : "";
     if (text) c.io.out(text);
     use(c, "fix", text, undefined, fix?.id);
@@ -263,7 +272,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const root = gitRoot(c.io.cwd);
     if (root) scanCommits(c.home, root, c.project.id, notes);
     const pending = listProposals(c.home);
-    const reviewFixes = fixesToReview(c.io, stats(c.home, positiveInt(c.opts.days, 7), new Date(), { allBuilds: c.opts["all-builds"] === true }));
+    const reviewFixes = fixesToReview(c);
     if (!pending.length) {
       if (!reviewFixes) c.io.out("nothing to review");
       return 0;
@@ -331,7 +340,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.hook} hook · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
     for (const f of s.fixOutcomes.slice(0, 5)) c.io.out(`fix outcomes: ${f.id} helped ${f.helped}/missed ${f.missed}`);
-    fixesToReview(c.io, s);
+    fixesToReview(c);
     if (s.errors.length) {
       c.io.out(`Brain errors (swallowed, host unaffected): ${s.errors.length}`);
       for (const e of s.errors.slice(-3)) c.io.out(`${e.at.slice(0, 16).replace("T", " ")} ${e.error}`);
@@ -554,7 +563,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           finally { rmSync(claimed, { force: true }); }
         }
         if (!fields.ok && fields.error) {
-          const fix = findFix(loadNotes(home).notes, fields.error, project);
+          const fix = findFix(loadNotes(home).notes, fields.error, project, home);
           if (fix) {
             const text = renderFix(fix);
             output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };

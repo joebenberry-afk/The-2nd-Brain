@@ -294,6 +294,14 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
 
     const matched = allMatched.filter(term => q.includes(term));
     if (matched.length < minMatched || matched.reduce((sum, term) => sum + scored.information.get(term)!, 0) < requiredInformation) continue;
+    // A keyword list (5+ words) must be about the note's subject, its first line: two of its words
+    // there, or half of a short headline. Matches only in the body ("notes", "review") were noise.
+    if (q.length >= 5) {
+      const head = firstLine(note);
+      const headWords = [...(fold(head).match(DOTTED_OR_WORD) ?? []), ...(fold(head).match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
+      const inHead = matched.filter((term) => headWords.some((word) => word.startsWith(term))).length;
+      if (inHead < 2 && inHead * 2 < tokens(head, true).length) continue;
+    }
 
     hits.push({ note, score, matched });
   }

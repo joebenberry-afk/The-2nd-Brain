@@ -143,7 +143,8 @@ describe.skipIf(!hasNotes)("real queries", () => {
     expect(right).toBeGreaterThanOrEqual(9);
     // Frozen 2026-09-28 baseline: 9 right, 16 wrong, 0 silent misses, 9 correct silences.
     // P2 IDF coverage: 9 right, 11 wrong, 0 silent misses, 14 correct silences.
+    // Headline rule for keyword lists: 9 right, 5 wrong, 0 silent misses, 20 correct silences.
     // Still above the plan's <=10% target; this is a regression ceiling, not target success.
-    expect(wrong.length).toBeLessThanOrEqual(11);
+    expect(wrong.length).toBeLessThanOrEqual(5);
   });
 });
