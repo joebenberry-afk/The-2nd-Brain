@@ -221,3 +221,20 @@ Miss breakdown at 0.78 (first rerun): 18 labelled-relevant misses; 11 never reac
 answer and 7 are shown but judged below 0.78. Of the 11, only one (H04, 0.84) would pass the judge
 if the whole top-10 were judged; the rest score 0.14–0.74 on their keyword query. Widening the
 shortlist therefore buys one answer; the query text itself is the ceiling.
+
+### 8.3 Question-phrased recall queries: rejected (2026-09-28)
+
+agentbench `recallq` (the fact needed is only in a note the start card does not show, among 8
+decoys; the fixture cannot reveal it): `on` vs `on+question` (a tool description asking for one
+plain-English question), 8 + 8 interleaved, label `v5-question`. Agents ignored the wording: 0% of
+queries ended with "?" in either arm, often identical keyword lists. The needed note came back in
+8/8 runs in both arms. Pass 4/8 vs 7/8 is agent judgement, not recall: every failure found "amber"
+and then chose to block the deploy because the fixture's `npm test` fails. +20% tokens, +4% cost.
+Rejected; the switch was removed, the `recallq` task kept.
+
+Observed on the way: the first query in almost every run was the task itself ("Deploy this app to
+staging"); recall answered with three decoys that passed the judge and not the needed note, which
+the lexical top-3 had not reached, so agents needed a second recall. **Next lever when development
+resumes:** judge a wider lexical shortlist (top 6-8) and show the three best by judge score;
+measure with `recallq` (needed note on the first recall) and the real-query eval (0 wrong must hold
+on every recorded run).

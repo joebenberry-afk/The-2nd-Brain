@@ -23,6 +23,8 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
 import { createNote, loadNotes } from "../src/notes.ts";
+import assert from "node:assert/strict";
+import { renderCard } from "../src/card.ts";
 
 const PACKAGE = resolve(import.meta.dirname, "..");
 /** Bump when existing fixtures/tasks change; additive tasks already have a distinct taskSet. */
@@ -175,6 +177,10 @@ const TASKS: Record<string, Task> = {
     prompt: "Deploy this app to staging.",
     verify: (dir) => existsSync(join(dir, ".deployed-amber")) && !existsSync(join(dir, ".deployed-blue")) && !existsSync(join(dir, ".deployed-green")),
   },
+  recallq: {
+    prompt: "Deploy this app to staging.",
+    verify: (dir) => read(dir, "scripts/deploy.mjs") === FIXTURE["scripts/deploy.mjs"] && existsSync(join(dir, ".deployed-amber")) && !existsSync(join(dir, ".deployed-blue")) && !existsSync(join(dir, ".deployed-green")),
+  },
   combo: {
     prompt: "Three things in this app: (1) rename the function `add` in src/math.ts to `sum` everywhere; (2) `npm test` fails, fix the bug in the source without changing the tests; (3) finally tell me in one line the retry limit and timeout and the file that defines them.",
     verify: (dir, answer) => {
@@ -260,37 +266,76 @@ interface Run {
   session?: "A" | "B";
 }
 
+interface RecallCall {
+  query: string;
+  words: number;
+  question: boolean;
+  judged: boolean;
+  dropped: number;
+  ids: string[];
+  neededReturned: boolean;
+}
+
 interface SessionRow extends Run, Score {
   id: string;
   ok: boolean;
   infra: boolean;
   exit: number | null;
   seconds: number;
+  recall?: { neededId: string; calls: RecallCall[]; neededReturned: boolean; wrongNotes: number };
 }
 
 const conditions = (values.conditions ?? (values.tasks === "learn" ? "on" : "off,on")).split(",").map((c) => c.trim()).filter(Boolean);
 const taskNames = values.tasks!.split(",").map((t) => t.trim()).filter((t) => TASKS[t]);
 const reps = Number(values.reps);
 if (taskNames.includes("learn") && (taskNames.length !== 1 || !conditions.length || conditions.some((c) => !["off", "on"].includes(c)))) throw new Error("learn runs alone with off/on conditions");
-if (reps === 0) {
-  console.log(`No runs requested: tasks ${taskNames.join(",")} · conditions ${conditions.join(",")}`);
-  process.exit(0);
-}
 const scratch = mkdtempSync(join(tmpdir(), "agentbench-"));
 /** Session files stay (local, never committed) so the next experiment can study where turns went. */
 const kept = join(HOME, "state", "agentbench", new Date().toISOString().replace(/[:.]/g, "-"));
 
 /** One Brain home per condition: the real notes, projects and telemetry, nothing shared. */
 const homes = new Map<string, string>();
+const neededIds = new Map<string, string>();
+if (taskNames.includes("recallq")) {
+  assert.equal(taskNames.length, 1, "recallq runs alone with fresh per-run homes");
+  assert(conditions.every(c => c === "on" || c.startsWith("on+")), "recallq requires Brain-enabled conditions");
+  assert(!/staging|production/i.test(Object.values(FIXTURE).join("\n")), "fixture must not disclose environment mapping");
+}
 for (const condition of conditions) {
   if (condition === "off") continue;
   const home = join(scratch, `home-${condition.replace(/[^a-z0-9]+/gi, "_")}`);
   mkdirSync(join(home, "state"), { recursive: true });
-  for (const path of ["notes", "projects.json"]) if (existsSync(join(HOME, path))) cpSync(join(HOME, path), join(home, path), { recursive: true });
-  if (existsSync(join(HOME, "state", "telemetry.jsonl"))) cpSync(join(HOME, "state", "telemetry.jsonl"), join(home, "state", "telemetry.jsonl"));
-  // What only memory knows (the deploy task): the same note a previous session would have saved.
-  createNote(home, { project: "benchapp", kind: "fact", text: "benchapp deploy targets: staging is amber, production is blue (green is retired)\nRun: node scripts/deploy.mjs --target amber" });
+  if (taskNames.includes("recallq")) {
+    const project = { id: "benchapp-recallq", tags: [], root: null };
+    const needed = createNote(home, { project: project.id, kind: "fact", text: "Environment routing: staging is amber, production is blue; green is retired.\nRun: node scripts/deploy.mjs --target amber" });
+    neededIds.set(condition, needed.id);
+    for (const detail of [
+      "release receipts belong in the incident archive",
+      "the release owner reviews the smoke report",
+      "keep the cart dashboard open during rollout",
+      "record the release timestamp in the team log",
+      "monitor request latency after rollout",
+      "keep the previous build receipt for rollback",
+      "notify the support channel after completion",
+      "attach the checkout smoke result to the ticket",
+    ]) createNote(home, { project: project.id, kind: "procedure", text: `Deploy this app to staging: ${detail}.` });
+    const card = renderCard(home, loadNotes(home).notes, project, { tools: true, prompt: TASKS.recallq!.prompt });
+    assert.equal((card.match(/\(n-[a-f0-9]+\)/g) ?? []).length, 5, "preflight must show five decoys");
+    assert(!card.includes(needed.id) && !card.includes("amber"), "needed fact must be absent from start card");
+    mkdirSync(kept, { recursive: true });
+    writeFileSync(join(kept, `preflight-${condition}.txt`), card + "\n");
+    console.log(`recallq preflight ${condition}: 9 notes, 5 card decoys, needed ${needed.id} excluded; fixture has no environment mapping`);
+  } else {
+    for (const path of ["notes", "projects.json"]) if (existsSync(join(HOME, path))) cpSync(join(HOME, path), join(home, path), { recursive: true });
+    if (existsSync(join(HOME, "state", "telemetry.jsonl"))) cpSync(join(HOME, "state", "telemetry.jsonl"), join(home, "state", "telemetry.jsonl"));
+    createNote(home, { project: "benchapp", kind: "fact", text: "benchapp deploy targets: staging is amber, production is blue (green is retired)\nRun: node scripts/deploy.mjs --target amber" });
+  }
   homes.set(condition, home);
+}
+if (reps === 0) {
+  rmSync(scratch, { recursive: true, force: true });
+  console.log(`No runs requested: tasks ${taskNames.join(",")} · conditions ${conditions.join(",")}`);
+  process.exit(0);
 }
 
 function runOne(run: Run, pairHome?: string): Promise<SessionRow> {
@@ -303,11 +348,15 @@ function runOne(run: Run, pairHome?: string): Promise<SessionRow> {
   }
   const sessions = join(kept, id);
   mkdirSync(sessions, { recursive: true });
+  if (run.task === "recallq") {
+    pairHome = join(sessions, "brain-home");
+    cpSync(homes.get(run.condition)!, pairHome, { recursive: true });
+  }
   const [mode, ...parts] = run.condition.split("+");
   const experiments = parts.filter((part) => !part.startsWith("@"));
   const presets = parts.filter((part) => part.startsWith("@")).map((part) => part.slice(1));
   // Fresh empty-directory projects must not inherit another repetition's working state or notes.
-  const project = TASKS[run.task]!.empty ? id : run.task === "learn" ? "benchapp-learn" : "benchapp";
+  const project = TASKS[run.task]!.empty ? id : run.task === "learn" ? "benchapp-learn" : run.task === "recallq" ? "benchapp-recallq" : "benchapp";
   const env: NodeJS.ProcessEnv = { ...process.env, BRAIN: mode === "off" ? "off" : "on", BRAIN_PROJECT: project, BRAIN_EXPERIMENT: experiments.join(",") };
   const runner = join(sessions, "host-runner.mjs");
   const receipt = join(sessions, "test-passed.txt");
@@ -348,7 +397,19 @@ function runOne(run: Run, pairHome?: string): Promise<SessionRow> {
       const infra = code !== 0 && /ERR_TLS|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed|socket hang up|\b429\b|\b5\d\d\b|rate limit|quota/i.test(out.slice(-2000));
       const ok = code === 0 && TASKS[run.task]!.verify(ws, answer) && (run.task !== "learn" || (existsSync(receipt) && readFileSync(runner, "utf8") === LEARN_RUNNER));
       writeFileSync(join(sessions, "output.txt"), out);
-      const row = { ...run, id, ok, infra, exit: code, seconds: Math.round((Date.now() - started) / 1000), ...s, answer: answer.slice(0, 300) };
+      const row: SessionRow = { ...run, id, ok, infra, exit: code, seconds: Math.round((Date.now() - started) / 1000), ...s, answer: answer.slice(0, 300) };
+      if (run.task === "recallq") {
+        const neededId = neededIds.get(run.condition)!;
+        const path = join(pairHome!, "state", "telemetry.jsonl");
+        const uses: { kind: string; query?: string; judged?: boolean; dropped?: number; ids?: string[] }[] = existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+        const calls = uses.filter(use => use.kind === "recall").map(use => {
+          const query = use.query ?? "";
+          const ids = use.ids ?? [];
+          return { query, words: query.trim().split(/\s+/).filter(Boolean).length, question: query.trimEnd().endsWith("?"), judged: use.judged === true, dropped: use.dropped ?? 0, ids, neededReturned: ids.includes(neededId) };
+        });
+        row.recall = { neededId, calls, neededReturned: calls.some(call => call.neededReturned), wrongNotes: calls.reduce((sum, call) => sum + call.ids.filter(id => id !== neededId).length, 0) };
+        writeFileSync(join(sessions, "recall.json"), JSON.stringify(row.recall, null, 2) + "\n");
+      }
       console.log(`${infra ? "INFRA" : ok ? "PASS" : "FAIL"} ${id} ${row.seconds}s turns=${s.turns} tokens=${s.input + s.cacheRead + s.cacheWrite + s.output} $${s.cost.toFixed(3)}`);
       done(row);
     });
@@ -436,6 +497,17 @@ for (const condition of conditions) {
   const vs = best ? `${now.cost < best.cost && now.pass === now.runs ? "BEAT" : "not beaten"} (${best.cost.toFixed(3)}, ${Math.round(best.tokens)} tokens)` : "first run";
   const rel = condition === conditions[0] ? "control" : `${pct(now.tokens, control.tokens)}, ${pct(now.cost, control.cost)}`;
   console.log(`${condition.padEnd(20)} ${`${now.pass}/${now.runs}`.padStart(4)}  ${now.cost.toFixed(3).padStart(6)}  ${now.turns.toFixed(1).padStart(6)}  ${Math.round(now.tokens).toString().padStart(11)}  ${Math.round(now.uncached).toString().padStart(9)}  ${Math.round(now.output).toString().padStart(7)}  ${Math.round(now.toolResult).toString().padStart(12)}   ${rel.padEnd(22)}  ${vs}`);
+}
+if (taskNames.includes("recallq")) {
+  const metrics = conditions.map(condition => {
+    const rs = rows.filter(row => row.condition === condition && !row.infra);
+    const calls = rs.flatMap(row => row.recall?.calls ?? []);
+    return { condition, ...summarize(rs as unknown as Row[]), recallCalls: calls.length / (rs.length || 1), questions: calls.filter(call => call.question).length / (calls.length || 1), needed: rs.filter(row => row.recall?.neededReturned).length / (rs.length || 1), wrongNotes: rs.reduce((sum, row) => sum + (row.recall?.wrongNotes ?? 0), 0) };
+  });
+  console.log("\nrecallq: condition | pass | $/run | tokens/run | turns | recalls/run | queries ending ? | needed returned/run | wrong-note returns (total)");
+  for (const r of metrics) console.log(`${r.condition} | ${r.pass}/${r.runs} | ${r.cost.toFixed(4)} | ${Math.round(r.tokens)} | ${r.turns.toFixed(2)} | ${r.recallCalls.toFixed(2)} | ${(100 * r.questions).toFixed(1)}% | ${(100 * r.needed).toFixed(1)}% | ${r.wrongNotes}`);
+  // v5-question rejected: a "phrase one question" tool description left queries unchanged (0% ended
+  // with "?"), needed note returned 8/8 in both arms, +20% tokens, +4% cost.
 }
 if (taskNames.includes("learn")) {
   const pairs = rows.filter((r): r is Awaited<ReturnType<typeof runLearnPair>> => "b" in r && !r.infra);
