@@ -2,7 +2,7 @@
  * Agent benchmark: the same small coding tasks run by headless OMP agents with the Brain off, on,
  * or on with experiments (BRAIN_EXPERIMENT), scored from the agents' own session files.
  *
- *   node scripts/agentbench.ts [--conditions off,on] [--tasks rename,fix,find] [--reps 2]
+ *   node scripts/agentbench.ts [--conditions off,on] [--tasks rename,fix,find,scaffold] [--reps 2]
  *                              [--concurrency 4] [--model openai-codex/gpt-6-astra] [--label text]
  *
  * A condition is `off`, `on`, or `on+<experiment>[+<experiment>]`; a `@<preset>` part adds an OMP
@@ -21,7 +21,7 @@ import { execFileSync } from "node:child_process";
 import { createNote } from "../src/notes.ts";
 
 const PACKAGE = resolve(import.meta.dirname, "..");
-/** Bump when the fixture or tasks change: results are only compared within one version. */
+/** Bump when existing fixtures/tasks change; additive tasks already have a distinct taskSet. */
 const FIXTURE_VERSION = 3;
 
 /** Host settings overlays under test (keys and units: pi-coding-agent src/tools/settings.ts). */
@@ -75,10 +75,30 @@ const testsPass = (dir: string): boolean => {
 
 interface Task {
   prompt: string;
+  empty?: boolean;
   verify(dir: string, answer: string): boolean;
 }
 
 const TASKS: Record<string, Task> = {
+  scaffold: {
+    empty: true,
+    prompt: "Create a small Node TypeScript CLI named wordcount in this empty directory. Running `node bin/wordcount.mjs <file>` must print just the number of whitespace-separated words in that UTF-8 file (zero for empty/whitespace-only input). Include a test at test/wordcount.test.ts and a non-watch `npm test` script, then run it and demonstrate the CLI. Keep it small; stop once it works.",
+    verify: (dir) => {
+      try {
+        if (!existsSync(join(dir, "test/wordcount.test.ts"))) return false;
+        execFileSync(process.platform === "win32" ? "cmd.exe" : "npm", process.platform === "win32" ? ["/d", "/s", "/c", "npm test"] : ["test"], { cwd: dir, stdio: "ignore", timeout: 60_000 });
+        const input = join(dir, ".agentbench-wordcount.txt");
+        for (const [text, expected] of [[" hello\tworld\n café  ", "3"], [" \t\n", "0"]] as const) {
+          writeFileSync(input, text);
+          const actual = execFileSync(process.execPath, ["bin/wordcount.mjs", input], { cwd: dir, encoding: "utf8", timeout: 10_000 });
+          if (actual.trim() !== expected) return false;
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  },
   rename: {
     prompt: "Rename the function `add` in src/math.ts to `sum`, and update every place that uses it. Keep behaviour unchanged.",
     verify: (dir) => {
@@ -205,7 +225,8 @@ for (const condition of conditions) {
 function runOne(run: Run): Promise<Record<string, unknown>> {
   const id = `${run.task}-${run.condition.replace(/[^a-z0-9]+/gi, "_")}-${run.rep}`;
   const ws = join(scratch, "ws", id);
-  for (const [path, text] of Object.entries(FIXTURE)) {
+  mkdirSync(ws, { recursive: true });
+  for (const [path, text] of Object.entries(TASKS[run.task]!.empty ? {} : FIXTURE)) {
     mkdirSync(join(ws, path, ".."), { recursive: true });
     writeFileSync(join(ws, path), text);
   }
@@ -214,14 +235,25 @@ function runOne(run: Run): Promise<Record<string, unknown>> {
   const [mode, ...parts] = run.condition.split("+");
   const experiments = parts.filter((part) => !part.startsWith("@"));
   const presets = parts.filter((part) => part.startsWith("@")).map((part) => part.slice(1));
-  const env: NodeJS.ProcessEnv = { ...process.env, BRAIN_PROJECT: "benchapp", BRAIN_EXPERIMENT: experiments.join(",") };
+  // Fresh scaffold projects must not inherit another repetition's working state or notes.
+  const project = run.task === "scaffold" ? id : "benchapp";
+  const env: NodeJS.ProcessEnv = { ...process.env, BRAIN_PROJECT: project, BRAIN_EXPERIMENT: experiments.join(",") };
   if (presets.length) {
     const overlay = join(scratch, `settings-${id}.yml`);
     writeFileSync(overlay, presets.map((name) => SETTINGS[name] ?? "").join(""));
     env.PI_CONFIG_FILES = overlay;
   }
   if (mode === "off") env.BRAIN = "off";
-  else env.SECOND_BRAIN_HOME = homes.get(run.condition)!;
+  else {
+    env.SECOND_BRAIN_HOME = homes.get(run.condition)!;
+    if (run.task === "scaffold") {
+      const path = join(env.SECOND_BRAIN_HOME, "projects.json");
+      const registry = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+      registry.projects ??= {};
+      registry.projects[project] = { tags: ["node", "typescript"] };
+      writeFileSync(path, JSON.stringify(registry, null, 2) + "\n");
+    }
+  }
   const args = ["-p", "--model", values.model!, "--thinking", values.thinking!, "--cwd", ws, "--session-dir", sessions, TASKS[run.task]!.prompt];
   const started = Date.now();
   return new Promise((done) => {

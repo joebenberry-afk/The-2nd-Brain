@@ -271,7 +271,7 @@ const INLINE_FLAG: Record<string, RegExp> = {
  */
 function scratchPath(arg: string): boolean {
   const path = arg.replace(/^--?[\w-]+=/, "").replace(/^['"]|['"]$/g, "").replace(/\\/g, "/");
-  if (/^(?:\/tmp|\/var\/tmp|%TEMP%|%TMP%|\$TMPDIR|\$\{TMPDIR\})(?:\/|$)/i.test(path)) return true;
+  if (/^(?:\/tmp|\/var\/tmp|%TEMP%|%TMP%|\$\{?(?:TMPDIR|TEMP|TMP)\}?|\$env:TE?MP)(?:\/|$)/i.test(path)) return true;
   if (/(?:^|\/)AppData\/Local\/Temp(?:\/|$)/i.test(path)) return true;
   return /^(?:\.\/)?(?:tmp|temp|cache|\.cache)\//i.test(path);
 }
@@ -330,7 +330,7 @@ const CODE_TOOL = /python|notebook|repl|jupyter|^js$|javascript|eval/i;
 /** A host's exit-status wrapper says that a command failed, never why. */
 const EXIT_WRAPPER = /^(?:command|process)? ?exited with (?:code|status) -?\d+\.?$|^exit (?:code|status):? -?\d+$/i;
 
-/** Error-like diagnostic, not an echoed source line; cut only at a word boundary. */
+/** Error-like diagnostic, not an echoed source line; prefer whole words without losing specificity. */
 export function errorSignature(error: string, max = 120): string {
   const lines = error.replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).filter((l) => l.trim());
   const banner = /^(traceback \(most recent call last\):|during handling of the above exception|the above exception was the direct cause|[=_*#~-]{3,}.*[=_*#~-]{3,}$|[=_*#~-]{5,}$)/i;
@@ -350,7 +350,8 @@ export function errorSignature(error: string, max = 120): string {
 function signatureCut(text: string, max: number): string {
   if (text.length <= max) return text;
   const cut = text.slice(0, max);
-  return (/\s/.test(text[max] ?? "") ? cut : cut.replace(/\s+\S*$/, "")).trimEnd();
+  const whole = /\s/.test(text[max] ?? "") ? cut : cut.replace(/\s+\S*$/, "");
+  return (/\s/.test(whole.trim()) ? whole : cut).trimEnd();
 }
 
 /** A private path in any event field must never become a public proposal. */
@@ -602,6 +603,7 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
         let paired = false;
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
           const fixed = events[j];
+          if (fixed?.ok === true && /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i.test(fixed.tool)) break;
           if (consumed.has(`events:${fileName}#${starts[j] ?? j}`) || !fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command || touchesPrivate(fixed)) continue;
           if (normalizePath(fixed.cwd) !== normalizePath(failed.cwd) || ephemeralCommand(fixed.command)) continue;
           if (fixed.command === failed.command || !keepsCommand(failed.command, fixed.command)) continue;
@@ -733,6 +735,7 @@ export function listProposals(home: string): Proposal[] {
  * Accept a proposal: create a note, delete the inbox file, return the note.
  */
 export function acceptProposal(home: string, id: string): Note {
+  if (!/^p-[a-f0-9]{10}$/.test(id) || id.length !== 12) throw new CaptureError(`invalid proposal id ${id}`);
   const inboxDir = join(home, "state", "inbox");
   const inboxFile = join(inboxDir, `${id}.json`);
 
@@ -774,6 +777,7 @@ export function acceptProposal(home: string, id: string): Note {
  * Reject a proposal: remember headline and errors in rejected.json, delete inbox file.
  */
 export function rejectProposal(home: string, id: string): void {
+  if (!/^p-[a-f0-9]{10}$/.test(id) || id.length !== 12) throw new CaptureError(`invalid proposal id ${id}`);
   const inboxDir = join(home, "state", "inbox");
   const inboxFile = join(inboxDir, `${id}.json`);
 

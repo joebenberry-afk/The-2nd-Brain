@@ -60,6 +60,30 @@ function pairRepos(): { bare: string; a: string; b: string } {
 }
 
 describe("sync", () => {
+  it("refuses credential share tags without moving or changing the note", () => {
+    const home = tmp();
+    const note = createNote(home, { text: "Safe note", project: "global" });
+    const before = readFileSync(note.path, "utf8");
+    expect(() => shareNote(home, note.id, "ghp_" + "x".repeat(30))).toThrow(/tag.*credential/i);
+    expect(readFileSync(note.path, "utf8")).toBe(before);
+  });
+
+  it.each(["", "brain-home"])("refuses private-note history before pushing from %s", (subdir) => {
+    const { a, bare } = pairRepos();
+    const home = join(a, subdir);
+    const remoteHead = gitCmd(bare, "rev-parse", "refs/heads/main");
+    const privateDir = join(home, "notes", "demo", "private");
+    mkdirSync(privateDir, { recursive: true });
+    writeFileSync(join(privateDir, "local.md"), "local-only content");
+    gitCmd(a, "add", "-f", ".");
+    gitCmd(a, "commit", "-m", "manual private commit");
+    gitCmd(a, "rm", "--", (subdir ? subdir + "/" : "") + "notes/demo/private/local.md");
+    gitCmd(a, "commit", "-m", "remove private file from tip");
+    mkdirSync(home, { recursive: true });
+    expect(() => sync(home)).toThrow(/refus.*push.*notes\/demo\/private\/local\.md/i);
+    expect(gitCmd(bare, "rev-parse", "refs/heads/main")).toBe(remoteHead);
+  });
+
   it("refuses to push after an autostash conflict outside a nested Brain home", () => {
     const { a, b, bare } = pairRepos();
     writeFileSync(join(a, "outside.txt"), "original\n");

@@ -7,6 +7,7 @@ import { draftKit, findKit, KIT_BUDGET, kitsDir, kitsFor, loadKits, KitError } f
 import { createNote, loadNotes } from "../src/notes.ts";
 
 import { estimateTokens } from "../src/util.ts";
+import { answerWithHits, FULL_NOTE_TOKENS } from "../src/search.ts";
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-kits-"));
 
 describe("kits", () => {
@@ -370,4 +371,17 @@ describe("complete kit budget", () => {
     expect(() => draftKit(home, "metadata", "demo".repeat(1000), [], ["node"])).toThrow(KitError);
     expect(existsSync(join(home, "kits", "metadata", "SKILL.md"))).toBe(false);
   });
+});
+
+it("explicit kit recall returns frontmatter-free instructions within the full-read budget", () => {
+  const home = tmp();
+  const path = join(home, "kits", "repair", "SKILL.md");
+  mkdirSync(join(home, "kits", "repair"), { recursive: true });
+  writeFileSync(path, "---\nname: Repair\ndescription: Repair workflow\n---\n# Repair\nRun the diagnostic before editing.\n" + "Keep checking the actual result. ".repeat(300) + "END-OF-LONG-KIT");
+  const result = answerWithHits([], "kit Repair", { home, project: null });
+  expect(result.hits).toBe(1);
+  expect(result.text).toContain(path + "\n# Repair\nRun the diagnostic before editing.");
+  expect(result.text).not.toContain("description:");
+  expect(result.text).not.toContain("END-OF-LONG-KIT");
+  expect(estimateTokens(result.text)).toBeLessThanOrEqual(FULL_NOTE_TOKENS);
 });

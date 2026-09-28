@@ -340,7 +340,7 @@ describe("note privacy and recall kits", () => {
     expect(readFileSync(updated.path, "utf8")).not.toContain(secret);
   });
 
-  it("recalls kits by prefixed or exact name with path and one-line description", () => {
+  it("recalls kits by prefixed or exact name with their instructions", () => {
     const { home, cwd } = setup();
     const path = join(home, "kits", "node-cli", "SKILL.md");
     mkdirSync(join(home, "kits", "node-cli"), { recursive: true });
@@ -349,8 +349,8 @@ describe("note privacy and recall kits", () => {
       const result = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "recall", query, "--home", home, "--project", "demo"], { cwd, encoding: "utf8" });
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(path);
-      expect(result.stdout).toContain("Build a command line app. Use native modules.");
-      expect(result.stdout.trim().split("\n").length).toBeLessThanOrEqual(3);
+      expect(result.stdout).toContain("# Scaffold");
+      expect(result.stdout).not.toContain("description:");
     }
   });
 });
@@ -436,7 +436,7 @@ describe("host-independent memory", () => {
     expect(result.out.split("\n").filter((line) => line.startsWith("Use ")).length).toBe(4);
   });
 
-  it("Claude success completes capture and checkpoints edits, failure and last ask without replacing the plan", async () => {
+  it("Claude success after edits avoids a command-fix proposal and checkpoints without replacing the plan", async () => {
     const { home, cwd, io } = setup();
     const transcript = join(home, "transcript.jsonl");
     writeFileSync(transcript, JSON.stringify({ type: "user", message: { content: "Please repair startup" } }) + "\n" + JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "ignore output" }] } }) + "\n");
@@ -448,7 +448,7 @@ describe("host-independent memory", () => {
     expect(scanEvents(home, [])).toEqual([]);
     for (const tool_name of ["Edit", "Write", "MultiEdit"]) await send({ hook_event_name: "PostToolUse", tool_name, tool_input: { file_path: join(cwd, tool_name + ".ts") } });
     await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm ci && npm test" }, tool_response: { stdout: "passed" } });
-    expect(scanEvents(home, []).map((p) => [p.project, p.tested, p.errors])).toEqual([["demo", true, ["Error: dependency missing"]]]);
+    expect(scanEvents(home, [])).toEqual([]);
     await send({ hook_event_name: "PreCompact", trigger: "auto" });
     const auto = readWork(home, "demo")?.auto;
     expect(auto).toContain("Edit.ts");
@@ -480,4 +480,8 @@ describe("host-independent memory", () => {
     expect(readWork(home, "demo")).toEqual(before);
   });
 });
-
+it.each(["constructor", "toString"])("rejects inherited command %s with a usage error", async (command) => {
+  const home = tmp();
+  const result = await run([command], { env: { SECOND_BRAIN_HOME: home }, cwd: home });
+  expect(result).toEqual({ code: 1, out: "", err: `brain: unknown command ${command} (brain help)` });
+});

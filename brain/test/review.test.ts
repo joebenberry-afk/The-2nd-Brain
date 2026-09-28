@@ -1,10 +1,10 @@
 /** Regressions for the code-review findings on brain/src (each failed before its fix). */
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { errorSignature, findFix, scanCommits, scanEvents } from "../src/capture.ts";
+import { acceptProposal, rejectProposal, errorSignature, findFix, scanCommits, scanEvents } from "../src/capture.ts";
 import { convertV3 } from "../src/convert.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import secondBrain, { type HostLike } from "../src/omp.ts";
@@ -466,4 +466,25 @@ it("review displays each full scrubbed proposal body before acceptance", async (
   expect(text).toContain("Actual command: npm test -- --run");
   expect(text).toContain("Error: package unavailable");
   expect(text).not.toContain("SyntheticPassword");
+});
+
+describe("proposal id boundary", () => {
+  it.each(["accept", "reject"])("%s refuses an outside JSON file without mutation", async (command) => {
+    const home = tmp();
+    mkdirSync(join(home, "state", "inbox"), { recursive: true });
+    const victim = join(home, "victim.json");
+    const content = JSON.stringify({ text: "Untouched victim", project: "global", kind: "gotcha", errors: ["specific error"], evidence: [], tested: false, source: "capture" });
+    writeFileSync(victim, content);
+    const errors: string[] = [];
+    expect(await main([command, "../../victim"], { env: { SECOND_BRAIN_HOME: home }, cwd: home, out: () => {}, err: (s) => errors.push(s) })).toBe(1);
+    expect(errors.join("\n")).toContain("invalid proposal id");
+    expect(readFileSync(victim, "utf8")).toBe(content);
+    expect(loadNotes(home).notes).toEqual([]);
+    expect(existsSync(join(home, "rejected.json"))).toBe(false);
+  });
+  it.each(["p-123", "p-ABCDEFGHIJ", "../victim", "p-0123456789/other", "p-0123456789\n"])("rejects malformed id %j in the library", (id) => {
+    const home = tmp();
+    expect(() => acceptProposal(home, id)).toThrow("invalid proposal id");
+    expect(() => rejectProposal(home, id)).toThrow("invalid proposal id");
+  });
 });

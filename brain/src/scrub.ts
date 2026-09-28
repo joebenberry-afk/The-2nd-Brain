@@ -1,6 +1,6 @@
 /** Secret scrubbing for everything the Brain writes: notes, working state, captured events. */
 
-const CREDENTIAL_WORDS = new Set(["password", "passwd", "pwd", "passphrase", "secret", "credential", "credentials", "apikey"]);
+const CREDENTIAL_WORDS = new Set(["password", "passwd", "passphrase", "secret", "credential", "credentials", "apikey"]);
 const SUFFIX_WORDS = ["password", "passwd", "passphrase", "secret", "credentials"];
 const KEY_OWNERS = new Set(["api", "private", "access", "secret", "client", "auth", "signing", "encryption", "master"]);
 
@@ -28,6 +28,15 @@ function isCredential(name: string, value: string): boolean {
 /** 16+ letters, digits, "_" or "-" in a row, with both a letter and a digit: a generated value, not a word. */
 function tokenLike(value: string): boolean {
   return (value.match(/[A-Za-z0-9_-]{16,}/g) ?? []).some((run) => /\d/.test(run) && /[A-Za-z]/.test(run));
+}
+
+/** Colon prose is not an assignment; passwords remain protected even in sentences. */
+function credentialAssignment(name: string, value: string, sep: string, offset: number, text: string): boolean {
+  if (sep.includes(":")) {
+    if (/(?:^|[_.-])token$/i.test(name) && !tokenLike(value)) return false;
+    if (name === "secret" && /\w[^\S\r\n]+$/.test(text.slice(0, offset)) && !tokenLike(value)) return false;
+  }
+  return isCredential(name, value);
 }
 
 /**
@@ -77,7 +86,7 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
     return colon < 0 ? match : flag + (quote ?? "") + value.slice(0, colon + 1) + "***" + (quote ?? "");
   });
   // Explicit long credential flags only: -p commonly names a port.
-  result = result.replace(/((?:^|\s)--(?:password|token|api-key|secret|client-secret|auth)(?:\s+|=))(?:(['"])(?:\\.|(?!\2)[^\\\n])*\2|[^\s]+)/gi, "$1***");
+  result = result.replace(/((?:^|\s)--(?:[a-z0-9]+-)*(?:password|passwd|token|api-key|apikey|secret|auth|credentials?)(?:\s+|=))(?:(['"])(?:\\.|(?!\2)[^\\\n])*\2|[^\s]+)/gi, "$1***");
 
   // Windows: setx NAME value, [Environment]::SetEnvironmentVariable("NAME", "value", …)
   result = result.replace(/\b(setx\s+)(\S+)(\s+)("[^"]*"|\S+)/gi, (match, cmd: string, name: string, space: string, value: string) =>
@@ -88,12 +97,12 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   );
 
   // key = "quoted value": masked whole — spaces, the other quote and escaped quotes included
-  result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)(["'])((?:\\.|(?!\3)[^\\\n])*)\3/g, (match, name: string, sep: string, quote: string, value: string) =>
-    value !== "***" && isCredential(name, value) ? `${name}${sep}${quote}***${quote}` : match,
+  result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)(["'])((?:\\.|(?!\3)[^\\\n])*)\3/g, (match, name: string, sep: string, quote: string, value: string, offset: number, text: string) =>
+    value !== "***" && credentialAssignment(name, value, sep, offset, text) ? name + sep + quote + "***" + quote : match,
   );
   // key = value: up to whitespace, a comma, a semicolon or a closing brace (quotes inside included)
-  result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;}]+)/g, (match, name: string, sep: string, value: string) =>
-    !/^["']?\*\*\*["']?$/.test(value) && !value.startsWith("//") && isCredential(name, value) ? `${name}${sep}***` : match,
+  result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;}]+)/g, (match, name: string, sep: string, value: string, offset: number, text: string) =>
+    !/^["']?\*\*\*["']?$/.test(value) && !value.startsWith("//") && credentialAssignment(name, value, sep, offset, text) ? name + sep + "***" : match,
   );
 
   if (opts.longRuns === false) return { text: result, scrubbed: result !== original };

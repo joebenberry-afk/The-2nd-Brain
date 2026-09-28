@@ -659,7 +659,7 @@ describe("capture.acceptProposal", () => {
     mkdirSync(dir, { recursive: true });
 
     const prop: Proposal = {
-      id: "p-1",
+      id: "p-0123456789",
       at: "2026-09-27T10:00:00Z",
       project: "demo",
       kind: "gotcha",
@@ -670,20 +670,20 @@ describe("capture.acceptProposal", () => {
       evidence: ["events:file#0-1"],
     };
 
-    writeFileSync(join(dir, "p-1.json"), JSON.stringify(prop));
+    writeFileSync(join(dir, "p-0123456789.json"), JSON.stringify(prop));
 
-    const note = acceptProposal(home, "p-1");
+    const note = acceptProposal(home, "p-0123456789");
 
     expect(note.project).toBe("demo");
     expect(note.kind).toBe("gotcha");
     expect(note.source).toBe("capture");
     expect(note.errors).toContain("error pattern");
-    expect(!existsSync(join(dir, "p-1.json"))).toBe(true);
+    expect(!existsSync(join(dir, "p-0123456789.json"))).toBe(true);
   });
 
   it("throws for unknown proposal", () => {
     const home = tmp();
-    expect(() => acceptProposal(home, "p-999")).toThrow();
+    expect(() => acceptProposal(home, "p-9999999999")).toThrow("no proposal");
   });
 });
 
@@ -694,7 +694,7 @@ describe("capture.rejectProposal", () => {
     mkdirSync(dir, { recursive: true });
 
     const prop: Proposal = {
-      id: "p-1",
+      id: "p-0123456789",
       at: "2026-09-27T10:00:00Z",
       project: "demo",
       kind: "gotcha",
@@ -705,9 +705,9 @@ describe("capture.rejectProposal", () => {
       evidence: [],
     };
 
-    writeFileSync(join(dir, "p-1.json"), JSON.stringify(prop));
+    writeFileSync(join(dir, "p-0123456789.json"), JSON.stringify(prop));
 
-    rejectProposal(home, "p-1");
+    rejectProposal(home, "p-0123456789");
 
     const rejectedFile = join(home, "rejected.json"); // synced with the notes
     expect(existsSync(rejectedFile)).toBe(true);
@@ -719,7 +719,7 @@ describe("capture.rejectProposal", () => {
 
   it("throws for unknown proposal", () => {
     const home = tmp();
-    expect(() => rejectProposal(home, "p-999")).toThrow();
+    expect(() => rejectProposal(home, "p-9999999999")).toThrow("no proposal");
   });
 });
 
@@ -1248,6 +1248,12 @@ describe("capture batch five regressions", () => {
 
 describe("capture ignores ephemeral experiments", () => {
   it.each([
+    'python $TEMP/review.py',
+    'python $TMP/review.py',
+    'python ${TEMP}/review.py',
+    'python ${TMP}/review.py',
+    'python $env:TEMP/review.py',
+    'python $env:TMP/review.py',
     'C:/Python314/python.exe -B -c "print(1)"',
     'node -e "console.log(1)"',
     'bun --eval="console.log(1)"',
@@ -1287,4 +1293,40 @@ describe("capture ignores ephemeral experiments", () => {
     expect(scanEvents(home, []).map((p) => [p.tested, p.errors])).toEqual([[true, ["Error: dependency missing"]]]);
   });
 });
+describe("capture repair boundaries", () => {
+  it.each(["edit", "write", "apply_patch", "create", "replace", "notebook", "move", "rename", "delete"])("does not learn command fixes across a successful %s", (tool) => {
+    const home = tmp();
+    appendEvent(home, "repair", home, { tool: "bash", command: "pytest tests/test_x.py", ok: false, error: "Error: assertion mismatch" });
+    appendEvent(home, "repair", home, { tool, path: "tests/test_x.py", ok: true });
+    appendEvent(home, "repair", home, { tool: "bash", command: "pytest tests/test_x.py tests/test_y.py", ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+  });
 
+  it("keeps command repairs across reads and unsuccessful edits", () => {
+    const home = tmp();
+    appendEvent(home, "repair", home, { tool: "bash", command: "npm test", ok: false, error: "ERROR: Cannot find module" });
+    appendEvent(home, "repair", home, { tool: "read", path: "package.json", ok: true });
+    appendEvent(home, "repair", home, { tool: "edit", path: "package.json", ok: false });
+    appendEvent(home, "repair", home, { tool: "bash", command: "npm ci && npm test", ok: true });
+    expect(scanEvents(home, []).map((p) => p.errors)).toEqual([["ERROR: Cannot find module"]]);
+  });
+
+  it("retains a distinctive long pytest signature without suppressing unrelated failures", () => {
+    const home = tmp();
+    const error = "FAILED tests/test_x.py::test_" + "long_name_".repeat(12) + " - Failed: DID NOT RAISE";
+    appendEvent(home, "first", home, { tool: "bash", command: "pytest tests/test_x.py", ok: false, error });
+    appendEvent(home, "first", home, { tool: "bash", command: "pytest tests/test_x.py --strict", ok: true });
+    const proposals = scanEvents(home, []);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]!.errors).toEqual([error.slice(0, 60)]);
+    const note = acceptProposal(home, proposals[0]!.id);
+    expect(findFix([note], "unrelated failed operation", null)).toBeNull();
+    const other = tmp();
+    appendEvent(other, "first", other, { tool: "bash", command: "pytest tests/test_x.py", ok: false, error });
+    appendEvent(other, "first", other, { tool: "bash", command: "pytest tests/test_x.py --strict", ok: true });
+    rejectProposal(other, scanEvents(other, [])[0]!.id);
+    appendEvent(other, "second", other, { tool: "bash", command: "pytest tests/test_y.py", ok: false, error: error.replace("test_x", "test_y") });
+    appendEvent(other, "second", other, { tool: "bash", command: "pytest tests/test_y.py --strict", ok: true });
+    expect(scanEvents(other, [])).toHaveLength(1);
+  });
+});

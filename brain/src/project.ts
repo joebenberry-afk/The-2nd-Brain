@@ -14,6 +14,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
 import { slug, tagKey, tagList, writeAtomic } from "./util.ts";
+import { scrub } from "./scrub.ts";
 
 export interface Project {
   id: string;
@@ -107,6 +108,7 @@ export function loadProjects(home: string): Record<string, ProjectEntry> {
  * nothing, when projects.json exists but is not `{ "projects": { … } }`.
  */
 export function addProjectTag(home: string, id: string, tag: string): boolean {
+  if (scrub(tag).scrubbed || scrub(tagKey(tag)).scrubbed) throw new Error("tag contains a credential; choose a non-secret tag");
   const file = join(home, "projects.json");
   let data: { projects: Record<string, unknown> } = { projects: {} };
   if (existsSync(file)) {

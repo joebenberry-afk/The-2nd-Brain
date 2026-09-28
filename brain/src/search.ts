@@ -346,7 +346,7 @@ export function renderHit(hit: Hit, max = 240): string {
 
 /** Longest first answer: most questions are settled by the top hit, so it gets room to say it. */
 export const FIRST_HIT_CHARS = 600;
-/** A note read in full by id is cut to this many tokens. */
+/** A note or kit read explicitly is cut to this many tokens. */
 export const FULL_NOTE_TOKENS = 600;
 
 const NO_MATCH = "no match; note it once you learn it";
@@ -382,8 +382,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
   if (opts.home && id) {
     const kit = findKit(loadKits(opts.home), id.replace(/^kit\s+/i, ""));
     if (kit) {
-      const description = kit.description.replace(/\s+/g, " ").trim();
-      return { text: `${kit.path}\n${description}`, hits: 1 };
+      return { text: cutToTokens(`${kit.path}\n${kit.body}`, FULL_NOTE_TOKENS), hits: 1 };
     }
   }
   // Search summaries stay within the three-line budget; explicit id reads above retain history.

@@ -7,6 +7,7 @@ import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
 import { addProjectTag } from "./project.ts";
 import { mergeRejected } from "./capture.ts";
 import { nowIso, tagKey } from "./util.ts";
+import { scrub } from "./scrub.ts";
 
 export class SyncError extends Error {}
 
@@ -140,6 +141,11 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
 
   // Push if not disabled
   if (opts?.push !== false) {
+    // Inspect all outgoing history, not only HEAD: deleting a private file does not unpublish it.
+    const history = git(home, "log", "--full-history", "-m", "--format=", "--name-only", "--no-renames", "-z", "@{u}..HEAD", "--", ":(glob,icase)notes/*/private/**");
+    if (history.status !== 0) throw new SyncError("refusing to push: cannot inspect outgoing private-note history");
+    const privateFiles = [...new Set(history.stdout.split("\0").map((file) => file.trim()).filter(Boolean))];
+    if (privateFiles.length) throw new SyncError("refusing to push private-note history: " + privateFiles.join(", ") + "; remove these files from local commits before syncing");
     const slash = upstream.indexOf("/");
     const remote = slash > 0 ? upstream.slice(0, slash) : "";
     const branch = slash > 0 ? upstream.slice(slash + 1) : "";
@@ -264,6 +270,7 @@ export function shareNote(home: string, id: string, tag: string): Note & { tagge
   }
 
   const normalizedTag = tagKey(tag);
+  if (scrub(tag).scrubbed || scrub(normalizedTag).scrubbed) throw new SyncError("tag contains a credential; choose a non-secret tag");
   if (!normalizedTag) throw new SyncError("a tag is required");
   // Tag the source project first: if projects.json cannot be edited, nothing has moved yet.
   const taggedProject = note.project !== GLOBAL && addProjectTag(home, note.project, normalizedTag) ? note.project : undefined;

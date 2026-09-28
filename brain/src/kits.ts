@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { estimateTokens, slug, tagList, writeAtomic } from "./util.ts";
 import { parseFrontmatter, type Note, isActive } from "./notes.ts";
 import type { Project } from "./project.ts";
+import { scrub } from "./scrub.ts";
 
 export class KitError extends Error {}
 
@@ -86,6 +87,9 @@ export function draftKit(
   notes: Note[],
   tags?: string[],
 ): Kit {
+  if (tags?.some((tag) => scrub(tag).scrubbed) || tagList(tags ?? []).some((tag) => scrub(tag).scrubbed)) {
+    throw new KitError("tag contains a credential; choose a non-secret tag");
+  }
   const slugName = slug(name);
   const kitPath = join(kitsDir(home), slugName);
   const skillPath = join(kitPath, "SKILL.md");

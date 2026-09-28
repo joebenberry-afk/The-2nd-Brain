@@ -16,6 +16,24 @@ const project = { id: "demo", tags: [], root: null };
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 describe("secrets never reach notes or working state", () => {
+  it("masks compound double-dash credential flags", () => {
+    for (const flag of ["db-password", "db-passwd", "api-token", "client-secret", "service-api-key", "service-apikey", "service-auth", "service-credential", "service-credentials"]) {
+      for (const sep of [" ", "="]) {
+        expect(scrub(`dbcli --${flag}${sep}hunter2`).text).toBe(`dbcli --${flag}${sep}***`);
+      }
+    }
+  });
+
+  it("preserves prose colon keys but masks credential assignments", () => {
+    for (const text of ["SyntaxError: Unexpected token: identifier", "pytest fails from pwd: C:/repo/tests", "The secret: never commit .env", "csrf_token: generated per request"]) {
+      expect(scrub(text)).toEqual({ text, scrubbed: false });
+    }
+    for (const text of ["token: ghp_abcdefghijklmnopqrstuvwxyz0123456789", "token: abcdefghijklmnop1234", "password: hunter2secret", "API_KEY=hunter2secret", "Authorization: Bearer hunter2secret"]) {
+      expect(scrub(text).text).toContain("***");
+      expect(scrub(text).text).not.toContain("hunter2secret");
+    }
+  });
+
   it("masks credentials in note bodies and error patterns but keeps commit SHAs", () => {
     const home = tmp();
     const note = createNote(home, {

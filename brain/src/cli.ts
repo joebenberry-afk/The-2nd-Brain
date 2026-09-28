@@ -556,7 +556,7 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
   }
   // A long-lived stdio server: the MCP client owns stdout, so nothing else may print there.
   if (command === "mcp") return runMcp({ home: opts.home, env: opts.project ? { ...io.env, BRAIN_PROJECT: opts.project } : io.env });
-  const run = COMMANDS[command];
+  const run = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : undefined;
   if (!run) {
     io.err(`brain: unknown command ${command} (brain help)`);
     return 1;
