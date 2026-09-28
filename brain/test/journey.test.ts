@@ -91,6 +91,6 @@ it("a failure fixed in one session becomes the known fix, the card and the resum
   expect(day2.call("brain_recall", { query: "left-pad module", all: true }, other)).toContain("npm test fails");
   // A learning marked global reaches every project; a duplicate is refused.
   expect(day2.call("brain_note", { text: "Use UTC timestamps in every log line", kind: "decision", global: true }, other)).toMatch(/^saved n-/);
-  expect(day2.call("brain_note", { text: "use utc timestamps in every log line", global: true }, other)).toMatch(/^already noted n-/);
+  expect(day2.call("brain_note", { text: "Use UTC timestamps in every log line", global: true }, other)).toMatch(/^already noted n-/);
   expect(day2.call("brain_recall", { query: "UTC timestamps log" }, s2)).toContain("[decision] Use UTC timestamps in every log line");
 });

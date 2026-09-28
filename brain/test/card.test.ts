@@ -45,10 +45,34 @@ describe("card", () => {
       createNote(home, { text: "tested gotcha about builds", project: "demo", kind: "gotcha", tested: true }),
       createNote(home, { text: "token refresh bug lives in auth middleware", project: "demo", kind: "fact" }),
     ];
-    const plain = rankForCard(notes, project, "", NOW).map((n) => n.body);
+    const plain = rankForCard(notes, project, "", NOW, home).map((n) => n.body);
     expect(plain[0]).toBe("tested gotcha about builds");
-    const focused = rankForCard(notes, project, "fixing token refresh in the auth middleware", NOW).map((n) => n.body);
+    const focused = rankForCard(notes, project, "fixing token refresh in the auth middleware", NOW, home).map((n) => n.body);
     expect(focused[0]).toBe("token refresh bug lives in auth middleware");
+  });
+
+  it("demotes missing-file evidence without hiding notes or treating Brain-home evidence as missing", () => {
+    const home = tmp();
+    const root = tmp();
+    writeFileSync(join(home, "current.md"), "evidence");
+    writeFileSync(join(root, "source.ts"), "evidence");
+    const stale = createNote(home, { text: "Missing gotcha", kind: "gotcha", project: "demo", evidence: ["missing.ts"] });
+    const current = createNote(home, { text: "Current fact", kind: "fact", project: "demo", evidence: ["current.md"] });
+    const source = createNote(home, { text: "Source fact", kind: "fact", project: "demo", evidence: ["source.ts"] });
+    const card = renderCard(home, [stale, current, source], { ...project, root }, { now: NOW });
+    expect(card).toContain(stale.id);
+    expect(card).toContain(current.id);
+    expect(card).toContain(source.id);
+    expect(card.indexOf(current.id)).toBeLessThan(card.indexOf(stale.id));
+    expect(card.indexOf(source.id)).toBeLessThan(card.indexOf(stale.id));
+  });
+
+  it("does not amplify stale work relevance when recall moves a weaker live hit first", () => {
+    const home = tmp();
+    const stale = createNote(home, { text: "Authentication cookie token refresh middleware", project: "demo", kind: "fact", evidence: ["missing.ts"] });
+    const live = createNote(home, { text: "Authentication configuration", project: "demo", kind: "gotcha", tested: true });
+    const ranked = rankForCard([stale, live], project, stale.body, NOW, home);
+    expect(ranked.map(note => note.id)).toEqual([live.id, stale.id]);
   });
 
   it("leads with where we left off, stays within budget, and names the tools", () => {
@@ -167,6 +191,23 @@ describe("card completeness and scope", () => {
     expect(card).toContain(relevant.id);
   });
 
+  it("shares only bounded parent warnings with children and ranks notes using them", () => {
+    const home = tmp();
+    writeWork(home, "demo", "Goal: compiler bundler release. Next: ship compiler. Watch out: authentication cookie expiration. Done: compiler compiled.");
+    writeAuto(home, "demo", { ask: "parent request", edited: ["parent.ts"] });
+    const unrelated = createNote(home, { text: "Compiler bundler release", project: "demo", kind: "gotcha", tested: true });
+    const warning = createNote(home, { text: "Authentication cookie expiration", project: "demo", kind: "fact" });
+    const card = renderCard(home, [unrelated, warning], project, { subagent: true, tools: true, now: NOW });
+    expect(card).toContain("Watch out: authentication cookie expiration");
+    expect(card).not.toMatch(/Goal:|Next:|Done:|parent request|parent.ts|Where we left off/);
+    expect(card.indexOf(warning.id)).toBeLessThan(card.indexOf(unrelated.id));
+    writeWork(home, "demo", "Watch out: " + "keep authentication isolated ".repeat(15));
+    const long = renderCard(home, [], project, { subagent: true, tools: true });
+    const line = long.split("\n").find(line => line.startsWith("Watch out:"))!;
+    expect(line).toContain("keep authentication isolated");
+    expect(estimateTokens(line)).toBeLessThanOrEqual(40);
+  });
+
   it("does not advertise unrelated MVP kits in an established foreign repository", () => {
     const home = tmp();
     const root = tmp();
@@ -192,6 +233,10 @@ describe("card completeness and scope", () => {
     const card = renderCard(home, notes, project, { tools: true });
     expect(card.split("\n").filter((line) => line.startsWith("- [note]"))).toHaveLength(4);
     expect(card).not.toContain("…");
+    expect(card.split("\n").at(-1)).toContain("brain_recall(");
+    expect(card.split("\n").at(-1)).toContain("brain_note(");
+    expect(card.split("\n").at(-1)).toContain("brain_state(");
+    expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
     for (const line of card.split("\n").filter((line) => line.startsWith("- [note]"))) {
       expect(notes.some((note) => line.includes(note.body))).toBe(true);
     }

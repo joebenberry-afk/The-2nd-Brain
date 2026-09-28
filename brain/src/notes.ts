@@ -8,8 +8,8 @@
  * The body's first line is the headline. Scope comes from the path, never from a field.
  * A note is active until it is retired; retired notes stay on disk as history.
  */
-import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve, win32 } from "node:path";
 import { scrub } from "./scrub.ts";
 import { nowIso, randomId, slug, tagList, writeAtomic } from "./util.ts";
 
@@ -304,7 +304,15 @@ export function noteDir(home: string, project: string, isPrivate: boolean): stri
   return isPrivate ? join(dir, "private") : dir;
 }
 
-function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Note[], errors: string[]): void {
+interface CachedNote {
+  signature: string;
+  note: Note;
+}
+
+const NOTE_CACHE = new Map<string, Map<string, CachedNote>>();
+const EVIDENCE_CACHE = new Map<string, boolean>();
+
+function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Note[], errors: string[], previous: Map<string, CachedNote> | undefined, current: Map<string, CachedNote>): void {
   let names: string[];
   try {
     names = readdirSync(dir).filter((n) => n.endsWith(".md")).sort();
@@ -314,17 +322,31 @@ function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Not
   for (const name of names) {
     const path = join(dir, name);
     try {
-      const note = parseNote(readFileSync(path, "utf8"), path, project, isPrivate);
-      if (`${note.id}.md` !== name) throw new NoteError(`id ${note.id} does not match file name`);
-      out.push(note);
+      // Directory mtimes miss in-place edits. Stat every file, including ctime for editors that
+      // preserve mtime; only changed files need reading and parsing.
+      const stat = statSync(path, { bigint: true });
+      const signature = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}:${stat.ino}`;
+      let cached = previous?.get(path);
+      if (cached?.signature !== signature) {
+        const note = parseNote(readFileSync(path, "utf8"), path, project, isPrivate);
+        if (`${note.id}.md` !== name) throw new NoteError(`id ${note.id} does not match file name`);
+        cached = { signature, note };
+      }
+      current.set(path, cached);
+      // Callers may edit returned notes before saving; those edits must not alter cached truth.
+      const note = cached.note;
+      out.push({ ...note, tags: [...note.tags], errors: [...note.errors], evidence: [...note.evidence] });
     } catch (error) {
       errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
 
-/** Every note under the home, sorted by id. Unreadable files are reported, never fatal. */
+/** Every note under the home, sorted by id; unreadable files are reported, never fatal. */
 export function loadNotes(home: string): { notes: Note[]; errors: string[] } {
+  home = resolve(home);
+  const previous = NOTE_CACHE.get(home);
+  const current = new Map<string, CachedNote>();
   const notes: Note[] = [];
   const errors: string[] = [];
   let projects: string[];
@@ -334,12 +356,16 @@ export function loadNotes(home: string): { notes: Note[]; errors: string[] } {
       .map((d) => d.name)
       .sort();
   } catch {
+    NOTE_CACHE.delete(home);
+    EVIDENCE_CACHE.clear();
     return { notes, errors };
   }
   for (const project of projects) {
-    readDirNotes(noteDir(home, project, false), project, false, notes, errors);
-    readDirNotes(noteDir(home, project, true), project, true, notes, errors);
+    readDirNotes(noteDir(home, project, false), project, false, notes, errors, previous, current);
+    readDirNotes(noteDir(home, project, true), project, true, notes, errors, previous, current);
   }
+  if (!previous || previous.size !== current.size || [...current].some(([path, cached]) => previous.get(path) !== cached)) EVIDENCE_CACHE.clear();
+  NOTE_CACHE.set(home, current);
   const seen = new Map<string, string>();
   const unique: Note[] = [];
   for (const note of notes) {
@@ -375,6 +401,8 @@ export function saveNote(home: string, note: Note): Note {
   if (!SAFE_ID.test(note.id) || note.id.includes("..")) throw new NoteError(`unsafe note id ${JSON.stringify(note.id)}`);
   if (note.project !== slug(note.project)) throw new NoteError(`not a project id: ${JSON.stringify(note.project)} (use ${slug(note.project)})`);
   const path = join(noteDir(home, note.project, note.private), `${note.id}.md`);
+  NOTE_CACHE.delete(resolve(home));
+  EVIDENCE_CACHE.clear();
   writeAtomic(path, formatNote(note));
   // On a case-insensitive filesystem (Windows, macOS) notes/MyProj and notes/myproj are one
   // folder: the "old" file is the one just written, so it must not be removed.
@@ -476,8 +504,8 @@ export function createNote(home: string, input: NewNote): Note {
 }
 
 /**
- * Noting a headline again with more to say upgrades the existing note: an explicit kind wins, tags,
- * errors and evidence are added, tested sticks. Null when there was nothing new.
+ * Upgrade metadata only, never the body: an explicit kind wins, tags, errors and evidence are
+ * added, tested sticks. Callers must reject different bodies first. Null when nothing changed.
  */
 export function upgradeNote(home: string, note: Note, input: Omit<NewNote, "text" | "project">): Note | null {
   checkErrors(input.errors ?? []);
@@ -525,4 +553,35 @@ export function findSameHeadline(notes: Note[], text: string, project: string, t
     return project !== GLOBAL && n.tags.some((t) => tags.includes(t));
   };
   return notes.find((n) => !n.retired && sees(n) && key(firstLine(n)) === wanted);
+}
+
+/** Whitespace is incidental; changed text must never be acknowledged as an identical write. */
+export function differentBody(same: Note, text: string): boolean {
+  const body = scrub(text.trim(), { longRuns: false }).text;
+  return body.replace(/\s+/g, " ").trim() !== same.body.replace(/\s+/g, " ").trim();
+}
+
+/** Missing file evidence is advisory, never grounds for hiding or retiring a note. */
+export function staleEvidence(note: Note, roots: string[]): boolean {
+  if (!note.evidence.length) return false;
+  const key = JSON.stringify([note.id, note.evidence, roots]);
+  const cached = EVIDENCE_CACHE.get(key);
+  if (cached !== undefined) return cached;
+  const paths: string[] = [];
+  for (const entry of note.evidence) {
+    // Old evidence often carries a line number, test selector or commit annotation. None is
+    // part of its filename. Other schemes (events:, commit:, URLs) are not filesystem evidence.
+    const path = entry.trim().replace(/\s+\(.*\)$/, "").replace(/@[a-f\d]{7,40}$/i, "").replace(/::.*$|:\d+(?:-\d+)?$/, "");
+    if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) continue;
+    if (path.split(/[\\/]/).includes("..")) continue;
+    const absolute = isAbsolute(path) || win32.isAbsolute(path);
+    const filename = /(?:^|[\\/])[^\\/]+\.[a-z\d]{1,16}$/i.test(path);
+    if (absolute || filename || /^[^\s]+[\\/][^\s]+$/.test(path) || /^(?:README|LICENSE|Makefile|Dockerfile)$/i.test(path)) paths.push(path);
+  }
+  const stale = paths.length > 0 && paths.every((path) => {
+    if (isAbsolute(path) || win32.isAbsolute(path)) return !existsSync(path);
+    return roots.length > 0 && roots.every((root) => !existsSync(resolve(root, path.replace(/\\/g, "/"))));
+  });
+  EVIDENCE_CACHE.set(key, stale);
+  return stale;
 }

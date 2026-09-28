@@ -3,47 +3,60 @@
  * `pwsh`; set PWSH to a binary elsewhere). After each install, Bun — Oh My Pi's runtime — loads
  * the installed extension through its entry file, the way OMP does.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PACKAGE_HOME } from "../src/util.ts";
 
 const which = (cmd: string): string | undefined =>
   spawnSync(process.platform === "win32" ? "where" : "which", [cmd], { encoding: "utf8" }).stdout.split(/\r?\n/)[0]?.trim() || undefined;
 const PWSH = process.env.PWSH || which("pwsh");
 const BUN = which("bun");
-const shim = join(PACKAGE_HOME, "brain", "bin", "brain.cmd");
-const shimExisted = existsSync(shim);
+const sandbox = mkdtempSync(join(tmpdir(), "brain-install-"));
+const home = join(sandbox, "home");
+const shim = join(home, "brain", "bin", "brain.cmd");
+
+beforeAll(() => {
+  for (const path of ["brain/src", "brain/bin", "brain/package.json", "scripts"]) {
+    cpSync(join(PACKAGE_HOME, path), join(home, path), { recursive: true });
+  }
+  mkdirSync(join(home, "notes"));
+  writeFileSync(join(home, "projects.json"), '{"projects":{}}\n');
+  execFileSync("git", ["init", home]);
+  // Keep the real tracked mode instead of manufacturing the executable bit in the fixture.
+  const index = execFileSync("git", ["-C", PACKAGE_HOME, "rev-parse", "--path-format=absolute", "--git-path", "index"], { encoding: "utf8" }).trim();
+  cpSync(index, join(home, ".git", "index"));
+});
 
 function ps(script: string, ...args: string[]): { status: number | null; out: string } {
-  const r = spawnSync(PWSH as string, ["-NoLogo", "-NoProfile", "-File", join(PACKAGE_HOME, "scripts", script), ...args], {
-    encoding: "utf8",
-    env: { ...process.env, SECOND_BRAIN_HOME: PACKAGE_HOME },
+  const r = spawnSync(PWSH as string, ["-NoLogo", "-NoProfile", "-File", join(home, "scripts", script), ...args], {
+    encoding: "utf8", cwd: home,
+    env: { ...process.env, SECOND_BRAIN_HOME: home },
   });
   return { status: r.status, out: r.stdout + r.stderr };
 }
 
 function bunLoads(extensions: string): string {
-  const probe = join(mkdtempSync(join(tmpdir(), "brain-probe-")), "probe.ts");
+  const probe = join(sandbox, "probe.ts");
   writeFileSync(
     probe,
     `const mod = await import(${JSON.stringify(join(extensions, "second-brain-v4", "index.ts"))});
 const on: string[] = []; const tools: string[] = [];
-mod.default({ on: (e: string) => on.push(e), registerTool: (t: any) => tools.push(t.name) }, { SECOND_BRAIN_HOME: ${JSON.stringify(PACKAGE_HOME)} });
+mod.default({ on: (e: string) => on.push(e), registerTool: (t: { name: string }) => tools.push(t.name) }, { SECOND_BRAIN_HOME: ${JSON.stringify(home)} });
 console.log(on.sort().join(",") + "|" + tools.join(","));`,
   );
   return spawnSync(BUN as string, [probe], { encoding: "utf8" }).stdout.trim();
 }
 
 afterAll(() => {
-  if (!shimExisted) rmSync(shim, { force: true });
+  rmSync(sandbox, { recursive: true, force: true });
 });
 
 describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
   it("parks older extensions, installs a BOM-free loader, self-checks, and rolls back", () => {
-    const root = mkdtempSync(join(tmpdir(), "brain-install-"));
+    const root = sandbox;
     const extensions = join(root, "extensions");
     for (const old of ["second-brain", "second-brain-v3"]) {
       mkdirSync(join(extensions, old), { recursive: true });
@@ -57,7 +70,7 @@ describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
     expect(new Set(readdirSync(join(root, "extensions-disabled")).map((name) => name.slice(-15))).size).toBe(1);
     const loader = readFileSync(join(extensions, "second-brain-v4", "index.ts"));
     expect(loader.subarray(0, 2).toString()).toBe("//");
-    expect(loader.toString()).toContain(`export { default } from "${join(PACKAGE_HOME, "brain", "src", "omp.ts").replace(/\\/g, "/")}";`);
+    expect(loader.toString()).toContain(`export { default } from "${join(home, "brain", "src", "omp.ts").replace(/\\/g, "/")}";`);
     expect(readFileSync(shim, "utf8")).toMatch(/^@(node|bun) "%~dp0brain\.mjs" %\*\r\n$/);
     if (BUN) expect(bunLoads(extensions)).toBe("before_agent_start,context,session_before_branch,session_before_switch,session_branch,session_compact,session_shutdown,session_switch,tool_result|brain_recall,brain_note,brain_state");
 
@@ -77,10 +90,10 @@ describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
 
 describe("the sh shim for Git Bash and POSIX shells", () => {
   it("runs the CLI, and is committed executable with LF endings", () => {
-    const shimSh = join(PACKAGE_HOME, "brain", "bin", "brain");
+    const shimSh = join(home, "brain", "bin", "brain");
     const r = spawnSync("sh", [shimSh, "help"], { encoding: "utf8" });
     expect(r.stdout).toContain("brain recall");
     expect(readFileSync(shimSh, "utf8")).not.toContain("\r");
-    expect(spawnSync("git", ["-C", PACKAGE_HOME, "ls-files", "-s", "brain/bin/brain"], { encoding: "utf8" }).stdout).toMatch(/^100755 /);
+    expect(spawnSync("git", ["-C", home, "ls-files", "-s", "brain/bin/brain"], { encoding: "utf8" }).stdout).toMatch(/^100755 /);
   });
 });

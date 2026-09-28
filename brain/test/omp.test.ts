@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import secondBrain, { CARD_TYPE, editedPaths, type HostLike } from "../src/omp.ts";
-import { createNote } from "../src/notes.ts";
+import { createNote, loadNotes } from "../src/notes.ts";
+import { appendEvent, listProposals } from "../src/capture.ts";
 import { readWork, writeWork } from "../src/work.ts";
 import { estimateTokens } from "../src/util.ts";
 
@@ -558,6 +559,49 @@ describe("OMP extension", () => {
     expect(result2).toBeUndefined();
   });
 
+  it("refuses same-headline conflicting bodies without upgrading their errors or tested status", () => {
+    const existing = createNote(home, { project: "work", text: "Plugin setup\nUse the project plugin" });
+    const before = readFileSync(existing.path, "utf8");
+    const { tools } = load({ SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" }, true);
+    const noteTool = tools.find((t: any) => t.name === "brain_note") as any;
+    const result = noteTool.execute("conflict", { text: "Plugin setup\nUse the global plugin", tested: true, error: "plugin missing" }, ctx("parent"));
+    expect(result.content[0].text).toBe("not saved: " + existing.id + " has this headline with a different body; use a new headline, or `brain retire " + existing.id + "` first");
+    expect(readFileSync(existing.path, "utf8")).toBe(before);
+    const identical = noteTool.execute("same", { text: "Plugin setup\n\nUse the project plugin", tested: true }, ctx("parent"));
+    expect(identical.content[0].text).toBe("updated " + existing.id);
+    expect(loadNotes(home).notes[0]?.tested).toBe(true);
+  });
+
+  it("subagent notes cannot claim verification or upgrade an existing note to tested", () => {
+    const { tools } = load({ SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" }, true);
+    const noteTool = tools.find((t: any) => t.name === "brain_note") as any;
+    const child = { ...ctx("child"), agent: { kind: "sub" } };
+    const text = "Compiler needs the project-local plugin";
+    const saved = noteTool.execute("new", { text, tested: true }, child).content[0].text;
+    const note = loadNotes(home).notes[0]!;
+    expect(note.tested).toBe(false);
+    expect(saved).toBe("saved " + note.id + " (untested: the parent or `brain tested <id>` confirms)");
+    noteTool.execute("duplicate", { text, tested: true, error: "plugin missing" }, child);
+    expect(loadNotes(home).notes[0]?.tested).toBe(false);
+    const { handlers } = load();
+    expect(handlers.get("tool_result")!({ toolName: "bash", input: { command: "npm test" }, isError: true, content: [{ type: "text", text: "plugin missing" }] }, child)).toBeUndefined();
+    noteTool.execute("parent", { text, tested: true }, { ...ctx("parent"), agent: { kind: "main" } });
+    expect(loadNotes(home).notes[0]?.tested).toBe(true);
+  });
+
+  it("child startup leaves capture proposals to the parent", () => {
+    const cwd = join(root, "work");
+    mkdirSync(cwd);
+    appendEvent(home, "previous", cwd, { tool: "bash", command: "npm test", ok: false, error: "Cannot find module left-pad" });
+    appendEvent(home, "previous", cwd, { tool: "bash", command: "npm ci && npm test", ok: true });
+    const { handlers } = load({ SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" });
+    const start = handlers.get("before_agent_start")!;
+    start({ prompt: "run tests" }, { ...ctx("child", cwd), agent: { kind: "sub" } });
+    expect(listProposals(home)).toEqual([]);
+    start({ prompt: "run tests" }, { ...ctx("parent", cwd), agent: { kind: "main" } });
+    expect(listProposals(home).map(p => p.text)).toEqual([expect.stringContaining("npm ci && npm test works")]);
+  });
+
   it("subagent brain_state cannot overwrite the parent's plan", () => {
     const plan = writeWork(home, "work", "Goal: parent owns this plan");
     const before = readFileSync(plan.path, "utf8");
@@ -632,8 +676,9 @@ describe("OMP extension", () => {
     recall.execute("hit", { query: "compiler wiring" }, undefined, undefined, child);
     recall.execute("miss", { query: "zzzyyyxxx" }, undefined, undefined, child);
     const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(row => JSON.parse(row));
-    expect(rows.find(row => row.kind === "card").sub).toBe(true);
-    expect(rows.filter(row => row.kind === "recall").map(row => row.hits)).toEqual([1, 0]);
+    expect(rows.find(row => row.kind === "card")).toMatchObject({ sub: true });
+    expect(rows.find(row => row.kind === "card").via).toBeUndefined();
+    expect(rows.filter(row => row.kind === "recall").map(row => ({ hits: row.hits, via: row.via }))).toEqual([{ hits: 1, via: "tool" }, { hits: 0, via: "tool" }]);
   });
 
 });

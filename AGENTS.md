@@ -31,14 +31,8 @@ node bin/brain.mjs check        # or `brain check` once installed
 ```
 
 <!-- The-Second-Brain:begin id=second-brain -->
-## The Second Brain
-
-Canonical Brain: `%SECOND_BRAIN_HOME%`.
-
-For substantive work:
-- current repo/tests outrank memory;
-- use targeted Brain recall;
-- do not preload the Brain;
-- use Brainstem signals where available;
-- preserve durable validated learning.
+Use `brain recall "<query>"` before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command; the repo wins on conflict.
+Use `brain note "<text>"` for what the repo cannot tell you: a decision and its why, an environment gotcha with its error line, what failed before, an owner preference.
+Use `brain state "Goal: … Next: …"` when the goal or next step changes.
+Use `brain fix "<error>"` after an unexplained failure (tested known fix, or silence).
 <!-- The-Second-Brain:end -->

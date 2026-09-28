@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createNote, formatNote, headline, loadNotes, parseNote, retireNote, saveNote, type Note } from "../src/notes.ts";
+import { createNote, differentBody, formatNote, headline, loadNotes, parseNote, retireNote, saveNote, staleEvidence, type Note } from "../src/notes.ts";
 import { normalizePath, normalizeRemote, resolveProject, visibleTo } from "../src/project.ts";
 import { cutToTokens, estimateTokens, slug } from "../src/util.ts";
 
@@ -78,6 +78,97 @@ describe("notes", () => {
     const text = "---\nid: n-9\ntags: [a, 'b c']\nkind: fact\n---\nBody";
     expect(parseNote(text, "/x", "p", false).tags).toEqual(["a", "b-c"]);
     expect(readFileSync).toBeDefined();
+  });
+});
+
+describe("lossless bodies and cached file truth", () => {
+  it("compares complete scrubbed bodies without discarding case or added details", () => {
+    const home = tmp();
+    const text = "Deployment rule\n\nUse port 3000; password=example-secret";
+    const stored = createNote(home, { text, project: "demo" });
+    expect(differentBody(stored, "  Deployment rule\r\n Use   port 3000; password=example-secret  ")).toBe(false);
+    expect(differentBody(stored, text.replace("3000", "4000"))).toBe(true);
+    expect(differentBody(stored, text.replace("Use", "use"))).toBe(true);
+    expect(differentBody(stored, "Deployment rule")).toBe(true);
+    expect(differentBody(stored, text + "\nRestart after editing.")).toBe(true);
+  });
+
+  it("sees immediate external same-size edits, additions and deletions", () => {
+    const home = tmp();
+    const original = createNote(home, { text: "Alpha rule", project: "demo" });
+    expect(loadNotes(home).notes[0]?.body).toBe("Alpha rule");
+    const before = statSync(original.path);
+    writeFileSync(original.path, formatNote({ ...original, body: "Bravo rule" }));
+    utimesSync(original.path, before.atimeMs / 1000, before.mtimeMs / 1000);
+    expect(loadNotes(home).notes[0]?.body).toBe("Bravo rule");
+
+    const added = join(home, "notes", "other", "private", "external.md");
+    mkdirSync(join(home, "notes", "other", "private"), { recursive: true });
+    writeFileSync(added, formatNote(sample({ id: "external", body: "External note" })));
+    expect(loadNotes(home).notes.find((n) => n.id === "external")).toMatchObject({ body: "External note", project: "other", private: true });
+    rmSync(original.path);
+    expect(loadNotes(home).notes.map((n) => n.id)).toEqual(["external"]);
+    rmSync(join(home, "notes"), { recursive: true });
+    expect(loadNotes(home)).toEqual({ notes: [], errors: [] });
+  });
+
+  it("never caches unsaved caller edits and invalidates its own writes, moves and retirement", () => {
+    const home = tmp();
+    const first = createNote(home, { text: "Original rule", project: "demo", tags: ["node"] });
+    const loaded = loadNotes(home).notes[0]!;
+    loaded.body = "Not saved";
+    loaded.tags.push("unsaved");
+    expect(loadNotes(home).notes[0]).toMatchObject({ body: "Original rule", tags: ["node"] });
+    const moved = saveNote(home, { ...first, private: true, body: "Private rule" });
+    expect(loadNotes(home).notes).toEqual([moved]);
+    const next = createNote(home, { text: "Replacement", project: "demo" });
+    retireNote(home, first.id, next.id);
+    expect(loadNotes(home).notes.find((n) => n.id === first.id)).toMatchObject({ replacedBy: next.id, retired: expect.any(String) });
+  });
+
+  it("reports external corruption and recovers after repair", () => {
+    const home = tmp();
+    const original = createNote(home, { text: "Safe rule", project: "demo" });
+    loadNotes(home);
+    writeFileSync(original.path, "invalid frontmatter");
+    const broken = loadNotes(home);
+    expect(broken.notes).toEqual([]);
+    expect(broken.errors).toEqual([expect.stringContaining("missing frontmatter")]);
+    writeFileSync(original.path, formatNote(original));
+    expect(loadNotes(home)).toEqual({ notes: [original], errors: [] });
+  });
+});
+
+describe("file evidence", () => {
+  it("is stale only when all file references are missing from all roots", () => {
+    const home = tmp();
+    const project = tmp();
+    writeFileSync(join(home, "present.md"), "evidence");
+    const base = sample({ evidence: ["missing.ts", "present.md:1-4", "commit:abcdef0"] });
+    expect(staleEvidence(base, [project, home])).toBe(false);
+    expect(staleEvidence(base, [project])).toBe(true);
+    expect(staleEvidence({ ...base, evidence: [join(home, "present.md")] }, [project])).toBe(false);
+    expect(staleEvidence({ ...base, evidence: ["missing.ts", "events:missing.jsonl"] }, [home])).toBe(true);
+    expect(staleEvidence({ ...base, evidence: ["present.md (checked locally)"] }, [home])).toBe(false);
+  });
+
+  it.each([[], ["events:missing.jsonl"], ["commit:abc1234"], ["https://example.test/missing.ts"], ["session:local/123"], ["owner confirmed this"], ["../outside.md"], ["src/../../outside.md"], ["..\\outside.md"]])("does not call non-file or escaping evidence stale: %j", (...evidence: string[]) => {
+    expect(staleEvidence(sample({ evidence }), [tmp()])).toBe(false);
+  });
+
+  it("invalidates evidence results after own writes or an external note change", () => {
+    const home = tmp();
+    const saved = createNote(home, { text: "Check source", project: "demo", evidence: ["proof.md"] });
+    const [loaded] = loadNotes(home).notes;
+    expect(staleEvidence(loaded!, [home])).toBe(true);
+    writeFileSync(join(home, "proof.md"), "proof");
+    saveNote(home, saved);
+    expect(staleEvidence(saved, [home])).toBe(false);
+    loadNotes(home);
+    rmSync(join(home, "proof.md"));
+    writeFileSync(saved.path, formatNote({ ...saved, body: "Check revised source" }));
+    const [edited] = loadNotes(home).notes;
+    expect(staleEvidence(edited!, [home])).toBe(true);
   });
 });
 

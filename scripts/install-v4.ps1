@@ -76,8 +76,9 @@ if (-not $NoPath) {
 }
 
 # 3. Brain home
-$BrainHome = [Environment]::GetEnvironmentVariable("SECOND_BRAIN_HOME", "User")
-if (-not $BrainHome) { $BrainHome = $env:SECOND_BRAIN_HOME }
+# The process value first: it inherits the user value, and a caller (or test) may override it.
+$BrainHome = $env:SECOND_BRAIN_HOME
+if (-not $BrainHome) { $BrainHome = [Environment]::GetEnvironmentVariable("SECOND_BRAIN_HOME", "User") }
 if (-not $BrainHome) {
     $BrainHome = $SourceRoot
     if (-not $NoEnv) {

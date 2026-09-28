@@ -5,14 +5,14 @@
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
 import { isAbsolute, relative, resolve } from "node:path";
-import { createNote, findSameHeadline, GLOBAL, KINDS, loadNotes, upgradeNote, type Kind } from "./notes.ts";
+import { loadNotes } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { answerWithHits } from "./search.ts";
+import { brainTools, jsonSchema, type Param } from "./tools.ts";
 import { appendEvent, errorSignature, findFix, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { renderCard } from "./card.ts";
-import { logUse, type UseKind } from "./telemetry.ts";
+import { logUse } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
-import { readWork, renderResume, stateSaved, writeAuto, writeWork } from "./work.ts";
+import { readWork, renderResume, writeAuto } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
@@ -153,12 +153,6 @@ function buildResumeMessage(content: string, at: number): { role: string; custom
   };
 }
 
-interface Param {
-  type: "string" | "boolean";
-  description: string;
-  optional?: boolean;
-}
-
 /** Tool parameters: built with the host's TypeBox shim when it has one, else plain JSON schema. */
 export function schema(typebox: unknown, props: Record<string, Param>): unknown {
   const tb = asObject(typebox);
@@ -173,12 +167,7 @@ export function schema(typebox: unknown, props: Record<string, Param>): unknown 
     }
     return obj(fields);
   }
-  return {
-    type: "object",
-    properties: Object.fromEntries(Object.entries(props).map(([k, p]) => [k, { type: p.type, description: p.description }])),
-    required: Object.entries(props).filter(([, p]) => !p.optional).map(([k]) => k),
-    additionalProperties: false,
-  };
+  return jsonSchema(props);
 }
 
 /**
@@ -191,11 +180,6 @@ export function toolArgs(args: unknown[], key: string): { params: Json; cwd: str
   const params = second && key in second ? second : (args.map(asObject).find((a) => a !== undefined && key in a) ?? second ?? {});
   const ctx = [...args].reverse().find((a) => typeof asObject(a)?.cwd === "string");
   return { params, cwd: cwdOf(ctx) ?? process.cwd(), ctx };
-}
-
-function requireString(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
-  return value;
 }
 
 /** A path as the agent should read it: relative to the project root when inside it, forward slashes. */
@@ -248,102 +232,31 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         // a host that rejects the definition keeps the card, the fixes and the CLI
       }
     };
-    const tool = (
-      name: string,
-      label: string,
-      description: string,
-      props: Record<string, Param>,
-      run: (params: Json, cwd: string, session: string, ctx: unknown) => { text: string; kind?: UseKind; project: string; hits?: number },
-    ) => ({
-      name,
-      label,
-      description,
-      // OMP moves extension tools behind xd:// unless they are essential; the card names them directly.
-      loadMode: "essential",
-      approval: name === "brain_recall" ? "read" : "write",
-      parameters: schema(pi.typebox, props),
-      execute(...args: unknown[]) {
-        const started = performance.now();
-        try {
-          const required = Object.keys(props).find((k) => !props[k]?.optional) ?? "";
-          const { params, cwd, ctx } = toolArgs(args, required);
-          const session = sessionKey(ctx);
-          const result = run(params, cwd, session, ctx);
-          if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub: isSubagent(ctx), hits: result.hits });
-          return { content: [{ type: "text", text: result.text }], details: {} };
-        } catch (error) {
-          return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
-        }
-      },
-    });
-
-    register(
-      tool(
-        "brain_recall",
-        "Brain recall",
-        'Search long-term memory from earlier sessions and projects: up to 3 answers, or "no match". Pass a note id to read that note in full.',
-        { query: { type: "string", description: "a question, keywords, or a note id" }, all: { type: "boolean", description: "search every project", optional: true } },
-        (params, cwd) => {
-          const query = requireString(params.query, "query");
-          const project = resolveProject(home, cwd, env);
-          return { ...answerWithHits(loadNotes(home).notes, query, { home, project, all: params.all === true }), kind: "recall", project: project.id };
-        },
-      ),
-    );
-    register(
-      tool(
-        "brain_note",
-        "Brain note",
-        "Save a durable learning for future sessions (decision, gotcha, procedure or fact). First line is the headline.",
-        {
-          text: { type: "string", description: "the learning; first line is the headline" },
-          kind: { type: "string", description: `one of ${KINDS.join(", ")}`, optional: true },
-          error: { type: "string", description: "the error message this fixes", optional: true },
-          tested: { type: "boolean", description: "you verified it works", optional: true },
-          global: { type: "boolean", description: "useful beyond this project", optional: true },
-        },
-        (params, cwd) => {
-          const text = requireString(params.text, "text");
-          const kind = typeof params.kind === "string" && (KINDS as readonly string[]).includes(params.kind) ? (params.kind as Kind) : undefined;
-          const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
-          const project = resolveProject(home, cwd, env);
-          const scope = params.global === true ? GLOBAL : project.id;
-          const same = findSameHeadline(loadNotes(home).notes, text, scope, project.tags);
-          // A tested fix is appended to every failure it matches. The agent may vouch for one in
-          // its own project; a global one, shown in every project, needs the owner's `brain tested`.
-          const wantsTested = params.tested === true;
-          const tested = wantsTested && (same?.project ?? scope) !== GLOBAL;
-          const untested = wantsTested && !tested ? " (untested: a global fix is confirmed with `brain tested <id>`)" : "";
-          if (same) {
-            const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested });
-            return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}`, kind: "note", project: project.id };
+    for (const definition of brainTools) {
+      register({
+        name: definition.name,
+        label: "Brain " + definition.name.slice("brain_".length),
+        description: definition.description,
+        // OMP moves extension tools behind xd:// unless they are essential; the card names them directly.
+        loadMode: "essential",
+        approval: definition.name === "brain_recall" ? "read" : "write",
+        parameters: schema(pi.typebox, definition.params),
+        execute(...args: unknown[]) {
+          const started = performance.now();
+          try {
+            const required = Object.keys(definition.params).find((k) => !definition.params[k]?.optional) ?? "";
+            const { params, cwd, ctx } = toolArgs(args, required);
+            const session = sessionKey(ctx);
+            const sub = isSubagent(ctx);
+            const result = definition.run(params, { home, cwd, env, session, sub });
+            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, via: "tool" });
+            return { content: [{ type: "text", text: result.text }], details: {} };
+          } catch (error) {
+            return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
           }
-          const note = createNote(home, {
-            text,
-            project: scope,
-            kind,
-            errors: error ? [error] : [],
-            tested,
-            source: "agent",
-          });
-          return { text: `saved ${note.id}${untested}`, kind: "note", project: project.id };
         },
-      ),
-    );
-    register(
-      tool(
-        "brain_state",
-        "Brain state",
-        "Replace this project's working state (Goal:, Done:, Next:, Watch out:) so work resumes after compaction or in the next session. Update it when the plan changes; under 60 words.",
-        { text: { type: "string", description: "goal, done, next, watch out" } },
-        (params, cwd, _session, ctx) => {
-          const project = resolveProject(home, cwd, env);
-          if (isSubagent(ctx)) return { text: "not saved: working state belongs to the parent session", project: project.id };
-          const work = writeWork(home, project.id, requireString(params.text, "text"));
-          return { text: stateSaved(work), kind: "state", project: project.id };
-        },
-      ),
-    );
+      });
+    }
   }
 
   // Handle before_agent_start
@@ -372,13 +285,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!state.carded && !state.resumeSeen) {
         const { notes } = loadNotes(home);
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-        // Pair up failures and fixes from earlier sessions, so the card can say what waits for review.
-        try {
-          scanEvents(home, notes);
-        } catch {
-          // the card matters more than the count
-        }
         const subagent = isSubagent(ctx);
+        // Only the parent scans earlier sessions; children share its proposals without rescanning.
+        if (!subagent) {
+          try {
+            scanEvents(home, notes);
+          } catch {
+            // the card matters more than the count
+          }
+        }
         const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, prompt: typeof prompt === "string" ? prompt : undefined });
 
         if (cardContent) {

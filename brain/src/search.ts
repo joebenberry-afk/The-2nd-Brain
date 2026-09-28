@@ -1,5 +1,6 @@
 /** Full-text search over notes with BM25 ranking (faithful port of V3 SQLite FTS5). */
-import { firstLine, restOfBody, type Note } from "./notes.ts";
+import { resolve } from "node:path";
+import { firstLine, GLOBAL, restOfBody, staleEvidence, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
@@ -131,6 +132,8 @@ export interface Hit {
   note: Note;
   score: number;
   matched: string[];
+  stale?: boolean;
+  tombstone?: boolean;
 }
 
 export interface RecallOptions {
@@ -138,6 +141,8 @@ export interface RecallOptions {
   all?: boolean;
   history?: boolean;
   limit?: number;
+  /** Brain home for evidence lookup; stored note paths supply it when omitted. */
+  home?: string;
 }
 
 export const RELATIVE_FLOOR = 0.5;
@@ -292,8 +297,21 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
   return hits;
 }
 
+/**
+ * Evidence resolves against this project's checkout and the Brain home. Another project's
+ * relative paths belong to a checkout we cannot see here: unknown, never "stale".
+ */
+function staleHere(note: Note, opts: RecallOptions): boolean {
+  if (note.project !== GLOBAL && note.project !== opts.project?.id) return false;
+  const home = opts.home ?? (note.path ? resolve(note.path, note.private ? "../../../.." : "../../..") : undefined);
+  return staleEvidence(note, [opts.project?.root, home].filter((root): root is string => !!root));
+}
+
 export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
-  return matchingHits(scored, opts).slice(0, Math.max(1, Math.min(10, opts.limit ?? 3)));
+  const hits = matchingHits(scored, opts).slice(0, Math.max(1, Math.min(10, opts.limit ?? 3)));
+  // Keep the BM25 shortlist (and its relevance floor), but lead with usable evidence.
+  for (const hit of hits) hit.stale = staleHere(hit.note, opts);
+  return hits.sort((a, b) => Number(a.stale) - Number(b.stale));
 }
 
 /** Recall over notes with BM25 ranking. */
@@ -306,9 +324,10 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
 export function renderHit(hit: Hit, max = 240): string {
   const { note } = hit;
   const idAndKind = `${note.id} [${note.kind}${note.tested ? ", tested" : ""}]`;
-  const marker = note.retired ? ` (retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""})` : "";
+  const retired = note.retired ? ` (retired${hit.tombstone ? "" : " " + note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""})` : "";
+  const marker = retired + (hit.stale ? " (stale evidence)" : "");
   const title = firstLine(note);
-  let rest = restOfBody(note);
+  let rest = hit.tombstone ? "" : restOfBody(note);
   while (title && rest.startsWith(title) && (!rest[title.length] || /[\s:;,.—–-]/.test(rest[title.length]!))) {
     rest = rest.slice(title.length).replace(/^[\s:;,.—–-]+/, "");
   }
@@ -325,14 +344,16 @@ export const FIRST_HIT_CHARS = 600;
 /** A note read in full by id is cut to this many tokens. */
 export const FULL_NOTE_TOKENS = 600;
 
-/** Hits as answer lines: the first up to FIRST_HIT_CHARS, the rest up to 240; "no match" when empty. */
+const NO_MATCH = "no match; note it once you learn it";
+
+/** Hits as answer lines: the first up to FIRST_HIT_CHARS, the rest up to 240. */
 export function renderHits(hits: Hit[]): string {
-  if (!hits.length) return "no match";
+  if (!hits.length) return NO_MATCH;
   return hits.map((hit, i) => renderHit(hit, i === 0 ? FIRST_HIT_CHARS : 240)).join("\n");
 }
 
 export interface AnswerOptions extends RecallOptions {
-  /** Explicit Brain home enables kit recall without consulting process-global state. */
+  /** Explicit Brain home also enables kit recall without process-global state. */
   home?: string;
   /** The CLI has flags rather than tool arguments. */
   tools?: boolean;
@@ -348,7 +369,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
   const id = query.trim();
   const note = notes.find((n) => n.id === id);
   if (note) {
-    if (!opts.all && !visibleTo(note, opts.project)) return { text: "no match", hits: 0 };
+    if (!opts.all && !visibleTo(note, opts.project)) return { text: NO_MATCH, hits: 0 };
     const retiredMeta = note.retired ? `retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""}` : "";
     const meta = [note.kind, note.tested ? "tested" : "", retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
     return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS), hits: 1 };
@@ -360,14 +381,29 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
       return { text: `${kit.path}\n${description}`, hits: 1 };
     }
   }
+  // Search summaries stay within the three-line budget; explicit id reads above retain history.
+  opts = { ...opts, limit: Math.max(1, Math.min(3, opts.limit ?? 3)) };
   const scored = scoreQuery(notes, query);
   let hits = filterHits(scored, opts);
   if (!opts.history) {
-    // Keep a better retired answer visible so obsolete advice is not silently replaced.
-    const retired = filterHits(scored, { ...opts, history: true, limit: 10 }).find((h) => h.note.retired);
-    if (retired && (!hits.length || retired.score > (hits[0]?.score ?? 0))) {
-      const limit = Math.max(1, Math.min(10, opts.limit ?? 3));
-      hits = [retired, ...hits.filter((h) => h.score >= RELATIVE_FLOOR * retired.score)].slice(0, limit);
+    const best = filterHits(scored, { ...opts, history: true, limit: 10 }).sort((a, b) => b.score - a.score).find((h) => h.note.retired);
+    if (best && hits.every((hit) => best.score > hit.score)) {
+      const seen = new Set<string>([best.note.id]);
+      let replacement: Note | undefined = best.note;
+      while (replacement?.retired) {
+        const id: string | undefined = replacement.replacedBy;
+        if (!id || seen.has(id)) { replacement = undefined; break; }
+        seen.add(id);
+        replacement = notes.find((n) => n.id === id && (opts.all || visibleTo(n, opts.project)));
+      }
+      if (replacement) {
+        const next = { note: replacement, score: 0, matched: [], stale: staleHere(replacement, opts) };
+        const tombstone = { ...best, tombstone: true, note: { ...best.note, replacedBy: replacement.id } };
+        hits = [next, tombstone, ...hits.filter((h) => h.note.id !== replacement.id)].slice(0, opts.limit);
+      } else {
+        hits = [best, ...hits.filter((h) => h.score >= RELATIVE_FLOOR * best.score)]
+          .sort((a, b) => Number(a.stale) - Number(b.stale)).slice(0, opts.limit);
+      }
     }
   }
   if (!hits.length && !opts.all) {

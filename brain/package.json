@@ -8,6 +8,8 @@
   "engines": { "node": ">=22.18" },
   "scripts": {
     "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "perf": "node scripts/perf.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
     "check": "npm run lint && npm run typecheck && npm test"

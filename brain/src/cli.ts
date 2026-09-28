@@ -2,21 +2,22 @@
  * The `brain` command: the same functions the OMP extension uses, for any shell, harness or
  * human. `main(argv, io)` takes injected I/O so tests run it in-process.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { acceptProposal, appendEvent, findFix, listProposals, rejectProposal, renderFix, scanCommits, scanEvents, unmatchedErrors } from "./capture.ts";
+import { acceptProposal, appendEvent, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, toolEventFrom, unmatchedErrors } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { draftKit, findKit, kitsDir, loadKits } from "./kits.ts";
-import { createNote, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, parseFrontmatter, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
+import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, parseFrontmatter, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
 import { gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
+import { runMcp } from "./mcp.ts";
 import { answerWithHits } from "./search.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
 import { logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, slug, tagKey } from "./util.ts";
-import { readWork, renderResume, resumeText, stateSaved, writeWork } from "./work.ts";
+import { readWork, renderResume, resumeText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 
 export interface Io {
   out: (text: string) => void;
@@ -33,6 +34,7 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain card                                   start card for this directory's project
   brain recall <query…|note id> [--all] [--history] [-n N]
   brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--global|--private]
+  brain fix <error text…>                      tested known fix, or silence
   brain state [<text…>]                        show or replace the working state
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
   brain review · accept <pid>… · reject <pid>…
@@ -40,8 +42,12 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain sync [--no-push] [-m <message>]
   brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
   brain hook claude-code                       Claude Code hook (JSON on stdin)
+  brain hook agents-md                         print the managed agent instructions
+  brain mcp                                    MCP server on stdio (brain_recall, brain_note, brain_state)
 
 Every command takes --home <dir> and --project <id>. Kinds: ${KINDS.join(", ")}.`;
+
+const AGENTS_BLOCK = "<!-- The-Second-Brain:begin id=second-brain -->\nUse `brain recall \"<query>\"` before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command; the repo wins on conflict.\nUse `brain note \"<text>\"` for what the repo cannot tell you: a decision and its why, an environment gotcha with its error line, what failed before, an owner preference.\nUse `brain state \"Goal: … Next: …\"` when the goal or next step changes.\nUse `brain fix \"<error>\"` after an unexplained failure (tested known fix, or silence).\n<!-- The-Second-Brain:end -->";
 
 const OPTIONS = {
   home: { type: "string" },
@@ -99,8 +105,8 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
-function use(c: Ctx, kind: UseKind, text: string): void {
-  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started });
+function use(c: Ctx, kind: UseKind, text: string, hits?: number): void {
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits });
 }
 
 const COMMANDS: Record<string, (c: Ctx) => number> = {
@@ -124,7 +130,15 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
       limit: positiveInt(c.opts.limit, 3),
     });
     c.io.out(text);
-    logUse(c.home, { kind: "recall", project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, hits });
+    use(c, "recall", text, hits);
+    return 0;
+  },
+
+  fix(c) {
+    const fix = findFix(loadNotes(c.home).notes, need(c.args.join(" "), "error text"), c.project);
+    const text = fix ? renderFix(fix) : "";
+    if (text) c.io.out(text);
+    use(c, "fix", text);
     return 0;
   },
 
@@ -135,6 +149,10 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     if (c.opts.global && c.opts.private) throw new UsageError("--global and --private exclude each other");
     const scope = c.opts.global ? GLOBAL : c.project.id;
     const same = findSameHeadline(loadNotes(c.home).notes, text, scope, c.project.tags, c.opts.private === true);
+    if (same && differentBody(same, text)) {
+      c.io.out(`not saved: ${same.id} has this headline with a different body; use a new headline, or \`brain retire ${same.id}\` first`);
+      return 0;
+    }
     if (same) {
       const changed = upgradeNote(c.home, same, {
         kind: c.opts.kind ? (kind as Kind) : undefined,
@@ -144,6 +162,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
         tested: c.opts.tested === true,
       });
       c.io.out(`${changed ? "updated" : "already noted"} ${same.id}`);
+      use(c, "note", text);
       return 0;
     }
     const note = createNote(c.home, {
@@ -285,6 +304,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
+    c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.hook} hook · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
     const unmatched = unmatchedErrors(c.home, loadNotes(c.home).notes, { days: s.days }).slice(0, 5);
     if (unmatched.length) {
       c.io.out("Unmatched errors:");
@@ -394,51 +414,104 @@ function configErrors(home: string): string[] {
   return errors;
 }
 
-/** `brain hook claude-code`: one JSON object in, one out, exit 0 — whatever happens. */
+/** Read bounded complete JSONL rows; transcript history can be much larger than the Brain. */
+function hookTail(path: string, limit: number): string[] {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const offset = Math.max(0, size - limit);
+    const bytes = Buffer.alloc(Math.min(size, limit));
+    const count = readSync(fd, bytes, 0, bytes.length, offset);
+    const lines = bytes.subarray(0, count).toString("utf8").split("\n");
+    if (offset) lines.shift();
+    lines.pop(); // an unfinished append is not a complete event
+    return lines;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Reuse the append-only capture log: concurrent tool hooks cannot overwrite each other's edits. */
+function saveHookAuto(home: string, project: Project, session: string, transcript: unknown): void {
+  const fields: AutoFields = {};
+  try {
+    for (const line of hookTail(join(eventsDir(home), safeSession(session) + ".jsonl"), EVENT_CAP_BYTES + 8192)) {
+      const event = parseEvent(line);
+      if (!event || event.session !== session) continue;
+      if (event.ok && /^(Edit|Write|MultiEdit)$/.test(event.tool) && event.path) {
+        const absolute = resolve(event.cwd, event.path);
+        const rel = relative(project.root ?? event.cwd, absolute);
+        const path = (rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : absolute).replace(/\\/g, "/");
+        fields.edited = [...(fields.edited ?? []).filter((p) => p !== path), path].slice(-20);
+      }
+      if (!event.ok && event.error) fields.failure = `${event.command ?? event.tool} → ${errorSignature(event.error)}`;
+    }
+  } catch {
+    // A session may contain only conversation, with no captured tool events.
+  }
+  if (typeof transcript === "string" && transcript) {
+    try {
+      for (const line of hookTail(transcript, 262_144).reverse()) {
+        let row: { type?: unknown; isSidechain?: unknown; isMeta?: unknown; message?: { content?: unknown } } | null;
+        try { row = JSON.parse(line); } catch { continue; }
+        if (row?.type !== "user" || row.isSidechain === true || row.isMeta === true) continue;
+        const content = row.message?.content;
+        const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((block: unknown) => {
+          const b = block as { type?: unknown; text?: unknown } | null;
+          return b?.type === "text" && typeof b.text === "string" ? b.text : "";
+        }).filter(Boolean).join("\n") : "";
+        if (text.trim()) { fields.ask = text; break; }
+      }
+    } catch {
+      // The host writes transcripts asynchronously; unavailable ask never loses the edits.
+    }
+  }
+  writeAuto(home, project.id, fields);
+}
+
+/** Claude Code hook input/output: https://code.claude.com/docs/en/hooks */
 function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
   let output: object = {};
   try {
     const home = findHome(explicitHome, io.env);
     const payload: unknown = JSON.parse(io.stdin() || "{}");
-    if (home && payload && typeof payload === "object") {
+    if (home && payload && typeof payload === "object" && !Array.isArray(payload)) {
       const p = payload as Record<string, unknown>;
       const cwd = typeof p.cwd === "string" && p.cwd ? p.cwd : io.cwd;
-      const project = resolveProject(home, cwd, io.env);
       const event = p.hook_event_name;
       const session = typeof p.session_id === "string" && p.session_id ? p.session_id : undefined;
+      // agent_type alone also occurs for a main session started with --agent.
+      const sub = (typeof p.agent_id === "string" && !!p.agent_id) || event === "SubagentStart" || event === "SubagentStop";
+      const key = sub ? `${session ?? "claude-code"}:agent:${String(p.agent_id ?? "unknown")}` : session ?? "claude-code";
+      const project = resolveProject(home, cwd, io.env);
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
         let card: string;
         if (p.source === "compact") {
-          card = renderResume(readWork(home, project.id));
+          card = sub ? "" : renderResume(readWork(home, project.id));
         } else {
           const { notes } = loadNotes(home);
-          // Startup capture remains incremental and separate from the compact resume.
-          try {
-            scanEvents(home, notes);
-          } catch {
-            // the card matters more than the count
+          if (!sub) {
+            try { scanEvents(home, notes); } catch { /* the card matters more than capture */ }
           }
-          card = renderCard(home, notes, project, { tools: false });
+          card = renderCard(home, notes, project, { tools: false, subagent: sub });
         }
         if (card) {
           output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
-          logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0, session });
+          logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0, session, via: "hook", sub });
         }
-      } else if (event === "PostToolUseFailure" && typeof p.error === "string" && p.error.trim() && p.is_interrupt !== true) {
-        const input = (p.tool_input && typeof p.tool_input === "object" ? p.tool_input : {}) as Record<string, unknown>;
-        appendEvent(home, session ?? "claude-code", cwd, {
-          tool: typeof p.tool_name === "string" ? p.tool_name : "unknown",
-          command: typeof input.command === "string" ? input.command : undefined,
-          path: typeof input.file_path === "string" ? input.file_path : undefined,
-          ok: false,
-          error: p.error,
-        });
-        const fix = findFix(loadNotes(home).notes, p.error, project);
-        if (fix) {
-          const text = renderFix(fix);
-          output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };
-          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session });
+      } else if (event === "PostToolUse" || (event === "PostToolUseFailure" && typeof p.error === "string" && p.error.trim() && p.is_interrupt !== true)) {
+        const fields = toolEventFrom(p.tool_name, p.tool_input, event === "PostToolUseFailure", p.error);
+        appendEvent(home, key, cwd, fields);
+        if (!fields.ok && fields.error) {
+          const fix = findFix(loadNotes(home).notes, fields.error, project);
+          if (fix) {
+            const text = renderFix(fix);
+            output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };
+            logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session, via: "hook", sub });
+          }
         }
+      } else if (!sub && session && (event === "SessionEnd" || event === "PreCompact")) {
+        saveHookAuto(home, project, session, p.transcript_path);
       }
     }
   } catch {
@@ -465,12 +538,18 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
     return 0;
   }
   if (command === "hook") {
+    if (args[0] === "agents-md") {
+      io.out(AGENTS_BLOCK);
+      return 0;
+    }
     if (args[0] !== "claude-code") {
-      io.err("brain: unknown hook (supported: claude-code)");
+      io.err("brain: unknown hook (supported: claude-code, agents-md)");
       return 1;
     }
     return claudeCodeHook(io, opts.home);
   }
+  // A long-lived stdio server: the MCP client owns stdout, so nothing else may print there.
+  if (command === "mcp") return runMcp({ home: opts.home, env: opts.project ? { ...io.env, BRAIN_PROJECT: opts.project } : io.env });
   const run = COMMANDS[command];
   if (!run) {
     io.err(`brain: unknown command ${command} (brain help)`);

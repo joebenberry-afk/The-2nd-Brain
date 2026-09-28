@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main, type Io } from "../src/cli.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
-import { appendEvent } from "../src/capture.ts";
+import { appendEvent, renderFix, scanEvents } from "../src/capture.ts";
+import { estimateTokens } from "../src/util.ts";
+import { readWork } from "../src/work.ts";
 import { logUse } from "../src/telemetry.ts";
 
 const tmp = (p = "brain-cli-") => mkdtempSync(join(tmpdir(), p));
@@ -66,7 +68,7 @@ describe("brain cli", () => {
     const found = await run(["recall", "migration", "order"], io);
     expect(found.out).toContain(id);
     expect(found.out).toContain("[procedure]");
-    expect((await run(["recall", "nothing-like-this"], io)).out).toBe("no match");
+    expect((await run(["recall", "nothing-like-this"], io)).out.split("\n")).toHaveLength(1);
     expect((await run(["show", id], io)).out).toContain("kind: procedure");
     expect((await run(["tested", id], io)).out).toBe(`tested ${id}`);
     expect((await run(["recall", "migration", "order"], io)).out).toContain("[procedure, tested]");
@@ -381,6 +383,101 @@ describe("brain stats measurements", () => {
     expect(result.out).toContain("2 × bravo failure");
     expect(result.out).not.toMatch(/alpha failure|known failure/);
     expect(result.out.indexOf("foxtrot failure")).toBeLessThan(result.out.indexOf("bravo failure"));
+  });
+});
+
+describe("host-independent memory", () => {
+  it("fix returns only tested visible active repairs within budget, or silence", async () => {
+    const { home, io } = setup();
+    const note = createNote(home, { project: "demo", text: "Install the correct runtime\n\n" + "Detailed repair. ".repeat(80), tested: true, errors: ["runtime mismatch"] });
+    const found = await run(["fix", "Error: runtime mismatch"], io);
+    expect(found).toEqual({ code: 0, out: renderFix(note), err: "" });
+    expect(estimateTokens(found.out)).toBeLessThanOrEqual(80);
+    createNote(home, { project: "demo", text: "Unverified", errors: ["unverified failure"] });
+    createNote(home, { project: "other", text: "Foreign repair", tested: true, errors: ["foreign failure"] });
+    await run(["retire", note.id], io);
+    for (const error of ["runtime mismatch", "unverified failure", "foreign failure", "unknown error"]) {
+      expect(await run(["fix", error], io)).toEqual({ code: 0, out: "", err: "" });
+    }
+    const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(rows.map((r) => [r.kind, r.via, r.tokens > 0])).toEqual([["fix", "cli", true], ...Array.from({ length: 4 }, () => ["fix", "cli", false])]);
+  });
+
+  it("rejects a changed body without upgrading the original note", async () => {
+    const { home, io } = setup();
+    const note = createNote(home, { project: "demo", text: "Runtime choice\n\nUse Node because it ships here." });
+    const before = readFileSync(note.path, "utf8");
+    const result = await run(["note", "Runtime choice\n\nUse Bun instead.", "--tested"], io);
+    expect(result.out).toContain("not saved: " + note.id);
+    expect(result.out).toContain("different body");
+    expect(readFileSync(note.path, "utf8")).toBe(before);
+    await run(["note", "Runtime choice\nUse Node because it ships here.", "--tested"], io);
+    expect(loadNotes(home).notes[0]?.tested).toBe(true);
+  });
+
+  it("attributes CLI calls with session precedence and does not mislabel old rows", async () => {
+    const { home, io } = setup();
+    await run(["note", "A durable decision"], { ...io, env: { ...io.env, BRAIN_SESSION: "parent", CLAUDE_SESSION_ID: "fallback" } });
+    await run(["recall", "durable"], { ...io, env: { ...io.env, CLAUDE_SESSION_ID: "fallback" } });
+    logUse(home, { kind: "state", project: "demo", ms: 0, tokens: 1, via: "tool" });
+    logUse(home, { kind: "recall", project: "demo", ms: 0, tokens: 1, via: "hook" });
+    logUse(home, { kind: "note", project: "demo", ms: 0, tokens: 1, via: "mcp" });
+    logUse(home, { kind: "recall", project: "demo", ms: 0, tokens: 1 });
+    logUse(home, { kind: "card", project: "demo", ms: 0, tokens: 1, via: "hook" });
+    const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(rows.slice(0, 2).map((r) => [r.via, r.session])).toEqual([["cli", "parent"], ["cli", "fallback"]]);
+    expect((await run(["stats"], io)).out).toContain("tool use by surface: 1 tool · 2 cli · 1 hook · 1 mcp calls");
+  });
+
+  it("emits an agent block without needing an installed home", async () => {
+    const result = await run(["hook", "agents-md"], { env: {}, cwd: tmp() });
+    expect(result.code).toBe(0);
+    expect(result.out.split("\n").length).toBeLessThanOrEqual(6);
+    expect(result.out.split("\n").filter((line) => line.startsWith("Use ")).length).toBe(4);
+  });
+
+  it("Claude success completes capture and checkpoints edits, failure and last ask without replacing the plan", async () => {
+    const { home, cwd, io } = setup();
+    const transcript = join(home, "transcript.jsonl");
+    writeFileSync(transcript, JSON.stringify({ type: "user", message: { content: "Please repair startup" } }) + "\n" + JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "ignore output" }] } }) + "\n");
+    await run(["state", "Goal: ship. Next: verify."], io);
+    const planPath = join(home, "work", "demo.md");
+    const plan = readFileSync(planPath, "utf8");
+    const send = (p: Record<string, unknown>) => run(["hook", "claude-code"], { ...io, stdin: () => JSON.stringify({ cwd, session_id: "main", transcript_path: transcript, ...p }) });
+    await send({ hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "npm test" }, error: "Error: dependency missing" });
+    expect(scanEvents(home, [])).toEqual([]);
+    for (const tool_name of ["Edit", "Write", "MultiEdit"]) await send({ hook_event_name: "PostToolUse", tool_name, tool_input: { file_path: join(cwd, tool_name + ".ts") } });
+    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm ci && npm test" }, tool_response: { stdout: "passed" } });
+    expect(scanEvents(home, []).map((p) => [p.project, p.tested, p.errors])).toEqual([["demo", true, ["Error: dependency missing"]]]);
+    await send({ hook_event_name: "PreCompact", trigger: "auto" });
+    const auto = readWork(home, "demo")?.auto;
+    expect(auto).toContain("Edit.ts");
+    expect(auto).toContain("Write.ts");
+    expect(auto).toContain("MultiEdit.ts");
+    expect(auto).toContain("npm test → Error: dependency missing");
+    expect(auto).toContain("Please repair startup");
+    expect(readFileSync(planPath, "utf8")).toBe(plan);
+    const compact = await send({ hook_event_name: "SessionStart", source: "compact" });
+    expect(JSON.parse(compact.out).hookSpecificOutput.additionalContext).toContain("Next: verify");
+    await send({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: join(cwd, "final.ts") } });
+    await send({ hook_event_name: "SessionEnd", agent_type: "custom-main-agent" });
+    expect(readWork(home, "demo")?.auto).toContain("final.ts");
+  });
+
+  it("subagent hooks never create or overwrite project working state or contaminate parent observations", async () => {
+    const { home, cwd, io } = setup();
+    const send = (p: Record<string, unknown>) => run(["hook", "claude-code"], { ...io, stdin: () => JSON.stringify({ cwd, session_id: "parent", ...p }) });
+    await send({ hook_event_name: "PostToolUse", agent_id: "child", tool_name: "Edit", tool_input: { file_path: join(cwd, "child.ts") } });
+    for (const hook_event_name of ["SubagentStart", "SubagentStop", "SessionEnd", "PreCompact"]) {
+      expect(await send({ hook_event_name, agent_id: "child", agent_type: "Explore" })).toEqual({ code: 0, out: "{}", err: "" });
+    }
+    expect(readWork(home, "demo")).toBeNull();
+    await send({ hook_event_name: "SessionEnd" });
+    expect(readWork(home, "demo")).toBeNull();
+    await run(["state", "Goal: parent plan"], io);
+    const before = readWork(home, "demo");
+    await send({ hook_event_name: "PreCompact", agent_id: "child" });
+    expect(readWork(home, "demo")).toEqual(before);
   });
 });
 

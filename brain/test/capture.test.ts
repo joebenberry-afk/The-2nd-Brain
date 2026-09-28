@@ -1011,8 +1011,7 @@ describe("capture batch five regressions", () => {
     ["npm test", "npm test -- --run", true],
     ["git status --invalid", "git status --short", false],
     ["npx vitest run a.test.ts", "npm ci; npx vitest run a.test.ts b.test.ts", false],
-    ["node -e 'console.log(1)'", "node --no-warnings -e 'console.log(1)'", false],
-    ["python - <<'PY'\nprint('A')\nPY", "python -u - <<'PY'\nprint('A')\nPY", false],
+
   ])("keeps positional-prefix repairs: %s → %s", (failed, fixed, tested) => {
     const home = tmp();
     log(home, row({ command: failed, ok: false, error: "Error: original command failed" }) + row({ command: fixed }));
@@ -1082,17 +1081,9 @@ describe("capture batch five regressions", () => {
     expect(scanEvents(home, [])).toEqual([]);
   });
 
-  it("does not mistake a failed multiline command fragment for the fix", () => {
-    const home = tmp();
-    const failed = "python - <<'PY'\n\nprint('repairable')\nPY";
-    const fixed = "python -u - <<'PY'\n\nprint('repairable')\nPY";
-    log(home, row({ command: failed, ok: false, error: "Error: environment not ready" }) + row({ command: fixed }));
-    const proposal = scanEvents(home, [])[0]!;
-    const note = acceptProposal(home, proposal.id);
-    expect(renderFix(note)).toContain("python -u - <<'PY' print('repairable') PY works");
-    expect(renderFix(note)).not.toContain("Brain: print('repairable') PY works");
-    const legacy = { ...note, body: "Legacy repair\n\npython - <<'PY'\n\nraise RuntimeError('bad')\nPY\n\npython repaired.py\n\nError: bad input" };
-    expect(renderFix(legacy)).not.toContain("raise RuntimeError('bad') PY works");
+  it("does not mistake a legacy failed multiline fragment for the fix", () => {
+    const note = createNote(tmp(), { project: "global", source: "capture", text: "Legacy repair\n\npython - <<'PY'\n\nraise RuntimeError('bad')\nPY\n\npython repaired.py\n\nError: bad input" });
+    expect(renderFix(note)).not.toContain("raise RuntimeError('bad') PY works");
   });
 
   const row = (fields: Partial<ToolEvent> = {}) => JSON.stringify({ v: 1, at: new Date().toISOString(), session: "s", cwd: "", tool: "bash", ok: true, ...fields }) + "\n";
@@ -1250,6 +1241,35 @@ describe("capture batch five regressions", () => {
     log(home, row({ cwd: a, ok: false, error: "Error: known failure" }) + row({ cwd: b, ok: false, error: "Error: known failure" }) + row({ cwd: a, ok: false, error: "Error: frequent failure" }).repeat(3) + row({ cwd: a, ok: false, error: "Error: rare failure" }) + row({ cwd: a, ok: false, error: "Error: old failure", at: "2000-01-01T00:00:00Z" }) + row({ cwd: a, ok: true, error: "Error: not a failure" }));
     expect(capture.unmatchedErrors(home, [known], { days: 7, project: "a" })).toEqual([{ signature: "Error: frequent failure", count: 3 }, { signature: "Error: rare failure", count: 1 }]);
     expect(capture.unmatchedErrors(home, [known], { project: "b" })).toEqual([{ signature: "Error: known failure", count: 1 }]);
+  });
+});
+
+describe("capture ignores ephemeral experiments", () => {
+  it.each([
+    'C:/Python314/python.exe -B -c "print(1)"',
+    'node -e "console.log(1)"',
+    'bun --eval="console.log(1)"',
+    "python - <<'PY'\nprint(1)\nPY",
+    'python cache/tmp/bughunt-synthetic/review.py',
+    'python "C:\\Users\\example\\AppData\\Local\\Temp\\review.py"',
+    'python %TEMP%/review.py',
+    'python .cache/review.py',
+    'python temp/review.py',
+    'python -B -m pytest tests/test_sample.py --basetemp=cache/tmp/synthetic-before',
+  ])("skips scratch retries: %s", (command) => {
+    const home = tmp();
+    appendEvent(home, "ephemeral", home, { tool: "bash", command, ok: false, error: "Error: synthetic experiment failed" });
+    appendEvent(home, "ephemeral", home, { tool: "bash", command: "npm ci && " + command, ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("rejects ephemeral preparation even when the final retry is durable", () => {
+    const home = tmp();
+    appendEvent(home, "inline", home, { tool: "bash", command: "npm test", ok: false, error: "Error: dependency missing" });
+    appendEvent(home, "inline", home, { tool: "bash", command: 'node -e "prepare()" && npm test', ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+    appendEvent(home, "inline", home, { tool: "bash", command: "npm ci && npm test", ok: true });
+    expect(scanEvents(home, []).map((p) => [p.tested, p.errors])).toEqual([[true, ["Error: dependency missing"]]]);
   });
 });
 

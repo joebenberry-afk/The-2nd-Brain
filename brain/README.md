@@ -47,8 +47,9 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
 
 1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message
    (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt, matching
-   kits); later prompts add nothing. Subagents get a card without the working state and cannot
-   overwrite it with `brain_state`. `brain stats` shows one `card` per session, main and sub apart.
+   kits); later prompts add nothing. Subagents inherit only the parent plan’s Watch out field
+   (≤40 tokens), never Goal/Next/Done, auto observations or kits, and cannot overwrite state.
+   Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
 2. **Working state.** Ask the agent to set the plan (`brain_state`). Then force a compaction
    (`/compact`) and ask "where are we?": the answer should give goal and next step without
    re-reading files. Compaction re-injects only the working state (≤ 150 tokens: Goal and Next
@@ -61,27 +62,56 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    commands that later succeeded as retries (same program and arguments, flags or a preparatory
    step added — `npm test` → `npm ci && npm test`), plus `Brain-Decision:` / `Brain-Gotcha:`
    commit trailers; `brain accept <id>` makes a note. A pair is `tested` only when the failed
-   command itself succeeded afterwards. Exploration (grep, ls, cat …) is never proposed.
-5. **Weekly.** `brain stats --days 7`: which moments fired and what they cost, main vs subagent
-   cards, recall hit rate, and the five most frequent errors no note fixes yet — write notes for
-   those. Anything never used for a week gets removed (plan rule 1).
+   command itself succeeded afterwards. Exploration (grep, ls, cat …), inline scripts/eval/
+   heredocs and commands targeting tmp/temp/cache paths are never proposed.
+5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
+   hit rate, and frequent errors without a fix. `tool use by surface:` counts recall/note/state
+   calls separately for OMP tools, CLI, hooks and MCP; old rows lacking attribution are excluded
+   from this split, not guessed to be OMP. Anything never used for a week gets removed (plan rule 1).
 
-## 3. Claude Code (optional)
+Tool descriptions and card footers say when to act: recall before exploring, choosing or retrying;
+notes for repo-invisible learning; state when goal/next changes. Subagent-written notes remain
+untested until a parent confirms them or runs `brain tested <id>`.
 
-In `~/.claude/settings.json` (or a project's `.claude/settings.json`):
+## 3. Other harnesses
+
+**Claude Code.** In `~/.claude/settings.json` (or a project’s `.claude/settings.json`):
 
 ```json
 {
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
-    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }]
+    "PostToolUse": [{ "matcher": "^(Bash|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
+    "PostToolUseFailure": [{ "matcher": "^(Bash|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
+    "PreCompact": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }]
   }
 }
 ```
 
-The hook fails open (`{}`, exit 0). After compaction Claude Code fires `SessionStart` with
-source `compact`; the hook then returns only the bounded working state. This checkout's own
-`.claude/settings.json` calls `bash brain/bin/brain`, which picks Node or Bun.
+The hook fails open (`{}`, exit 0). Successful and failed tools share the capture log, so a
+failed command followed by its successful repair can become a proposal. PreCompact and
+SessionEnd save edited files, the last failure, and the last user ask available in the last
+256 KiB of the transcript to local auto state; the agent-written plan is never replaced.
+After compaction, SessionStart source `compact` returns only the ≤150-token resume.
+Hooks with `agent_id`, SubagentStart and SubagentStop never write working state; child tool
+logs are separate from their parent’s. `agent_type` alone is also used by main sessions
+started with `--agent` and does not imply a child. Tool hooks do not spawn git.
+This checkout preserves its cloud setup hook and calls `bash brain/bin/brain` (Node or Bun).
+Payloads follow the [Claude Code hook reference](https://code.claude.com/docs/en/hooks).
+
+**Codex or any agent.** Run `brain hook agents-md` and copy its six-line managed block into
+the project’s AGENTS.md (or the harness’s equivalent instructions file). It explains when
+to use the CLI: recall before exploring unfamiliar ground, choosing tools/stacks or retrying;
+note what the repo cannot tell you; state when goal or next changes; fix after unexplained
+failures. `brain fix "<error>"` returns the same tested, scoped known fix as OMP (≤80 tokens),
+or prints nothing and exits 0 when none matches. Set `SECOND_BRAIN_HOME`; optional
+`BRAIN_SESSION` (preferred) or `CLAUDE_SESSION_ID` attributes CLI usage to the session.
+
+**MCP clients.** Launch `brain mcp` as a stdio server to expose the same three tool definitions
+as OMP: `brain_recall`, `brain_note` and `brain_state`. Launch in the workspace directory
+(or set `BRAIN_PROJECT`) and set `SECOND_BRAIN_HOME`. MCP has no subagent identity: the host
+must withhold `brain_state` from child agents to protect the parent’s working state.
 
 ## 4. Roll back
 
@@ -118,8 +148,16 @@ Clear PYTHONHOME before running python        ← the first line is the headline
 Why and how, in as much detail as helps.
 ```
 
+A duplicate headline with a different normalized body is refused without altering the original:
+choose a new headline, or retire the original first. Identical bodies can still upgrade metadata.
+Within the recall shortlist, notes whose file evidence is entirely missing sort after fresh hits
+and carry `(stale evidence)`; cards apply a -3 ranking penalty without hiding the note. A
+stat-validated per-process cache reuses unchanged parsed notes; Markdown remains the truth.
+
 Retiring keeps the file (`retired:`, `replaced_by:`); `brain retire <id> [--by <new id>]` writes
-both sides. A working state, `work/<project>.md`, is the agent's plan as free text under a
+both sides. Recall prefers a visible current replacement with a short retired-note reference;
+explicit note ids and `--history` still expose retired details. A working state, `work/<project>.md`,
+is the agent’s plan as free text under a
 one-line frontmatter (`at:`); an `## auto` section left by older versions is shown until the next
 `brain_state` drops it. A kit, `kits/<name>/SKILL.md`, is an Agent Skill (`name`, `description`,
 optional `tags`); `brain recall "kit <name>"` returns its path. Projects need nothing;
@@ -137,6 +175,9 @@ optional `tags`); `brain recall "kit <name>"` returns its path. Projects need no
 npm ci
 npx eslint src test && npx tsc --noEmit && npx vitest run
 ```
-
-`test/eval.test.ts` runs the frozen V3 recall cases against the committed `notes/`. Rules for
-changes: [the V4 plan](../docs/intake/2026-09-27-plan-v4-agent-experience.md) §3.2.
+`npm run test:unit` runs the no-subprocess test files for a fast inner loop. `npm test` runs
+both Vitest projects; `npm run check` adds lint and type checking. The full gate includes
+`test/eval.test.ts`, which runs the frozen V3 recall queries against the committed live `notes/`.
+`npm run perf` measures real-home read paths plus isolated synthetic 1,000/5,000-note corpora,
+using Node built-ins and recording aggregates in `state/perf.json` with previous-run deltas.
+Rules: [the V4 plan](../docs/intake/2026-09-27-plan-v4-agent-experience.md) §3.2.

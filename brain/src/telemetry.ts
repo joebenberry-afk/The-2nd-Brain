@@ -16,6 +16,7 @@ export interface Use {
   tokens: number;
   ms: number;
   session?: string;
+  via?: "tool" | "cli" | "hook" | "mcp";
   sub?: boolean;
   hits?: number;
 }
@@ -50,6 +51,7 @@ export interface Stats {
   recalls: { calls: number; measured: number; matched: number };
   /** Sessions that called brain_recall, brain_note or brain_state, of all sessions in that role. */
   toolUse: { main: { sessions: number; using: number }; sub: { sessions: number; using: number } };
+  toolCalls: Record<"tool" | "cli" | "hook" | "mcp", number>;
 }
 
 const TOOL_KINDS = new Set(["recall", "note", "state"]);
@@ -60,6 +62,7 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
   const byKind: Stats["byKind"] = Object.create(null);
   const cards = { main: 0, sub: 0 };
   const recalls = { calls: 0, measured: 0, matched: 0 };
+  const toolCalls = { tool: 0, cli: 0, hook: 0, mcp: 0 };
   const sessions = new Set<string>();
   const roles = new Map<string, { sub: boolean; using: boolean }>();
   let text = "";
@@ -72,7 +75,7 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
   }
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
-    let row: { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown } | null;
+    let row: { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown } | null;
     try {
       row = JSON.parse(line);
     } catch {
@@ -83,6 +86,7 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
     slot.count += 1;
     slot.tokens += typeof row.tokens === "number" ? row.tokens : 0;
     if (row.kind === "card") cards[row.sub === true ? "sub" : "main"] += 1;
+    if (TOOL_KINDS.has(row.kind) && (row.via === "tool" || row.via === "cli" || row.via === "hook" || row.via === "mcp")) toolCalls[row.via] += 1;
     if (row.kind === "recall") {
       recalls.calls += 1;
       if (typeof row.hits === "number" && Number.isInteger(row.hits) && row.hits >= 0) {
@@ -104,5 +108,5 @@ export function stats(home: string, days = 7, now: Date = new Date()): Stats {
     slot.sessions += 1;
     if (role.using) slot.using += 1;
   }
-  return { days, sessions: sessions.size, byKind, cards, recalls, toolUse };
+  return { days, sessions: sessions.size, byKind, cards, recalls, toolUse, toolCalls };
 }

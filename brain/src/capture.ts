@@ -257,6 +257,22 @@ function positionals(argv: string[]): string[] {
     /^(?:-e|-p|-c|--eval|--print|--command)$/.test(argv[index] ?? "") || /^<</.test(argv[index] ?? ""));
 }
 
+/** Throwaway scripts and scratch paths describe an experiment, not a reusable repair. */
+function ephemeralCommand(command: string): boolean {
+  if (command.includes("<<")) return true;
+  return commandSegments(command).some(({ argv }) => {
+    const identity = commandIdentity(argv);
+    if (identity.argv.some((arg) => /^--eval(?:=|$)/.test(arg) ||
+      (/^python[\d.]*$/.test(identity.program) && /^-c/.test(arg)) ||
+      (/^(?:node|bun)$/.test(identity.program) && /^-e/.test(arg)))) return true;
+    return identity.argv.slice(1).some((arg) => {
+      // Include --basetemp=cache/tmp/... as well as positional script paths.
+      const path = arg.replace(/^--?[\w-]+=/, "").replace(/\\/g, "/");
+      return /(?:^|\/)(?:tmp|temp|cache|\.cache|%TEMP%)(?:\/|$)/i.test(path);
+    });
+  });
+}
+
 /** A changed command is a candidate only while it still targets the failed operation. */
 function keepsCommand(failed: string, fixed: string): boolean {
   const original = commandIdentity(failed);
@@ -318,7 +334,7 @@ function touchesPrivate(event: Pick<ToolEvent, "cwd" | "command" | "path" | "err
 }
 
 /** JSON is not a ToolEvent until every consumed field has the expected type. */
-function parseEvent(line: string): ToolEvent | null {
+export function parseEvent(line: string): ToolEvent | null {
   try {
     const value = asRecord(JSON.parse(line));
     if (value.v !== 1 || typeof value.ok !== "boolean" ||
@@ -550,7 +566,7 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
 
       for (let i = 0; i < events.length; i++) {
         const failed = events[i];
-        if (!failed || failed.ok !== false || !failed.command || !failed.error || touchesPrivate(failed)) continue;
+        if (!failed || failed.ok !== false || !failed.command || !failed.error || touchesPrivate(failed) || ephemeralCommand(failed.command)) continue;
         // Two code cells are not a failed command and its fix, unless they are shell cells.
         if (CODE_TOOL.test(failed.tool) && !/^(%%(bash|sh|cmd|powershell|pwsh)\b|!)/.test(failed.command.trim())) continue;
         const identity = commandIdentity(failed.command);
@@ -560,7 +576,7 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
           const fixed = events[j];
           if (consumed.has(`events:${fileName}#${starts[j] ?? j}`) || !fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command || touchesPrivate(fixed)) continue;
-          if (normalizePath(fixed.cwd) !== normalizePath(failed.cwd)) continue;
+          if (normalizePath(fixed.cwd) !== normalizePath(failed.cwd) || ephemeralCommand(fixed.command)) continue;
           if (fixed.command === failed.command || !keepsCommand(failed.command, fixed.command)) continue;
           const retriesFailure = retriesCommand(failed.command, fixed.command);
           const failedCmd = scrub(failed.command).text.replace(/\s+/g, " ").trim();

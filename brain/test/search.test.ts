@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RELATIVE_FLOOR, STOPWORDS, answer, answerWithHits, recall, renderHit, tokens } from "../src/search.ts";
 import { displayLine, findSameHeadline, formatNote, parseNote, type Note } from "../src/notes.ts";
@@ -330,7 +333,7 @@ describe("recall and note boundaries", () => {
     const stored = [note("elsewhere", { project: "other", body: "quartz migration" })];
     expect(answer(stored, "quartz", { project })).toBe("no match here; 1 related in other projects (all: true)");
     expect(answer(stored, "quartz", { project, all: true })).toContain("quartz migration");
-    expect(answer(stored, "nonexistent", { project })).toBe("no match");
+    expect(answerWithHits(stored, "nonexistent", { project }).hits).toBe(0);
   });
 
   it("suggests widening when the only related answer is retired history", () => {
@@ -360,5 +363,76 @@ describe("recall and note boundaries", () => {
     expect(displayLine({ body: "alpha beta" }, 10)).toBe("alpha beta");
     expect(displayLine({ body: "𐐀𐐁𐐂𐐃" }, 3)).toBe("𐐀𐐁…");
     expect(displayLine({ body: "alpha" }, 0)).toBe("");
+  });
+});
+
+describe("evidence and replacement answers", () => {
+  const project = { id: "test", tags: [], root: null };
+
+  it("demotes stale evidence regardless of score without losing the BM25 shortlist", () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-evidence-"));
+    try {
+      writeFileSync(join(home, "current.ts"), "current source");
+      const corpus = [
+        note("stale", { body: "quartz", evidence: ["missing.ts"] }),
+        note("current", { body: "quartz migration uses staged updates", evidence: ["current.ts"] }),
+      ];
+      const hits = recall(corpus, "quartz", { project, home });
+      expect(hits.map((hit) => hit.note.id)).toEqual(["current", "stale"]);
+      expect(hits[1]!.score).toBeGreaterThan(hits[0]!.score);
+      const lines = answer(corpus, "quartz", { project, home }).split("\n");
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).not.toContain("(stale evidence)");
+      expect(lines[1]).toContain("(stale evidence)");
+      const only = answer([corpus[0]!], "quartz", { project, home });
+      expect(only).toContain("stale [note] quartz (stale evidence)");
+      const bounded = renderHit({ note: note("long", { body: "quartz " + "detail ".repeat(100) }), score: 1, matched: [], stale: true });
+      expect(bounded.length).toBeLessThanOrEqual(240);
+      expect(bounded).toContain("(stale evidence)");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("answers with an active replacement then a tombstone, even when the replacement does not match", () => {
+    const corpus = [
+      note("old", { body: "Obsolete deployment recipe\nRun destructive legacy command", retired: "2026-09-01", replacedBy: "middle" }),
+      note("middle", { body: "Intermediate policy", retired: "2026-09-02", replacedBy: "current" }),
+      note("current", { body: "Use the reviewed release job\nCheck the staging report first" }),
+    ];
+    const result = answerWithHits(corpus, "obsolete deployment recipe", { project });
+    const lines = result.text.split("\n");
+    expect(result.hits).toBe(2);
+    expect(lines[0]).toContain("current [note] Use the reviewed release job");
+    expect(lines[1]).toContain("old [note] Obsolete deployment recipe (retired, replaced by current)");
+    expect(result.text).not.toContain("destructive legacy command");
+    expect(answer(corpus, "obsolete deployment recipe", { project, limit: 1 }).split("\n")).toEqual([lines[0]]);
+    expect(answer(corpus, "old", { project })).toContain("Run destructive legacy command");
+    expect(answer(corpus, "obsolete deployment recipe", { project, history: true })).toContain("Run destructive legacy command");
+  });
+
+  it.each(["missing", "cycle", "invisible"])("does not follow a %s replacement into an invalid answer", (kind) => {
+    const old = note("old", { body: "Obsolete deployment recipe", retired: "2026-09-01", replacedBy: "next" });
+    const next = note("next", { body: "Secret replacement instructions", project: kind === "invisible" ? "other" : "test", ...(kind === "cycle" ? { retired: "2026-09-02", replacedBy: "old" } : {}) });
+    const corpus = kind === "missing" ? [old] : [old, next];
+    const result = answerWithHits(corpus, "obsolete deployment recipe", { project });
+    expect(result.hits).toBe(1);
+    expect(result.text).toContain("old [note]");
+    expect(result.text).not.toContain("Secret replacement instructions");
+    if (kind === "invisible") expect(answer(corpus, "obsolete deployment recipe", { project, all: true }).split("\n")[0]).toContain("next [note]");
+  });
+
+  it("caps ordinary search summaries at three lines even with a larger requested limit", () => {
+    const corpus = Array.from({ length: 10 }, (_, i) => note("n-" + i, { body: "quartz migration" }));
+    expect(answerWithHits(corpus, "quartz", { project, limit: 10 }).hits).toBe(3);
+    expect(answer(corpus, "quartz", { project, limit: 10 }).split("\n")).toHaveLength(3);
+  });
+
+  it("gives an actionable one-line no-match hint without naming a host tool", () => {
+    const result = answerWithHits([], "unlearned recipe", { project });
+    expect(result.hits).toBe(0);
+    expect(result.text.split("\n")).toHaveLength(1);
+    expect(result.text).toMatch(/note.*learn/i);
+    expect(result.text).not.toContain("brain_note");
   });
 });

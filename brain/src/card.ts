@@ -3,11 +3,11 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pendingCount } from "./capture.ts";
 import { kitsFor, loadKits, type Kit } from "./kits.ts";
-import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
+import { displayLine, firstLine, GLOBAL, staleEvidence, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { recall } from "./search.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
-import { readWork, resumeText } from "./work.ts";
+import { planFit, readWork, resumeText } from "./work.ts";
 
 export const CARD_BUDGET = 400;
 export const CARD_NOTES = 5;
@@ -39,11 +39,12 @@ export function cardCandidates(notes: Note[], project: Project): Note[] {
  * Relevance is scored over the candidates alone: cheaper than the whole corpus, and notes the
  * card can never show cannot take the top-10 relevance slots.
  */
-export function rankForCard(candidates: Note[], project: Project, workText: string, now: Date, prompt = ""): Note[] {
+export function rankForCard(candidates: Note[], project: Project, workText: string, now: Date, home: string, prompt = ""): Note[] {
+  const roots = [project.root, home].filter((root): root is string => !!root);
   const relevance = new Map<string, number>();
   if (workText.trim()) {
     const hits = recall(candidates, workText, { project, limit: 10 });
-    const top = hits[0]?.score ?? 0;
+    const top = hits.reduce((max, hit) => Math.max(max, hit.score), 0);
     for (const hit of hits) if (top > 0) relevance.set(hit.note.id, hit.score / top);
   }
   const promptScores = new Map(prompt.trim()
@@ -52,7 +53,7 @@ export function rankForCard(candidates: Note[], project: Project, workText: stri
   const score = (n: Note): number => {
     const age = (now.getTime() - Date.parse(n.at)) / DAY_MS;
     const recent = age <= 14 ? 2 : age <= 60 ? 1 : 0;
-    return (n.tested ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
+    return (n.tested ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent - (staleEvidence(n, roots) ? 3 : 0) + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
   };
   const scored = candidates.map((n) => ({ n, s: score(n), p: promptScores.get(n.id) ?? 0 }));
   scored.sort((a, b) => b.p - a.p || b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));
@@ -111,22 +112,27 @@ function kitsLine(kits: Kit[], tools: boolean): string {
 }
 
 function footer(tools: boolean, subagent: boolean): string {
-  const base = tools ? "Memory: brain_recall(query) · brain_note(text)" : 'Memory: `brain recall "<query>"` · `brain note "<text>"`';
-  return base + (subagent ? "" : tools ? " · brain_state(goal/done/next)" : ' · `brain state "<goal/done/next>"`');
+  const recall = tools ? "brain_recall(query)" : '`brain recall "<query>"`';
+  const note = tools ? "brain_note(text)" : '`brain note "<text>"`';
+  const state = tools ? "brain_state(text)" : '`brain state "<text>"`';
+  return `${recall} before explore/choose/retry · ${note} for what code can't tell` + (subagent ? "" : ` · ${state} when goal/next changes`);
 }
 
 /** Complete card including header and tail fits CARD_BUDGET; nothing useful means no injection. */
 export function renderCard(home: string, notes: Note[], project: Project, opts: CardOptions = {}): string {
   const now = opts.now ?? new Date();
-  const work = opts.subagent ? null : readWork(home, project.id);
-  const resume = resumeText(work);
+  const work = readWork(home, project.id);
+  // Parse labels before extracting warnings so parent goals, next steps and Done never leak.
+  const warning = opts.subagent && work?.text
+    ? planFit(work.text, work.text.length).text.split(/(?=^Done:)/m)[0]?.match(/^Watch out: [\s\S]*/m)?.[0] ?? "" : "";
+  const resume = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : resumeText(work);
   const candidates = cardCandidates(notes, project);
-  const ranked = rankForCard(candidates, project, work?.text ?? "", now, opts.prompt);
+  const ranked = rankForCard(candidates, project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
   const allKits = opts.subagent ? [] : loadKits(home);
   const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
   const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);
   const pending = pendingCount(home, project.id);
-  const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — memory from earlier sessions; the repo wins on conflict`;
+  const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — what prior sessions learned; the repo wins on conflict`;
   const tail = [kits, pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
   const lines = [head];
   const room = (extra: string[] = []): number => CARD_BUDGET * 4 - [...lines, ...extra, ...tail].join("\n").length - 1;
