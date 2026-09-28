@@ -268,6 +268,21 @@ Owner decisions: a resident ~40-token system-prompt line only if fewer than 20% 
 use the tools after ~10 sessions (stop-loss). Prompt-time push and seeding the plan from OMP's
 compaction summary stay deferred; the round-3 review recommends against both.
 
+Agent benchmark (2026-09-28). Where agent tokens go (24 h, all sessions, $483): 611 M
+cache-read tokens vs 2.6 M output; per GPT request ~26 k tool-schema tokens (`eval` ~17.5 k,
+11 never-called `mcp__jev_*` ~4.8 k) and ~3.8 k system prompt (skills list 1.1 k). Cost is
+turns × context, not prose, so output compression (caveman-style) targets the smallest slice.
+`brain/scripts/agentbench.ts` runs fixed tasks with headless GPT agents (Brain off / on /
+experiments via `BRAIN_EXPERIMENT`, host settings via `PI_CONFIG_FILES`), scores them from their
+session files and ranks by cost against the same-batch control (batches drift ±5–10 %).
+Shipped: the `Work lean:` card line (−10 % tokens, −9 % cost over 28 runs each); Brain on vs
+off −19 % tokens, −29 % cost, −1.9 turns (16 runs each, all pass). Rejected, with numbers so they
+are not retried blind: duplicate-result pointers +18 % tokens (agents re-read on purpose before
+edits); `read.defaultLimit` 150 +4 % tokens; grep context 0/1 +17 %; a longer lean wording −5 %
+tokens but +1 % cost; dropping never-used tools per session −20 % tokens but +25 % cost and
+one failure — a changed tool set loses the shared prompt-cache prefix (uncached input 13.5 k →
+31 k per run). Lesson: judge by cost; keep the request prefix stable.
+
 ## 7. Owner decisions needed before P1
 
 | # | Question | Recommendation |

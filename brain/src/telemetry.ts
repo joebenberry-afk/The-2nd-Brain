@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./util.ts";
 
-export type UseKind = "card" | "resume" | "fix" | "recall" | "note" | "state" | "nudge" | "error" | "dedupe";
+export type UseKind = "card" | "resume" | "fix" | "recall" | "note" | "state" | "nudge" | "error";
 
 export interface Use {
   kind: UseKind;

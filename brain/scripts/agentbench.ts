@@ -179,6 +179,8 @@ const conditions = values.conditions!.split(",").map((c) => c.trim()).filter(Boo
 const taskNames = values.tasks!.split(",").map((t) => t.trim()).filter((t) => TASKS[t]);
 const reps = Number(values.reps);
 const scratch = mkdtempSync(join(tmpdir(), "agentbench-"));
+/** Session files stay (local, never committed) so the next experiment can study where turns went. */
+const kept = join(HOME, "state", "agentbench", new Date().toISOString().replace(/[:.]/g, "-"));
 
 /** One Brain home per condition: the real notes, kits, projects and telemetry, nothing shared. */
 const homes = new Map<string, string>();
@@ -198,7 +200,7 @@ function runOne(run: Run): Promise<Record<string, unknown>> {
     mkdirSync(join(ws, path, ".."), { recursive: true });
     writeFileSync(join(ws, path), text);
   }
-  const sessions = join(scratch, "sessions", id);
+  const sessions = join(kept, id);
   mkdirSync(sessions, { recursive: true });
   const [mode, ...parts] = run.condition.split("+");
   const experiments = parts.filter((part) => !part.startsWith("@"));
@@ -259,18 +261,23 @@ type Row = { at: string; condition: string; taskSet: string; model: string; ok: 
 const summarize = (rs: Row[]) => {
   const n = rs.length || 1;
   const mean = (f: (r: Row) => number) => rs.reduce((s, r) => s + f(r), 0) / n;
-  return { runs: rs.length, pass: rs.filter((r) => r.ok).length, cost: mean((r) => r.cost), turns: mean((r) => r.turns), tokens: mean((r) => r.input + r.cacheRead + r.cacheWrite + r.output), output: mean((r) => r.output), toolResult: mean((r) => r.toolResultTokens) };
+  return { runs: rs.length, pass: rs.filter((r) => r.ok).length, cost: mean((r) => r.cost), turns: mean((r) => r.turns), tokens: mean((r) => r.input + r.cacheRead + r.cacheWrite + r.output), uncached: mean((r) => r.input), output: mean((r) => r.output), toolResult: mean((r) => r.toolResultTokens) };
 };
 const history: Row[] = readFileSync(RESULTS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 console.log(`\nagentbench ${at} · ${values.model} · tasks ${taskSet} · ${reps} reps${values.label ? ` · ${values.label}` : ""}`);
-console.log("condition            pass   $/run   turns   tokens/run   output   tool-result   vs best earlier");
+// Batches drift ±5-10% (time of day, provider load): the same-batch control is the fair baseline.
+const control = summarize(rows.filter((r) => r.condition === conditions[0]) as unknown as Row[]);
+const pct = (a: number, b: number): string => `${a <= b ? "" : "+"}${Math.round((100 * (a - b)) / b)}%`;
+console.log(`condition            pass   $/run   turns   tokens/run   uncached   output   tool-result   vs ${conditions[0]} (tokens, $)   vs best earlier ($)`);
 for (const condition of conditions) {
   const now = summarize(rows.filter((r) => r.condition === condition) as unknown as Row[]);
   const earlier = new Map<string, Row[]>();
   for (const r of history) if (r.at !== at && r.taskSet === taskSet && r.model === values.model && r.condition === condition) earlier.set(r.at, [...(earlier.get(r.at) ?? []), r]);
-  const best = [...earlier.values()].map(summarize).filter((s) => s.pass === s.runs).sort((a, b) => a.tokens - b.tokens)[0];
-  const vs = best ? `${now.tokens < best.tokens && now.pass === now.runs ? "BEAT" : "not beaten"} (${Math.round(best.tokens)} tokens, $${best.cost.toFixed(3)})` : "first run";
-  console.log(`${condition.padEnd(20)} ${`${now.pass}/${now.runs}`.padStart(4)}  ${now.cost.toFixed(3).padStart(6)}  ${now.turns.toFixed(1).padStart(6)}  ${Math.round(now.tokens).toString().padStart(11)}  ${Math.round(now.output).toString().padStart(7)}  ${Math.round(now.toolResult).toString().padStart(12)}   ${vs}`);
+  const best = [...earlier.values()].map(summarize).filter((s) => s.pass === s.runs).sort((a, b) => a.cost - b.cost)[0];
+  // Cost, not tokens: uncached input costs ~10x a cache read, so fewer tokens can cost more.
+  const vs = best ? `${now.cost < best.cost && now.pass === now.runs ? "BEAT" : "not beaten"} (${best.cost.toFixed(3)}, ${Math.round(best.tokens)} tokens)` : "first run";
+  const rel = condition === conditions[0] ? "control" : `${pct(now.tokens, control.tokens)}, ${pct(now.cost, control.cost)}`;
+  console.log(`${condition.padEnd(20)} ${`${now.pass}/${now.runs}`.padStart(4)}  ${now.cost.toFixed(3).padStart(6)}  ${now.turns.toFixed(1).padStart(6)}  ${Math.round(now.tokens).toString().padStart(11)}  ${Math.round(now.uncached).toString().padStart(9)}  ${Math.round(now.output).toString().padStart(7)}  ${Math.round(now.toolResult).toString().padStart(12)}   ${rel.padEnd(22)}  ${vs}`);
 }
-console.log(`raw rows: ${RESULTS}`);
+console.log(`raw rows: ${RESULTS} · sessions: ${kept}`);
 rmSync(scratch, { recursive: true, force: true });

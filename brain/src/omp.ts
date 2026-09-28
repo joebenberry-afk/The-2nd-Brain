@@ -4,7 +4,6 @@
  * cards after compaction, logs tool results, tracks edited paths and failures, and provides
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
-import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadNotes } from "./notes.ts";
 import { resolveProject } from "./project.ts";
@@ -22,10 +21,6 @@ const STOP_NUDGE_TOOLS = "Brain: before you stop, save what the next session nee
 const STOP_NUDGE_CLI = STOP_NUDGE_TOOLS.replace("brain_state(text)", "`brain state \"<text>\"`").replace("brain_note(text)", "`brain note \"<text>\"`");
 /** A shell `brain note …` / `brain state …` (installed shim or bin/brain.mjs) is a Brain write too. */
 const CLI_WRITE = /(?:^|[\s;&|(])(?:\S*[\\/])?brain(?:\.mjs|\.cmd)?\s+(?:--\S+\s+(?:\S+\s+)?)*(?:note|state)\s+\S/;
-/** Tools whose whole output is the answer: an identical repeat adds nothing the model lacks. */
-const DEDUPE_TOOLS = new Set(["read", "grep", "glob", "find"]);
-/** Below ~100 tokens a pointer saves too little to be worth the indirection. */
-const DEDUPE_MIN_CHARS = 400;
 
 export interface HostLike {
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
@@ -55,10 +50,6 @@ interface SessionState {
   nudged?: boolean;
   /** Messages in the last context this session sent; a drop means earlier text may be gone. */
   contextLength?: number;
-  /** Experiment "dedupe": large tool results by content hash → the call that produced them. */
-  results?: Map<string, string>;
-  /** Experiment "dedupe": calls whose large result was in the last context sent to the model. */
-  live?: Set<string>;
 }
 
 function asObject(value: unknown): Json | undefined {
@@ -219,7 +210,6 @@ export function displayPath(path: string, root: string | null, cwd: string): str
 }
 
 export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = process.env): void {
-  const experiments = new Set((env.BRAIN_EXPERIMENT ?? "").split(",").map((name) => name.trim()).filter(Boolean));
   // BRAIN=off: the host runs exactly as without the Brain (the benchmark's baseline, or a quick
   // way to rule the Brain out when something misbehaves).
   const home = env.BRAIN === "off" ? undefined : findHome(undefined, env);
@@ -371,17 +361,6 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // earlier: the next matching failure gets the full text again, not a dangling pointer.
       if (messages.length < (state.contextLength ?? 0)) state.fixed = undefined;
       state.contextLength = messages.length;
-      // Which large tool results the model still has, so a repeat can point at one safely.
-      if (experiments.has("dedupe")) {
-        const live = new Set<string>();
-        for (const m of messages) {
-          const msg = asObject(m);
-          if (msg?.role !== "toolResult" || typeof msg.toolCallId !== "string" || !Array.isArray(msg.content)) continue;
-          if (msg.content.reduce((n: number, c) => n + (typeof asObject(c)?.text === "string" ? String(asObject(c)?.text).length : 0), 0) >= DEDUPE_MIN_CHARS) live.add(msg.toolCallId);
-        }
-        state.live = live;
-      }
-
       // Only insert if we have a resume card
       if (!state.resume) return undefined;
 
@@ -549,24 +528,6 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const resultContent = [...contentArray, { type: "text", text: `\n${fixText}` }];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: fix.id });
           return { content: resultContent };
-        }
-      }
-
-      // Experiment "dedupe": a result identical to one the model still has is a pointer, not a
-      // second copy re-read on every later turn. Only for tools whose output is the whole answer.
-      const callId = eventObj?.toolCallId;
-      if (experiments.has("dedupe") && fields.ok && typeof callId === "string" && typeof toolName === "string" && DEDUPE_TOOLS.has(toolName) && Array.isArray(content)) {
-        const text = content.map((c) => (typeof asObject(c)?.text === "string" ? String(asObject(c)?.text) : "")).join("\n");
-        if (text.length >= DEDUPE_MIN_CHARS && content.every((c) => asObject(c)?.type === "text")) {
-          const hash = createHash("sha1").update(`${toolName}\0${text}`).digest("base64");
-          const results = (state.results ??= new Map());
-          const earlier = results.get(hash);
-          if (earlier && state.live?.has(earlier)) {
-            const pointer = `Brain: identical to an earlier ${toolName} result you still have above (unchanged since); not repeated.`;
-            logUse(home, { kind: "dedupe", project: resolveProject(home, cwd, env).id, tokens: estimateTokens(text) - estimateTokens(pointer), ms: performance.now() - started, session: key, sub: isSubagent(ctx) });
-            return { content: [{ type: "text", text: pointer }] };
-          }
-          results.set(hash, callId);
         }
       }
 

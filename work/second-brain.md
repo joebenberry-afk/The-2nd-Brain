@@ -1,5 +1,5 @@
 ---
-at: 2026-09-28T04:11:28Z
+at: 2026-09-28T05:18:29Z
 ---
 
-Goal: agent's best friend, host-neutral. Next: watch `brain stats` "fixes fired" + card "Often hit lately" retire itself; owner clears 6 old proposals via brain review. Watch out: never script git stash push/pop (owner stashes). Done: 01019ef.
+Goal: token/turn-efficient agents via measured Brain changes. Next: read round 6 (slim), ship if it beats `on`; then probe eval schema (~17.5k/request) and skills block (1.1k). Watch out: don't edit brain/src during agentbench runs (runs load src). Done: agentbench; lean shipped (-10% tok).
