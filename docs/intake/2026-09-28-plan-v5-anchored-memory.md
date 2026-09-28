@@ -216,3 +216,8 @@ user's task text adds exposure for no measured gain. Not shipped.
 **What limits recall now** is not the judge but coverage: of 13 frozen misses, most have their
 relevant note scoring 0.4–0.7 on a keyword query. Next lever to test: ask agents (tool
 description) for a one-sentence question instead of a keyword list, measured by agentbench.
+
+Miss breakdown at 0.78 (first rerun): 18 labelled-relevant misses; 11 never reach the lexical
+answer and 7 are shown but judged below 0.78. Of the 11, only one (H04, 0.84) would pass the judge
+if the whole top-10 were judged; the rest score 0.14–0.74 on their keyword query. Widening the
+shortlist therefore buys one answer; the query text itself is the ceiling.
