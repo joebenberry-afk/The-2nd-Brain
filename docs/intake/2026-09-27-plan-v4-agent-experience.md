@@ -2,7 +2,7 @@
 date: 2026-09-27
 type: plan
 authority: owner-approved
-status: accepted 2026-09-27 ("I support all your decisions"); P0–P5 in progress
+status: accepted 2026-09-27 ("I support all your decisions"); P0–P5 criteria met 2026-09-28 (§6.1); P6 sign-off pending a week of use
 scope: v4-overhaul
 supersedes: 2026-09-24-plan-v3-agent-native-redesign.md (direction), all earlier plans (history)
 superseded-by: none
@@ -217,17 +217,25 @@ Each phase ends with something felt in a session on the owner's machine, not wit
 Order is fixed for P0–P2; P3–P5 can interleave with daily use. Nothing in P1–P5 touches the
 installed V3/V2 runtime until the installer runs in P2, and that installer is reversible.
 
-### 6.1 Status (2026-09-27, cloud-verified; live OMP runs are the owner's)
+### 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine)
 
 | Phase | State | Evidence |
 |---|---|---|
 | P0 | done, except the `v2-archive` tag (moved to P6) | plan accepted; decisions in §7 |
 | P1 | done | 120 notes converted, 0 errors; recall = V3 exactly (dev 13/15, held-out 7/8, `test/eval.test.ts`), 4 ms/query; card 169 tokens in ~6 ms |
-| P2 | **live on OMP 18.3.5** (2026-09-27: card delivered, tools mounted, telemetry rows) | `omp.ts`: card on turn 1, bounded resume after the last `compactionSummary` of every call after compaction, tools with the host's TypeBox shim and read/write approval tiers; simulated session in `test/omp.test.ts`. A live `/compact` producing a `resume` row is still to be observed |
-| P3 | built | capture → review → accept round trip; known fix ≤ 80 tokens on a failed tool result |
-| P4 | built, first kits written | `kits/omp-extension`, `kits/node-ts-cli`; card lists kits (all of them on a new project) |
-| P5 | built | git sync (private excluded by pathspec; slashed branches); `brain hook claude-code` |
-| P6 | kill list executed early on owner's call (2026-09-27, branch `brain/v4-baseline`); `v2-archive` tagged locally | tree is V4 only; `docs/history/pre-v4-outline.md` records what was removed |
+| P2 | **met** | `brain/scripts/compactbench.ts` (headless OMP RPC, real soft compaction): card on turn 1, agent-written goal and next recalled after compaction 10/10, resume 57 tokens. Ablation (resume removed from the context, 10 + 10 interleaved, `p2-ablation-head-28f537a`): also 10/10, because OMP's own summary kept both fields every time; the resume's benefit beyond the host summary is undemonstrated in short sessions (V5 §2) |
+| P3 | **met** | a live failed→succeeded pair reached `brain review` (`p-e8f18b11d5`); it was noise (the code was edited in between), which `6238a88` now refuses; known fix ≤ 80 tokens on a failed tool result, fired 49 times in a week |
+| P4 | **met, narrowly** | agentbench `scaffold` (empty dir → Node TS CLI with a passing test), same-batch 6 + 6 after kit recall returned the kit body (`p4-kit-body`): to first pass −2.2 % tokens, −3.3 % tool calls, −25 % cost, 6/6 both; full task −16 % tokens, −28 % cost. The earlier batch without the body failed (+8.8 % tokens). Six runs: not robust |
+| P5 | **met** | two clones + a local bare remote: notes and working state exchanged, private note never left machine A, concurrent edits lost nothing (newer state wins, older kept in history); Claude Code SessionStart hook delivered the card live (`hook_response` exit 0); the model's reply was blocked by an expired Claude login |
+| P6 | kill list executed early on owner's call (2026-09-27, branch `brain/v4-baseline`); `v2-archive` tagged locally | tree is V4 only; `docs/history/pre-v4-outline.md` records what was removed. Waits for a week of daily use (from 2026-09-27) and the owner's go before the tag is pushed |
+
+Review round (2026-09-28, `6238a88`, `28f537a`): reproduced reviewer and security findings fixed
+with failing-first tests — capture after an edit, one-word error signatures, Git Bash `$TEMP`
+scratch, `--help` probes, proposal-id path escape, prototype CLI commands, compound credential
+flags, prose over-masking, credential tags, private notes in outgoing history. From the owner's
+live report: one card per session across an OMP restart, host plumbing and resolved failures out
+of the working state, word-boundary cuts, recall precision (37 logged agent queries: wrong answers
+~19 → 10, right answers unchanged at 6, V3 eval unchanged).
 
 Hardening pass (2026-09-27, "perfect it without a live test"): secrets masked on every write;
 recall by note id and a retired-answer history line; duplicate notes refused; tools registered

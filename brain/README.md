@@ -41,13 +41,17 @@ this machine resolves to a different id than its notes use (`brain card` in it s
 expected), add its `remote` or the id as an alias in `projects.json` — e.g. the SZ-tool notes
 live under `sztool`, which lists the SZ-Agent-Toolkit remote. `brain move <id> --to <project>`
 re-homes one note. A recall that finds nothing here but something elsewhere says so:
-`no match here; N related in other projects (--all)`.
+`no match here; N related in other projects (--all)`. Recall answers with silence rather than a
+weak match: two words of a longer query must match, the project's own name ("Absolute Laya …")
+does not count inside that project, and file names and versions (`LOOP.md`, `18.4.1`) match
+whole, not as "loop" or "update".
 
 ## 2. Verify in the first sessions
 
 1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message
    (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt, matching
-   kits); later prompts add nothing. Subagents inherit only the parent plan’s Watch out field
+   kits); later prompts add nothing, and a session resumed in a new OMP process (restart,
+   `/resume`) keeps the card it already holds until a compaction. Subagents inherit only the parent plan’s Watch out field
    (≤40 tokens), never Goal/Next/Done, auto observations or kits, and cannot overwrite state.
    Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
    A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
@@ -59,7 +63,8 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    (`/compact`) and ask "where are we?": the answer should give goal and next step without
    re-reading files. Compaction re-injects only the working state (≤ 150 tokens: Goal and Next
    first). Files edited, the last failure and the last ask are kept locally in
-   `state/work/<project>.auto.md`, never synced.
+   `state/work/<project>.auto.md`, never synced. A failure clears once the same command succeeds;
+   host plumbing (an aborted `wait`, a cancelled job) is never recorded.
 3. **Known fix.** Run something that fails with an error a tested note names — e.g. an OMP edit
    without a `[path#tag]` header (`notes/global/` holds fixes taken from logged OMP failures): the
    failed result ends with `Brain: … [id]` on its own line. The same fix again in the same context
@@ -68,9 +73,11 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    commands that later succeeded as retries (same program and arguments, flags or a preparatory
    step added — `npm test` → `npm ci && npm test`), plus `Brain-Decision:` / `Brain-Gotcha:`
    commit trailers; `brain accept <id>` makes a note. A pair is `tested` only when the failed
-   command itself succeeded afterwards. Exploration (grep, ls, cat …), inline scripts and
-   heredocs (`python -c`, `node -e`, `<<EOF` before the script) and scripts under OS temp roots or
-   a top-level `tmp/`, `temp/`, `cache/`, `.cache/` are never proposed.
+   command itself succeeded afterwards. Exploration (grep, ls, cat …), `--help` probes, inline
+   scripts and heredocs (`python -c`, `node -e`, `<<EOF` before the script) and scripts under OS
+   temp roots (including Git Bash `$TEMP`/`$TMP`) or a top-level `tmp/`, `temp/`, `cache/`,
+   `.cache/` are never proposed; nor is a success after an edit (the code was repaired, not the
+   command).
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
    hit rate, which fixes fired in how many sessions, errors the Brain swallowed to keep the host
    running (latest three), and frequent errors without a fix.
@@ -146,7 +153,10 @@ this checkout no longer contains.
 ## 5. The files (edit them by hand when you like)
 
 A note, `notes/<project>/<id>.md` (scope comes from the folder: a project, `global`, or
-`<project>/private/` which never syncs):
+`<project>/private/` which never syncs: `brain sync` refuses to push if any outgoing commit holds
+a private note). Credentials in notes, working state and events are masked on every write
+(`--db-password x` included; prose such as `Unexpected token: identifier` is left alone), and a
+tag that carries one is refused:
 
 ```markdown
 ---
@@ -180,7 +190,7 @@ explicit note ids and `--history` still expose retired details. A working state,
 is the agent’s plan as free text under a
 one-line frontmatter (`at:`); an `## auto` section left by older versions is shown until the next
 `brain_state` drops it. A kit, `kits/<name>/SKILL.md`, is an Agent Skill (`name`, `description`,
-optional `tags`); `brain recall "kit <name>"` returns its path. Projects need nothing;
+optional `tags`); `brain recall "kit <name>"` returns its path and instructions (≤ 600 tokens). Projects need nothing;
 `projects.json` adds `paths`, `remote`, `aliases` and `tags`:
 
 ```json
