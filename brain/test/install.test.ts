@@ -33,7 +33,7 @@ beforeAll(() => {
 function ps(script: string, ...args: string[]): { status: number | null; out: string } {
   const r = spawnSync(PWSH as string, ["-NoLogo", "-NoProfile", "-File", join(home, "scripts", script), ...args], {
     encoding: "utf8", cwd: home,
-    env: { ...process.env, SECOND_BRAIN_HOME: home },
+    env: { ...process.env, TYPESAFE_API_KEY: undefined, SECOND_BRAIN_HOME: home },
   });
   return { status: r.status, out: r.stdout + r.stderr };
 }
@@ -47,7 +47,7 @@ const on: string[] = []; const tools: string[] = [];
 mod.default({ on: (e: string) => on.push(e), registerTool: (t: { name: string }) => tools.push(t.name) }, { SECOND_BRAIN_HOME: ${JSON.stringify(home)} });
 console.log(on.sort().join(",") + "|" + tools.join(","));`,
   );
-  return spawnSync(BUN as string, [probe], { encoding: "utf8" }).stdout.trim();
+  return spawnSync(BUN as string, [probe], { encoding: "utf8", env: { ...process.env, TYPESAFE_API_KEY: undefined } }).stdout.trim();
 }
 
 afterAll(() => {
@@ -91,7 +91,7 @@ describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
 describe("the sh shim for Git Bash and POSIX shells", () => {
   it("runs the CLI, and is committed executable with LF endings", () => {
     const shimSh = join(home, "brain", "bin", "brain");
-    const r = spawnSync("sh", [shimSh, "help"], { encoding: "utf8" });
+    const r = spawnSync("sh", [shimSh, "help"], { encoding: "utf8", env: { ...process.env, TYPESAFE_API_KEY: undefined } });
     expect(r.stdout).toContain("brain recall");
     expect(readFileSync(shimSh, "utf8")).not.toContain("\r");
     expect(spawnSync("git", ["-C", home, "ls-files", "-s", "brain/bin/brain"], { encoding: "utf8" }).stdout).toMatch(/^100755 /);

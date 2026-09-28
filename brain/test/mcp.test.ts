@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runMcp } from "../src/mcp.ts";
 import { loadNotes } from "../src/notes.ts";
 import { readWork } from "../src/work.ts";
@@ -24,7 +24,7 @@ interface Response {
   error?: { code: number };
 }
 
-async function exchange(messages: unknown[]) {
+async function exchange(messages: unknown[], env: NodeJS.ProcessEnv = {}) {
   const home = mkdtempSync(join(tmpdir(), "brain-mcp-"));
   homes.push(home);
   const input = new PassThrough();
@@ -32,11 +32,25 @@ async function exchange(messages: unknown[]) {
   let text = "";
   output.setEncoding("utf8");
   output.on("data", (chunk: string) => { text += chunk; });
-  const running = runMcp({ home, env: { BRAIN_PROJECT: "demo", BRAIN_SESSION: "mcp-session" }, input, output });
+  const running = runMcp({ home, env: { BRAIN_PROJECT: "demo", BRAIN_SESSION: "mcp-session", ...env }, input, output });
   input.end(messages.map(message => typeof message === "string" ? message : JSON.stringify(message)).join("\n") + "\n");
   const code = await running;
   return { home, code, replies: text.trim().split("\n").map(line => JSON.parse(line) as Response) };
 }
+
+it("MCP waits for relevance filtering and records the post-judge answer", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new globalThis.Response(JSON.stringify({ answers: { rel_0: { noul: 0.1 } } }))));
+  try {
+    const { home, replies } = await exchange([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "brain_note", arguments: { text: "Emerald deployment guidance" } } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "brain_recall", arguments: { query: "emerald deployment" } } },
+    ], { TYPESAFE_API_KEY: "synthetic-mcp" });
+    expect(replies[1]!.result).toEqual({ content: [{ type: "text", text: "no match; note it once you learn it" }], isError: false });
+    const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(rows[1]).toMatchObject({ query: "emerald deployment", ids: [], hits: 0, judged: true, dropped: 1, via: "mcp" });
+  } finally { vi.unstubAllGlobals(); }
+});
+
 
 it("negotiates, discovers tools, saves and recalls memory, and recovers after invalid requests", async () => {
   const { home, code, replies } = await exchange([
@@ -77,7 +91,7 @@ it("negotiates, discovers tools, saves and recalls memory, and recovers after in
   expect(replies[7]!.error?.code).toBe(-32601);
   expect(readWork(home, "demo")?.text).toBe("Goal: ship. Next: test plugin.");
   const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { kind: string; via: string; session: string });
-  expect(rows[1]).toMatchObject({ query: "compiler plugin", ids: [note.id] });
+  expect(rows[1]).toMatchObject({ query: "compiler plugin", ids: [note.id], judged: false, dropped: 0 });
   expect(rows.map(row => ({ kind: row.kind, via: row.via, session: row.session }))).toEqual([
     { kind: "note", via: "mcp", session: "mcp-session" },
     { kind: "recall", via: "mcp", session: "mcp-session" },

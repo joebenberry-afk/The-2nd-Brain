@@ -558,14 +558,14 @@ describe("batch 3: privacy and security", () => {
   it("a global fix the agent writes through the tool is not tested until the owner says so", async () => {
     const { default: secondBrain } = await import("../src/omp.ts");
     const home = tmp();
-    const tools: { name: string; execute: (...a: unknown[]) => { content: { text: string }[] } }[] = [];
+    const tools: { name: string; execute: (...a: unknown[]) => Promise<{ content: { text: string }[] }> }[] = [];
     secondBrain({ on: () => undefined, registerTool: (t) => void tools.push(t as never) }, { SECOND_BRAIN_HOME: home });
     const note = tools.find((t) => t.name === "brain_note");
     const ctx = { cwd: home, sessionManager: { getSessionId: () => "s" } };
-    const out = note?.execute("id", { text: "Toolchain repair: run the fix script", kind: "gotcha", error: "npm ERR! code E401", tested: true, global: true }, undefined, undefined, ctx);
+    const out = await note?.execute("id", { text: "Toolchain repair: run the fix script", kind: "gotcha", error: "npm ERR! code E401", tested: true, global: true }, undefined, undefined, ctx);
     expect(out?.content[0]?.text).toContain("untested");
     expect(loadNotes(home).notes[0]).toMatchObject({ project: "global", tested: false });
-    expect(note?.execute("id", { text: "Catch-all fix", error: "re:.", tested: true }, undefined, undefined, ctx).content[0]?.text).toMatch(/^brain: error pattern matches almost anything/);
+    expect((await note?.execute("id", { text: "Catch-all fix", error: "re:.", tested: true }, undefined, undefined, ctx))?.content[0]?.text).toMatch(/^brain: error pattern matches almost anything/);
   });
 
   it("masks Stripe, GitLab, npm and SendGrid tokens, private key blocks and vendor keys", () => {

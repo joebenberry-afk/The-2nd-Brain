@@ -50,6 +50,18 @@ for little. A keyword list (five or more words) must also be about the note's su
 words in the note's first line, or half of a short one. When no note answers, recall names the best heading of the project's plan docs
 instead: `docs/LOOP.md › Goals (line 12)`.
 
+**Recall relevance check.** With `TYPESAFE_API_KEY` set, CLI, OMP and MCP recall use TypeSafe
+Jev (`jev-latest`) to check the notes the lexical search would show. Notes scoring below **0.75**
+are dropped, without promoting unjudged runners-up; the usual doc-heading or no-match fallback
+still applies. Only the scrubbed query and note body text (whitespace collapsed, cut to 450
+characters, then scrubbed) are sent. Private notes are never sent and remain lexical, unjudged.
+A plan-doc heading answer (its heading and first paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.
+Set `BRAIN_JUDGE=off` to opt out; without a key, or on timeout, HTTP or parse errors, recall
+**fails open** to its unchanged lexical answer. Calls take about 300 ms, with a 5-second
+timeout. A small per-process cache avoids repeated calls for the same query, note id and text.
+The endpoint defaults to `https://api.typesafe.ai` (`TYPESAFE_BASE_URL` overrides it).
+Recall telemetry retains query/ids and adds `judged` (a successful check) and `dropped` (count).
+
 **Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`)
 lets the Brain read a project's own plan files: only headings and the text under one heading
 (YAML front matter is skipped),

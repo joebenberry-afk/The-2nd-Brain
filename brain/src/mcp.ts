@@ -96,8 +96,8 @@ export async function runMcp(opts: {
               if (!home) throw new Error("Brain home not found; set SECOND_BRAIN_HOME");
               const started = performance.now();
               // MCP has no child identity: the host must withhold brain_state from its children.
-              const used = tool.run(args, { home, cwd, env, sub: false, session });
-              if (used.kind) logUse(home, { kind: used.kind, project: used.project, tokens: estimateTokens(used.text), ms: performance.now() - started, session, sub: false, hits: used.hits, query: used.query, ids: used.ids, via: "mcp" });
+              const used = await tool.run(args, { home, cwd, env, sub: false, session });
+              if (used.kind) logUse(home, { kind: used.kind, project: used.project, tokens: estimateTokens(used.text), ms: performance.now() - started, session, sub: false, hits: used.hits, query: used.query, ids: used.ids, judged: used.judged, dropped: used.dropped, via: "mcp" });
               result = { content: [{ type: "text", text: used.text }], isError: false };
             } catch (error) {
               result = { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], isError: true };

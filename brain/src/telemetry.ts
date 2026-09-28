@@ -25,6 +25,8 @@ export interface Use {
   /** Scrubbed at the write boundary; recall answers themselves are never logged. */
   query?: string;
   ids?: string[];
+  judged?: boolean;
+  dropped?: number;
   outcome?: "helped" | "missed";
   /** The note behind a fix, so stats can say which fixes keep firing. */
   id?: string;

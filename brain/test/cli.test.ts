@@ -36,6 +36,21 @@ function setup(): { home: string; cwd: string; io: Partial<Io> } {
 }
 
 describe("brain cli", () => {
+  it("awaits the judge, logs dropped answers, and leaves the card lexical", async () => {
+    const { home, io } = setup();
+    const note = createNote(home, { project: "demo", text: "Obsidian deployment guidance" });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ answers: { rel_0: { noul: 0.1 } } })));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const judgedIo = { ...io, env: { ...io.env, TYPESAFE_API_KEY: "synthetic-cli" } };
+      expect((await run(["card"], judgedIo)).out).toContain(note.id);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(await run(["recall", "obsidian deployment"], judgedIo)).toMatchObject({ code: 0, out: "no match; note it once you learn it", err: "" });
+      const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(rows.find(row => row.kind === "recall")).toMatchObject({ query: "obsidian deployment", ids: [], hits: 0, judged: true, dropped: 1, via: "cli" });
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("delivers cards, fixes and auto-save even when pending cleanup is locked", async () => {
     const { home, cwd, io } = setup();
     const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
@@ -123,7 +138,7 @@ describe("brain cli", () => {
     const { home, cwd } = setup();
     const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
     const hook = (hook_event_name: string, session_id: string, tool_input: object = {}, tool_name = "Bash", extra = {}) => {
-      const child = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "hook", "claude-code", "--home", home], { cwd, encoding: "utf8", env: { ...process.env, BRAIN_PROJECT: "demo" }, input: JSON.stringify({ hook_event_name, session_id, cwd, tool_name, tool_input, error: "runtime mismatch", ...extra }) });
+      const child = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "hook", "claude-code", "--home", home], { cwd, encoding: "utf8", env: { ...process.env, TYPESAFE_API_KEY: undefined, BRAIN_PROJECT: "demo" }, input: JSON.stringify({ hook_event_name, session_id, cwd, tool_name, tool_input, error: "runtime mismatch", ...extra }) });
       expect(child.status).toBe(0);
       return child.stdout;
     };
@@ -355,7 +370,7 @@ describe("brain hook claude-code", () => {
 
 describe("bin/brain.mjs", () => {
   it("exits quietly when the stdout consumer closes its pipe", async () => {
-    const child = spawn(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "help"], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "help"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TYPESAFE_API_KEY: undefined } });
     let error = "";
     child.stderr.on("data", (chunk: Buffer) => { error += chunk.toString(); });
     child.stdout.destroy();
@@ -367,7 +382,7 @@ describe("bin/brain.mjs", () => {
   });
 
   it("runs under node from the package", () => {
-    const r = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "help"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "help"], { encoding: "utf8", env: { ...process.env, TYPESAFE_API_KEY: undefined } });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("brain recall");
   });
@@ -451,7 +466,7 @@ describe("brain stats measurements", () => {
       for (let n = 0; n <= i; n++) appendEvent(home, "stats", cwd, { tool: "bash", ok: false, error: failure + " failure" });
     }
     const child = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "stats", "--home", home], {
-      cwd, encoding: "utf8", env: { ...process.env, SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" },
+      cwd, encoding: "utf8", env: { ...process.env, TYPESAFE_API_KEY: undefined, SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" },
     });
     const result = { code: child.status, out: child.stdout };
     expect(result.code).toBe(0);

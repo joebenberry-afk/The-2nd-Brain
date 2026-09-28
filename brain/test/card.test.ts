@@ -117,7 +117,7 @@ describe("card completeness and scope", () => {
     createNote(home, { text: "Oversized " + "instruction ".repeat(200), project: "demo", kind: "gotcha", tested: true });
     createNote(home, { text: long, project: "demo", kind: "fact" });
     const card = execFileSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "card", "--home", home, "--project", "demo"], {
-      encoding: "utf8", env: { ...process.env, SECOND_BRAIN_HOME: home },
+      encoding: "utf8", env: { ...process.env, TYPESAFE_API_KEY: undefined, SECOND_BRAIN_HOME: home },
     }).trimEnd();
     expect(card).toContain(long);
     expect(card).not.toContain("Oversized");

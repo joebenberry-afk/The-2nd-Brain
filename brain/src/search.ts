@@ -382,6 +382,10 @@ export interface AnswerOptions extends RecallOptions {
   home?: string;
   /** The CLI has flags rather than tool arguments. */
   tools?: boolean;
+  /** Drop judged-out shown notes, without promoting unjudged runners-up. */
+  exclude?: Set<string>;
+  /** Skip the plan-doc fallback (its heading was judged irrelevant). */
+  noDoc?: boolean;
 }
 
 /** One call answers: exact ids, then scoped note search. */
@@ -390,7 +394,7 @@ export function answer(notes: Note[], query: string, opts: AnswerOptions): strin
 }
 
 /** Hit count measures results actually shown, not cross-project suggestions. */
-export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions): { text: string; hits: number; ids: string[] } {
+export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions): { text: string; hits: number; ids: string[]; docExcerpt?: string } {
   const id = query.trim();
   const note = notes.find((n) => n.id === id);
   if (note) {
@@ -424,13 +428,14 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
       }
     }
   }
-  if (!hits.length && opts.home && opts.project?.root) {
+  if (opts.exclude) hits = hits.filter(hit => !opts.exclude?.has(hit.note.id));
+  if (!hits.length && opts.home && opts.project?.root && !opts.noDoc) {
     const heading = docAnswer(opts.home, opts.project, query);
-    if (heading) return { text: heading.text, hits: 1, ids: ["doc:" + heading.path] };
+    if (heading) return { text: heading.text, hits: 1, ids: ["doc:" + heading.path], ...(heading.excerpt ? { docExcerpt: heading.excerpt } : {}) };
   }
   if (!hits.length && !opts.all) {
-    const related = matchingHits(scored, { ...opts, all: true }).length
-      || (!opts.history ? matchingHits(scored, { ...opts, all: true, history: true }).length : 0);
+    const related = matchingHits(scored, { ...opts, all: true }).filter(hit => !opts.exclude || !visibleTo(hit.note, opts.project)).length
+      || (!opts.history ? matchingHits(scored, { ...opts, all: true, history: true }).filter(hit => !opts.exclude || !visibleTo(hit.note, opts.project)).length : 0);
     if (related) return { text: `no match here; ${related} related in other projects (${opts.tools === false ? "--all" : "all: true"})`, hits: 0, ids: [] };
   }
   return { text: renderHits(hits), hits: hits.length, ids: hits.map(hit => hit.note.id) };

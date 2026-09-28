@@ -343,15 +343,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         loadMode: "essential",
         approval: definition.name === "brain_recall" ? "read" : "write",
         parameters: schema(pi.typebox, definition.params),
-        execute(...args: unknown[]) {
+        async execute(...args: unknown[]) {
           const started = performance.now();
           try {
             const required = Object.keys(definition.params).find((k) => !definition.params[k]?.optional) ?? "";
             const { params, cwd, ctx } = toolArgs(args, required);
             const session = sessionKey(ctx);
             const sub = isSubagent(ctx);
-            const result = definition.run(params, { home, cwd, env, session, sub });
-            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, via: "tool" });
+            const result = await definition.run(params, { home, cwd, env, session, sub });
+            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, judged: result.judged, dropped: result.dropped, via: "tool" });
             return { content: [{ type: "text", text: result.text }], details: {} };
           } catch (error) {
             return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };

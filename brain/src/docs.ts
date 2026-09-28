@@ -68,13 +68,16 @@ export function readAnchor(root: string, anchor: string): string | undefined {
   return anchorSection(root, anchor)?.text;
 }
 
-/** One best heading pointer, or a short H2 outline when a query names a registered doc. */
-export function docAnswer(home: string, project: Project, query: string): { text: string; path: string } | undefined {
+/**
+ * One best heading pointer, or a short H2 outline when a query names a registered doc. A heading
+ * answer carries an excerpt (heading and first paragraph) so recall can check it like a note.
+ */
+export function docAnswer(home: string, project: Project, query: string): { text: string; path: string; excerpt?: string } | undefined {
   const terms = tokens(query, true);
   if (!terms.length || !project.root) return undefined;
   const files = projectDocs(home, project);
   const named = files.filter(file => terms.includes(basename(file).toLowerCase()));
-  let best: { score: number; text: string; path: string } | undefined;
+  let best: { score: number; text: string; path: string; excerpt: string } | undefined;
   let outline: { text: string; path: string } | undefined;
   for (const file of named.length ? named : files) {
     const path = relative(project.root, file).replace(/\\/g, "/");
@@ -90,8 +93,8 @@ export function docAnswer(home: string, project: Project, query: string): { text
       const matched = remaining.filter(term => words.has(term));
       if (matched.length < (named.length ? 1 : Math.min(2, terms.length))) continue;
       const score = matched.length * 2 + matched.filter(term => heading.has(term)).length;
-      if (!best || score > best.score) best = { score, text: path + " › " + section.heading + " (line " + section.line + ")", path };
+      if (!best || score > best.score) best = { score, text: path + " › " + section.heading + " (line " + section.line + ")", path, excerpt: `${section.heading}: ${section.text.split(/\n\s*\n/)[0] ?? ""}`.replace(/\s+/g, " ").slice(0, 450) };
     }
   }
-  return best ?? outline;
+  return best ? { text: best.text, path: best.path, excerpt: best.excerpt } : outline;
 }

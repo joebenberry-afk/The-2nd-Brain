@@ -12,7 +12,7 @@ import { convertV3 } from "./convert.ts";
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
 import { addProjectDoc, gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { runMcp } from "./mcp.ts";
-import { answerWithHits } from "./search.ts";
+import { judgedAnswer, typesafeJudge } from "./judge.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
 import { pausedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
@@ -106,8 +106,8 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
-function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[]): void {
-  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits, id, query, ids });
+function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[], judged?: boolean, dropped?: number): void {
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits, id, query, ids, judged, dropped });
 }
 
 /** Fixes that stopped helping (see demotedFixes): no longer fired until their note is edited. */
@@ -119,7 +119,7 @@ function fixesToReview(c: Ctx): number {
   return paused.length;
 }
 
-const COMMANDS: Record<string, (c: Ctx) => number> = {
+const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   project(c) {
     const [kind, action, path, ...extra] = c.args;
     if (kind !== "docs" || extra.length || (action !== "add" && action !== "list") || (action === "list" && path)) throw new UsageError("use brain project docs add <path> or brain project docs list");
@@ -141,18 +141,18 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     return 0;
   },
 
-  recall(c) {
+  async recall(c) {
     const query = need(c.args.join(" "), "a query");
-    const { text, hits, ids } = answerWithHits(loadNotes(c.home).notes, query, {
+    const { text, hits, ids, judged, dropped } = await judgedAnswer(loadNotes(c.home).notes, query, {
       project: c.project,
       home: c.home,
       tools: false,
       all: c.opts.all === true,
       history: c.opts.history === true,
       limit: positiveInt(c.opts.limit, 3),
-    });
+    }, typesafeJudge(c.io.env));
     c.io.out(text);
-    use(c, "recall", text, hits, undefined, query, ids);
+    use(c, "recall", text, hits, undefined, query, ids, judged, dropped);
     return 0;
   },
 
@@ -581,7 +581,7 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
   }
   const project: Project = opts.project ? projectById(home, opts.project, io.cwd) : resolveProject(home, io.cwd, io.env);
   try {
-    return run({ home, project, args, opts, io, started });
+    return await run({ home, project, args, opts, io, started });
   } catch (error) {
     io.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
     return 1;

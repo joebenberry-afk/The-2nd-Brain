@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { loadNotes } from "../src/notes.ts";
-import { answer, recall } from "../src/search.ts";
+import { answer, answerWithHits, recall } from "../src/search.ts";
+import { judgedAnswer, type Judge } from "../src/judge.ts";
 import { PACKAGE_HOME } from "../src/util.ts";
 import { loadProjects } from "../src/project.ts";
 
@@ -111,40 +112,65 @@ it("grades only a single heading line naming the hinted document as a doc answer
 });
 
 describe.skipIf(!hasNotes)("real queries", () => {
-  it("keeps right answers and bounds wrong answers on the frozen session queries", () => {
-    const text = readFileSync(join(import.meta.dirname, "fixtures", "recall-real.jsonl"), "utf8");
-    const set = text.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as RealCase);
-    const { notes } = loadNotes(PACKAGE_HOME);
-    const projects = loadProjects(PACKAGE_HOME);
-    let right = 0, silentMiss = 0, correctSilence = 0;
-    const wrong: string[] = [];
-    for (const c of set) {
-      const project = { id: c.project, tags: [], root: projects[c.project]?.paths?.find(path => existsSync(path)) ?? null };
-      const ids = recall(notes, c.query, { project }).slice(0, 3).map((hit) => hit.note.id);
-      if (c.verdict === "note") {
-        expect(c.expect.length, c.id).toBeGreaterThan(0);
-        for (const id of c.expect) expect(notes.some((note) => note.id === id && !note.retired && !note.private), `${c.id}: ${id}`).toBe(true);
-        if (c.expect.some((id) => ids.includes(id))) right++;
-        else if (!ids.length) silentMiss++;
-        else wrong.push(`${c.id}: ${ids.join(",")}`);
-      } else {
-        expect(c.verdict, c.id).toBe("silence");
-        expect(c.expect, c.id).toEqual([]);
-        const text = !ids.length && c.doc ? answer(notes, c.query, { project, home: PACKAGE_HOME }) : "";
-        const heading = answeredDoc(text);
-        if (heading && heading === c.doc) right++;
-        else if (ids.length || heading) wrong.push(`${c.id}: ${ids.length ? ids.join(",") : text}`);
-        else correctSilence++;
-      }
+  const recordings = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "recall-judge.json"), "utf8")) as Record<string, Record<string, number>>;
+  const { notes } = loadNotes(PACKAGE_HOME);
+  const projects = loadProjects(PACKAGE_HOME);
+
+  function recordedJudge(caseId: string, shown: string[]): Judge {
+    // Assert outside the fail-open boundary: a missing recording must fail the test, not return lexical results.
+    for (const id of shown.filter(id => notes.some(note => note.id === id && !note.private))) {
+      const p = recordings[caseId]?.[id];
+      expect(typeof p, `missing recorded pair ${caseId}/${id}`).toBe("number");
+      expect(p, `invalid recorded pair ${caseId}/${id}`).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThanOrEqual(1);
     }
-    console.log(`real-query right ${right}/${set.length}; wrong ${wrong.length}; silent-miss ${silentMiss}; correct-silence ${correctSilence}`);
-    console.log(`real-query wrong ${wrong.length}/${set.length} (target <=10%); cases ${wrong.join("; ")}`);
-    expect(set).toHaveLength(34);
-    expect(right).toBeGreaterThanOrEqual(9);
-    // Frozen 2026-09-28 baseline: 9 right, 16 wrong, 0 silent misses, 9 correct silences.
-    // P2 IDF coverage: 9 right, 11 wrong, 0 silent misses, 14 correct silences.
-    // Headline rule for keyword lists: 9 right, 5 wrong, 0 silent misses, 20 correct silences.
-    // Still above the plan's <=10% target; this is a regression ceiling, not target success.
-    expect(wrong.length).toBeLessThanOrEqual(5);
+    return async (_query, candidates) => new Map(candidates.map(c => [c.id, recordings[caseId]![c.id]!]));
+  }
+
+  for (const [file, size, lexicalRight, lexicalWrong, judgedRight] of [
+    ["recall-real.jsonl", 34, 6, 8, 7],
+    ["recall-real-heldout.jsonl", 20, 2, 4, 3],
+  ] as const) {
+    for (const judged of [false, true]) it(`${judged ? "judged" : "lexical"}: ${file} retains right answers and bounds wrong answers`, async () => {
+      const set = readFileSync(join(import.meta.dirname, "fixtures", file), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as RealCase);
+      let right = 0, miss = 0, silence = 0;
+      const wrong: string[] = [];
+      for (const c of set) {
+        const project = { id: c.project, tags: [], root: projects[c.project]?.paths?.find(path => existsSync(path)) ?? null };
+        for (const id of c.expect) expect(notes.some(note => note.id === id && !note.retired && !note.private), `${c.id}: ${id}`).toBe(true);
+        const opts = { project, home: PACKAGE_HOME };
+        const lexical = answerWithHits(notes, c.query, opts);
+        const result = judged ? await judgedAnswer(notes, c.query, opts, recordedJudge(c.id, lexical.ids)) : lexical;
+        const ids = result.ids.filter(id => !id.startsWith("doc:"));
+        if (ids.some(id => !c.expect.includes(id))) wrong.push(`${c.id}: ${ids.join(",")}`);
+        else if (ids.length) right++;
+        else if (c.doc && answeredDoc(result.text) === c.doc) right++;
+        else if (c.expect.length) miss++;
+        else silence++;
+      }
+      console.log(`${judged ? "judged" : "lexical"} ${file}: right ${right}/${set.length}; wrong ${wrong.length}; miss ${miss}; silence ${silence}; wrong cases ${wrong.join("; ")}`);
+      expect(set).toHaveLength(size);
+      expect(right).toBeGreaterThanOrEqual(judged ? judgedRight : lexicalRight);
+      // Majority-of-3 blind labels, frozen 2026-09-28: lexical 6/8 and held-out 2/4 right/wrong.
+      if (judged) expect(wrong).toEqual([]);
+      else expect(wrong.length).toBeLessThanOrEqual(lexicalWrong);
+    });
+  }
+
+  it("recorded judge retains V3 dev >= 12/15 and held-out >= 7/8", async () => {
+    // Owner approved 2026-09-28 lowering the judged dev gate 13→12:
+    // D27 'How do I clear PYTHONHOME?' scores 0.45. The lexical V3 gates above are unchanged.
+    for (const [file, min, total] of [["recall-dev.jsonl", 12, 15], ["recall-heldout.jsonl", 7, 8]] as const) {
+      const memory = cases(file).filter(c => c.expect.length);
+      const missed: string[] = [];
+      for (const c of memory) {
+        const lexical = answerWithHits(notes, c.prompt, { project });
+        const result = await judgedAnswer(notes, c.prompt, { project }, recordedJudge(`v3:${c.id}`, lexical.ids));
+        if (!c.expect.some(id => result.ids.includes(id))) missed.push(c.id);
+      }
+      console.log(`judged V3 ${file}: ${memory.length - missed.length}/${memory.length}; missed ${missed.join(",")}`);
+      expect(memory).toHaveLength(total);
+      expect(memory.length - missed.length).toBeGreaterThanOrEqual(min);
+    }
   });
 });

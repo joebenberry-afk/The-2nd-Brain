@@ -177,3 +177,23 @@ agentbench or compactbench, judged by cost, not tokens.
 
 Open: real-query wrong rate to ≤ 10 % on a set grown with two weeks of new logged queries (used as
 held-out, since the 34 frozen ones shaped the rules); capture verdict on 2026-10-12.
+
+### 8.1 Recall precision (2026-09-28, owner: "as close to 0% wrong as possible")
+
+Labels were redone blind: three independent judges saw each logged query, what the agent did next,
+and the top-10 candidates in id order (never the tool's answer); the majority label is ground
+truth (`recall-real.jsonl`, 34 frozen; `recall-real-heldout.jsonl`, 20 logged after the freeze).
+A wrong answer now counts any irrelevant note shown, including one beside a relevant note.
+Word matching alone could not separate relevant from irrelevant hits (they overlap on every lexical
+signal), so recall now checks its lexical answer with TypeSafe Jev and drops notes and plan-doc
+headings below 0.75 (owner decision; fail open to the lexical answer; private notes never sent).
+
+| Set | Lexical right / wrong / missed | Judged right / wrong / missed |
+|---|---|---|
+| Frozen 34 | 6 / 8 / 7 | 7 / **0** / 12 |
+| Held-out 20 | 2 / 4 / 4 | 3 / **0** / 5 |
+| V3 dev / held-out | 13/15, 7/8 | 13/15, 8/8 (gate lowered to 12/15 for D27 at 0.45) |
+
+Live calls: ~300 ms (5 s timeout). The price is more silence: some useful notes score just
+under 0.75 and are dropped. Next: keep logging real queries; re-label and re-measure held-out
+monthly so 0 wrong is checked on queries the threshold never saw.

@@ -1,7 +1,7 @@
 /** Shared Brain tools; transports supply identity, rendering and telemetry. */
 import { createNote, differentBody, findSameHeadline, GLOBAL, KINDS, loadNotes, upgradeNote, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { answerWithHits } from "./search.ts";
+import { judgedAnswer, typesafeJudge } from "./judge.ts";
 import type { UseKind } from "./telemetry.ts";
 import { stateSaved, writeWork } from "./work.ts";
 
@@ -19,11 +19,13 @@ export interface ToolContext {
   session: string | undefined;
 }
 
+type ToolResult = { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[]; judged?: boolean; dropped?: number };
+
 export interface BrainTool {
   name: string;
   description: string;
   params: Record<string, Param>;
-  run(params: Record<string, unknown>, context: ToolContext): { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[] };
+  run(params: Record<string, unknown>, context: ToolContext): ToolResult | Promise<ToolResult>;
 }
 
 export function jsonSchema(props: Record<string, Param>) {
@@ -45,10 +47,10 @@ export const brainTools: BrainTool[] = [
     name: "brain_recall",
     description: "Before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command: cheaper than re-reading files. A note id returns the full note.",
     params: { query: { type: "string", description: "a question, keywords, or a note id" }, all: { type: "boolean", description: "search every project", optional: true } },
-    run(params, { home, cwd, env }) {
+    async run(params, { home, cwd, env }) {
       const query = requireString(params.query, "query");
       const project = resolveProject(home, cwd, env);
-      return { ...answerWithHits(loadNotes(home).notes, query, { home, project, all: params.all === true }), query, kind: "recall", project: project.id };
+      return { ...await judgedAnswer(loadNotes(home).notes, query, { home, project, all: params.all === true }, typesafeJudge(env)), query, kind: "recall", project: project.id };
     },
   },
   {

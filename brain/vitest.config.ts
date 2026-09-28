@@ -10,6 +10,7 @@ const integration = ["capture", "card", "cli", "install", "journey", "review", "
 export default defineConfig({
   test: {
     testTimeout: 20000,
+    setupFiles: ["./test/setup.ts"],
     env: identity,
     projects: [
       { extends: true, test: { name: "unit", include: ["test/**/*.test.ts"], exclude: integration } },

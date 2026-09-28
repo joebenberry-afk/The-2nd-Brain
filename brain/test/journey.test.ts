@@ -31,7 +31,7 @@ function omp(home: string) {
   const pi: HostLike = { on: (e, h) => void handlers.set(e, h), registerTool: (t) => void tools.set((t as Tool).name, t as Tool) };
   secondBrain(pi, { SECOND_BRAIN_HOME: home });
   const fire = (event: string, payload: unknown, ctx: unknown) => handlers.get(event)?.(payload, ctx);
-  const call = (tool: string, params: unknown, ctx: unknown) => tools.get(tool)?.execute("call-1", params, undefined, undefined, ctx).content[0]?.text ?? "";
+  const call = async (tool: string, params: unknown, ctx: unknown) => (await tools.get(tool)?.execute("call-1", params, undefined, undefined, ctx))?.content[0]?.text ?? "";
   return { fire, call };
 }
 
@@ -50,7 +50,7 @@ it("a failure fixed in one session becomes the known fix and the card of the nex
   const day1 = omp(home);
   const s1 = { cwd: app, sessionManager: { getSessionId: () => "s1" } };
   expect(day1.fire("before_agent_start", { prompt: "make the tests pass" }, s1)).toBeUndefined();
-  expect(day1.call("brain_state", { text: "Goal: green test suite. Next: install deps, rerun." }, s1)).toMatch(/^state saved/);
+  expect(await day1.call("brain_state", { text: "Goal: green test suite. Next: install deps, rerun." }, s1)).toMatch(/^state saved/);
   day1.fire("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: true, content: [{ type: "text", text: "Error: Cannot find module 'left-pad'" }] }, s1);
   day1.fire("tool_result", { toolName: "bash", input: { command: "npm ci && npm test" }, isError: false, content: [{ type: "text", text: "ok" }] }, s1);
   day1.fire("tool_result", { toolName: "edit", input: { path: join(app, "src", "cart.ts") }, isError: false, content: [] }, s1);
@@ -85,10 +85,10 @@ it("a failure fixed in one session becomes the known fix and the card of the nex
 
   // Another project does not see the app's gotcha unless asked across projects.
   const other = { cwd: tool, sessionManager: { getSessionId: () => "s3" } };
-  expect(day2.call("brain_recall", { query: "left-pad module" }, other)).toMatch(/^no match here; 1 related in other projects/);
-  expect(day2.call("brain_recall", { query: "left-pad module", all: true }, other)).toContain("npm test fails");
+  expect(await day2.call("brain_recall", { query: "left-pad module" }, other)).toMatch(/^no match here; 1 related in other projects/);
+  expect(await day2.call("brain_recall", { query: "left-pad module", all: true }, other)).toContain("npm test fails");
   // A learning marked global reaches every project; a duplicate is refused.
-  expect(day2.call("brain_note", { text: "Use UTC timestamps in every log line", kind: "decision", global: true }, other)).toMatch(/^saved n-/);
-  expect(day2.call("brain_note", { text: "Use UTC timestamps in every log line", global: true }, other)).toMatch(/^already noted n-/);
-  expect(day2.call("brain_recall", { query: "UTC timestamps log" }, s2)).toContain("[decision] Use UTC timestamps in every log line");
+  expect(await day2.call("brain_note", { text: "Use UTC timestamps in every log line", kind: "decision", global: true }, other)).toMatch(/^saved n-/);
+  expect(await day2.call("brain_note", { text: "Use UTC timestamps in every log line", global: true }, other)).toMatch(/^already noted n-/);
+  expect(await day2.call("brain_recall", { query: "UTC timestamps log" }, s2)).toContain("[decision] Use UTC timestamps in every log line");
 });
