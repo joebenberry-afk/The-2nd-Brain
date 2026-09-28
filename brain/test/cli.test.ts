@@ -303,24 +303,6 @@ describe("brain hook claude-code", () => {
     expect(other.json).toEqual({});
   });
 
-  it("compact emits only a bounded resume, or nothing without working state", async () => {
-    const { writeWork } = await import("../src/work.ts");
-    const { estimateTokens } = await import("../src/util.ts");
-    const home = tmp();
-    const cwd = repo("demo");
-    const payload = JSON.stringify({ hook_event_name: "SessionStart", source: "compact", cwd });
-    createNote(home, { project: "demo", text: "Do not repeat this durable note at compaction" });
-    expect(await hook(payload, { SECOND_BRAIN_HOME: home })).toEqual({ code: 0, json: {} });
-    writeWork(home, "demo", `Goal: ship. Done: ${"finished work ".repeat(100)} Next: verify release.`);
-    const result = await hook(payload, { SECOND_BRAIN_HOME: home });
-    expect(result.code).toBe(0);
-    const text = result.json.hookSpecificOutput.additionalContext;
-    expect(estimateTokens(text)).toBeLessThanOrEqual(150);
-    expect(text).toContain("Next: verify release");
-    expect(text).not.toContain("Do not repeat this durable note");
-  });
-
-
   it("PostToolUseFailure returns a tested fix and logs the event", async () => {
     const home = tmp();
     const cwd = repo("demo");
@@ -525,8 +507,6 @@ describe("host-independent memory", () => {
     expect(auto).toContain("npm test → Error: dependency missing");
     expect(auto).toContain("Please repair startup");
     expect(readFileSync(planPath, "utf8")).toBe(plan);
-    const compact = await send({ hook_event_name: "SessionStart", source: "compact" });
-    expect(JSON.parse(compact.out).hookSpecificOutput.additionalContext).toContain("Next: verify");
     await send({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: join(cwd, "final.ts") } });
     await send({ hook_event_name: "SessionEnd", agent_type: "custom-main-agent" });
     expect(readWork(home, "demo")?.auto).toContain("final.ts");

@@ -1,7 +1,7 @@
 /**
  * Second Brain V4 — Oh My Pi (OMP) extension.
- * In-process extension with no subprocess or network: remembers the last ask, inserts resume
- * cards after compaction, logs tool results, tracks edited paths and failures, and provides
+ * In-process extension with no subprocess or network: remembers the last ask, sends a start
+ * card, logs tool results, tracks edited paths and failures, and provides
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
 import { isAbsolute, relative, resolve } from "node:path";
@@ -12,7 +12,7 @@ import { appendEvent, errorSignature, findFix, hostNoise, renderFix, scanEvents,
 import { renderCard } from "./card.ts";
 import { logUse } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
-import { readWork, renderResume, writeAuto } from "./work.ts";
+import { writeAuto } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
@@ -30,10 +30,6 @@ type Json = Record<string, unknown>;
 
 interface SessionState {
   carded: boolean;
-  /** A card went out with a prompt that has not reached the model yet. */
-  cardPending?: boolean;
-  resume?: { content: string; at: number };
-  resumeSeen: boolean;
   edited: string[];
   failure?: string;
   /** The command (or tool) that failed; its next success clears the failure. */
@@ -118,7 +114,7 @@ function lastUserAsk(ctx: unknown): string | undefined {
   return undefined;
 }
 
-/** The session's persisted branch already holds a Brain card (or resume) after its last compaction. */
+/** The session's persisted branch already holds a Brain card after its last compaction. */
 function cardSinceCompaction(ctx: unknown): boolean {
   const branch = call(sessionManagerOf(ctx), "getBranch");
   if (!Array.isArray(branch)) return false;
@@ -150,11 +146,8 @@ export function editedPaths(input: unknown): string[] {
   return [...new Set(found)].filter((p) => !/^[a-z][a-z0-9+.-]*:\/\//i.test(p));
 }
 
-function buildCardMessage(content: string, isResume = false): { message: { customType: string; content: string; display: boolean; details: Json } } {
+function buildCardMessage(content: string): { message: { customType: string; content: string; display: boolean; details: Json } } {
   const details: Json = { v: 4 };
-  if (isResume) {
-    details.resume = true;
-  }
   return {
     message: {
       customType: CARD_TYPE,
@@ -162,17 +155,6 @@ function buildCardMessage(content: string, isResume = false): { message: { custo
       display: false,
       details,
     },
-  };
-}
-
-function buildResumeMessage(content: string, at: number): { role: string; customType: string; content: string; display: boolean; details: Json; timestamp: number } {
-  return {
-    role: "custom",
-    customType: CARD_TYPE,
-    content,
-    display: false,
-    details: { v: 4, resume: true },
-    timestamp: at,
   };
 }
 
@@ -335,7 +317,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   function getSession(key: string): SessionState {
     let state = sessions.get(key);
     if (!state) {
-      state = { carded: false, resumeSeen: false, edited: [], ask: undefined, failure: undefined };
+      state = { carded: false, edited: [], ask: undefined, failure: undefined };
       sessions.set(key, state);
     }
     return state;
@@ -391,21 +373,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const prompt = eventObj?.prompt;
       if (typeof prompt === "string" && prompt.trim()) state.ask = cutAsk(prompt);
 
-      // Fallback: if resume exists and was never seen by context, deliver it now
-      if (state.resume && !state.resumeSeen) {
-        const msg = buildCardMessage(state.resume.content, true);
-        state.resume = undefined;
-        state.resumeSeen = true;
-        state.carded = true; // Mark card as sent so later calls return nothing
-        state.cardPending = true;
-        return msg;
-      }
-
-      // Return card on first call only (unless resume was already delivered via context)
+      // Return the card on the first call only.
       // A session resumed in a new process (restart, /resume) already holds its card since the
       // last compaction: a second one repeats the same lines and echoes this session's own ask.
-      if (!state.carded && !state.resumeSeen && cardSinceCompaction(ctx)) state.carded = true;
-      if (!state.carded && !state.resumeSeen) {
+      if (!state.carded && cardSinceCompaction(ctx)) state.carded = true;
+      if (!state.carded) {
         const { notes } = loadNotes(home);
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
         const subagent = isSubagent(ctx);
@@ -425,16 +397,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
         if (cardContent) {
           state.carded = true;
-          state.cardPending = true;
           logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key, sub: subagent });
           return buildCardMessage(cardContent);
         }
         state.carded = true;
         return undefined;
-      }
-
-      if (!state.carded) {
-        state.carded = true;
       }
 
       return undefined;
@@ -449,7 +416,6 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     try {
       const key = sessionKey(ctx);
       const state = getSession(key);
-      state.cardPending = false;
 
       const messages = asObject(event)?.messages;
       if (!Array.isArray(messages)) return undefined;
@@ -460,21 +426,6 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.pendingFixes = undefined;
       }
       state.contextLength = messages.length;
-      // Only insert if we have a resume card
-      if (!state.resume) return undefined;
-
-      // After the compaction summary: Anthropic's native compaction drops every block before it.
-      const at = messages.findLastIndex((m) => asObject(m)?.role === "compactionSummary") + 1;
-      // A resume card already there (delivered with a prompt) is enough.
-      if (messages.slice(at).some((m) => asObject(m)?.customType === CARD_TYPE && asObject(asObject(m)?.details)?.resume === true)) {
-        state.resumeSeen = true;
-        return undefined;
-      }
-
-      // Same object values on every call, so the prompt cache prefix stays stable.
-      const resumeMsg = buildResumeMessage(state.resume.content, state.resume.at);
-      state.resumeSeen = true;
-      return { messages: [...messages.slice(0, at), resumeMsg, ...messages.slice(at)] };
     } catch (error) {
       failed("context", error);
       return undefined;
@@ -498,7 +449,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const reason = asObject(event)?.reason;
       const state = getSession(sessionKey(ctx));
       state.pendingFixes = undefined;
-      carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], resume: reason === "fork" ? state.resume : undefined, resumeSeen: reason === "fork" ? state.resumeSeen : false, cardPending: false, fixed: reason === "fork" && state.fixed ? new Set(state.fixed) : undefined } : undefined;
+      carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], fixed: reason === "fork" && state.fixed ? new Set(state.fixed) : undefined } : undefined;
     } catch {
       carry = undefined;
     }
@@ -521,31 +472,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   // Handle session_compact
   const compactCovered = on("session_compact", (_event, ctx) => {
     try {
-      const started = performance.now();
-      const key = sessionKey(ctx);
-      const state = getSession(key);
+      const state = getSession(sessionKey(ctx));
       // Written here, not in session_before_compact: /handoff skips that event, and handling it
       // turns off OMP's background compaction.
       saveAuto(ctx);
       state.pendingFixes = undefined;
-      // A card sent with the prompt this compaction runs before is still ahead of the model.
-      if (state.cardPending) {
-        state.resume = undefined;
-        return undefined;
-      }
-
-      // Freeze only working state; compaction never resends notes or the tool footer.
-      const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-      const cardContent = isSubagent(ctx) ? "" : renderResume(readWork(home, project.id), project.root);
-
-      if (cardContent) {
-        const now = Date.now();
-        state.resume = { content: cardContent, at: now };
-        state.resumeSeen = false;
-        logUse(home, { kind: "resume", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key });
-      } else {
-        state.resume = undefined;
-      }
       state.fixed = undefined;
 
       return undefined;

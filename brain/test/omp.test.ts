@@ -10,7 +10,6 @@ import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, type HostLike 
 import { createNote, loadNotes } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
 import { readWork, writeWork } from "../src/work.ts";
-import { estimateTokens } from "../src/util.ts";
 import { stats } from "../src/telemetry.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
@@ -202,121 +201,6 @@ describe("OMP extension", () => {
     // Check the work file was written - project resolves to folder name
     const workFile = readWork(home, "work");
     expect(workFile?.auto).toContain("test with spaces");
-  });
-
-  it("compaction flow: tool_result + before_compact + compact + context", () => {
-    // Set up project
-    const workDir = join(root, "work");
-    mkdirSync(join(workDir, ".git"), { recursive: true });
-    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
-
-    writeWork(home, "work", "Goal: Resume content here");
-
-    const { handlers } = load();
-    const toolResult = handlers.get("tool_result")!;
-    const compact = handlers.get("session_compact")!;
-    const contextHandler = handlers.get("context")!;
-    const start = handlers.get("before_agent_start")!;
-
-    const session = "s-compaction-flow";
-    const c = ctx(session, workDir);
-
-    // Step 1: tool result with ok=true and path (edit tracking)
-    toolResult(
-      {
-        toolName: "bash",
-        input: { command: "touch file.txt", path: "file.txt" },
-        isError: false,
-        content: [],
-      },
-      c
-    );
-
-    // Step 3: compact builds resume
-    compact({}, c);
-
-    // Step 4: context returns messages with resume card at index 0
-    const contextResult = contextHandler(
-      { messages: [{ role: "user", content: "hello" }] },
-      c
-    ) as any;
-    expect(contextResult).toBeDefined();
-    expect(contextResult.messages).toBeDefined();
-    expect(contextResult.messages.length).toBe(2);
-    const resumeMsg = contextResult.messages[0];
-    expect(resumeMsg.customType).toBe(CARD_TYPE);
-    expect(resumeMsg.details.resume).toBe(true);
-    expect(resumeMsg.content).toContain("Resume content");
-
-    // Step 5: second context call should have identical timestamp
-    const contextResult2 = contextHandler(
-      { messages: [{ role: "user", content: "hello again" }] },
-      c
-    ) as any;
-    expect(contextResult2.messages[0].timestamp).toBe(resumeMsg.timestamp);
-
-    // Step 6: before_agent_start after compaction adds nothing
-    const afterCompact = start({ prompt: "new turn" }, c);
-    expect(afterCompact).toBeUndefined();
-  });
-
-  it("does not duplicate resume card if already in messages", () => {
-    const { handlers } = load();
-    const compact = handlers.get("session_compact")!;
-    const contextHandler = handlers.get("context")!;
-
-    writeWork(home, "work", "Goal: Test resume");
-
-    const session = "s-dedup";
-    const c = ctx(session);
-
-    // Trigger compaction
-    compact({}, c);
-
-    // Context with resume card already present
-    const resumeCard = {
-      role: "custom",
-      customType: CARD_TYPE,
-      details: { resume: true },
-      content: "Already here",
-    };
-    const result = contextHandler(
-      { messages: [resumeCard, { role: "user", content: "hello" }] },
-      c
-    ) as any;
-
-    // Should return undefined (don't add)
-    expect(result).toBeUndefined();
-  });
-
-  it("fallback: resume card delivered via before_agent_start if never seen by context", () => {
-    // Set up project
-    const workDir = join(root, "work");
-    mkdirSync(join(workDir, ".git"), { recursive: true });
-    writeFileSync(join(workDir, ".git", "config"), '[core]\nbare = false\n');
-
-    writeWork(home, "work", "Goal: Fallback resume");
-
-    const { handlers } = load();
-    const compact = handlers.get("session_compact")!;
-    const start = handlers.get("before_agent_start")!;
-
-    const session = "s-fallback";
-    const c = ctx(session, workDir);
-
-    // Trigger compaction without calling context
-    compact({}, c);
-
-    // Now call before_agent_start: should deliver the card
-    const result = start({ prompt: "after compact" }, c) as any;
-    expect(result).toBeDefined();
-    expect(result.message.customType).toBe(CARD_TYPE);
-    expect(result.message.details.resume).toBe(true);
-    expect(result.message.content).toContain("Fallback resume");
-
-    // Resume should be cleared after fallback
-    const result2 = start({ prompt: "again" }, c);
-    expect(result2).toBeUndefined();
   });
 
   it("failed tool result with tested fix → appends fix to content", () => {
@@ -647,7 +531,7 @@ describe("OMP extension", () => {
     expect(readWork(home, "work")?.auto).toContain("last failure: npm run build → Error: tsc exited");
   });
 
-  it("context returns undefined when no event.messages or no resume", () => {
+  it("context ignores missing or non-array messages", () => {
     const { handlers } = load();
     const contextHandler = handlers.get("context")!;
 
@@ -730,47 +614,6 @@ describe("OMP extension", () => {
     const tanClone = { ...ctx("tan"), agent: { kind: "sub" } };
     expect(stateTool.execute("id", { text: "Goal: clone plan" }, undefined, undefined, tanClone).content[0].text).toBe("not saved: working state belongs to the parent session");
     expect(readWork(home, "work")?.text).toBe("Goal: headless plan");
-  });
-
-  it("compaction resolves the current repo anchor without another state write", () => {
-    const cwd = join(root, "work");
-    mkdirSync(join(cwd, ".git"), { recursive: true });
-    const file = join(cwd, "PLAN.md");
-    writeFileSync(file, "## Resume\nOld checkpoint.");
-    writeWork(home, "work", "Goal: release\nSee: PLAN.md#resume\nNext: validate");
-    const { handlers } = load();
-    const c = ctx("anchored", cwd);
-    handlers.get("before_agent_start")!({ prompt: "release" }, c);
-    handlers.get("context")!({ messages: [] }, c);
-    writeFileSync(file, "## Resume\nNew checkpoint.");
-    handlers.get("session_compact")!({}, c);
-    const result = handlers.get("context")!({ messages: [{ role: "compactionSummary", content: "summary" }] }, c) as any;
-    const resume = result.messages[1].content as string;
-    expect(resume).toContain("PLAN.md › Resume:\nNew checkpoint.");
-    expect(resume).not.toContain("Old checkpoint");
-    expect(estimateTokens(resume)).toBeLessThanOrEqual(150);
-  });
-
-  it("compaction freezes only bounded working state and preserves it on fork", () => {
-    writeWork(home, "work", "Goal: ship release. Next: run integration.");
-    createNote(home, { project: "work", text: "Unrelated durable fact " + "detail ".repeat(100) });
-    const { handlers } = load();
-    const c = ctx("parent");
-    handlers.get("before_agent_start")!({ prompt: "ship release" }, c);
-    handlers.get("context")!({ messages: [] }, c);
-    handlers.get("session_compact")!({}, c);
-    const messages = [{ role: "compactionSummary", content: "summary" }, { role: "user", content: "continue" }];
-    const result = handlers.get("context")!({ messages }, c) as any;
-    const resume = result.messages[1];
-    expect(estimateTokens(resume.content)).toBeLessThanOrEqual(150);
-    expect(resume.content).toContain("Next: run integration");
-    expect(resume.content).not.toContain("Unrelated durable fact");
-    writeWork(home, "work", "Goal: a newer plan not in the frozen context");
-    handlers.get("session_before_switch")!({ reason: "fork" }, c);
-    const fork = ctx("fork");
-    handlers.get("session_switch")!({ reason: "fork" }, fork);
-    const forked = handlers.get("context")!({ messages }, fork) as any;
-    expect(forked?.messages[1]).toEqual(resume);
   });
 
   it("bash cwd attributes the event and known fix to the command's project", () => {

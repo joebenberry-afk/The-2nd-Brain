@@ -8,7 +8,7 @@ import { renderCard } from "../src/card.ts";
 import { resolveProject } from "../src/project.ts";
 import { answer, recall } from "../src/search.ts";
 import { findFix, renderFix } from "../src/capture.ts";
-import { readWork, renderResume, writeWork } from "../src/work.ts";
+import { writeWork } from "../src/work.ts";
 import extension from "../src/omp.ts";
 import { estimateTokens, findHome, PACKAGE_HOME, writeAtomic } from "../src/util.ts";
 
@@ -72,16 +72,15 @@ function measure(name: string, target: string, expected?: number): Row {
     .find((value) => recall(notes, value, { project }).length >= 3) ?? "session";
   const card = renderCard(target, notes, project, { tools: true });
   const recalled = answer(notes, query, { project, home: target });
-  const resume = renderResume(readWork(target, project.id), project.root);
   const error = notes.flatMap((note) => note.tested && !note.retired ? note.errors : [])
     .find((value) => !value.startsWith("re:") && findFix(notes, value, project));
   const fix = error ? findFix(notes, error, project) : null;
-  for (const [key, text] of Object.entries({ card, recall: recalled, fix: fix ? renderFix(fix) : "", resume })) {
+  for (const [key, text] of Object.entries({ card, recall: recalled, fix: fix ? renderFix(fix) : "" })) {
     metrics[`${key}.tokens`] = estimateTokens(text);
   }
   metrics["recall.lines"] = recalled.split("\n").length;
   metrics["fix.available"] = fix ? 1 : 0;
-  assert(metrics["card.tokens"]! <= 400 && metrics["fix.tokens"]! <= 80 && metrics["resume.tokens"]! <= 150);
+  assert(metrics["card.tokens"]! <= 400 && metrics["fix.tokens"]! <= 80);
   assert(metrics["recall.lines"]! <= 3);
   bench(metrics, "loadNotes.warm", () => loadNotes(target));
   bench(metrics, "card", () => renderCard(target, loadNotes(target).notes, project, { tools: true }));

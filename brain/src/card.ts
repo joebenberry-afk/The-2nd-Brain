@@ -5,7 +5,7 @@ import { visibleTo, type Project } from "./project.ts";
 import { recall, staleHere } from "./search.ts";
 import { fixFires } from "./telemetry.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
-import { planFit, readWork, resumeText } from "./work.ts";
+import { planFit, readWork, workText } from "./work.ts";
 
 export const CARD_BUDGET = 400;
 export const CARD_NOTES = 5;
@@ -94,8 +94,8 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const work = readWork(home, project.id);
   // Parse labels before extracting warnings so parent goals, next steps and Done never leak.
   const warning = opts.subagent && work?.text
-    ? planFit(work.text.replace(/^See:.*$/gm, ""), work.text.length).text.split(/(?=^Done:)/m)[0]?.match(/^Watch out: [\s\S]*/m)?.[0] ?? "" : "";
-  const resume = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : resumeText(work, project.root);
+    ? planFit(work.text.replace(/^See:.*$/gm, ""), work.text.length).split(/(?=^Done:)/m)[0]?.match(/^Watch out: [\s\S]*/m)?.[0] ?? "" : "";
+  const workingState = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : workText(work, project.root);
   const candidates = cardCandidates(notes, project);
   // A fix that fired in several recent sessions of this role (child or not) is a mistake agents
   // here keep making: say it before the first attempt, not after. It retires itself when the
@@ -106,14 +106,14 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     .filter((n) => !n.retired && n.tested && n.errors.length && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
-  const ranked = rankForCard(candidates, project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
+  const ranked = rankForCard(candidates, project, opts.subagent ? workingState : work?.text ?? "", now, home, opts.prompt);
   const pending = pendingCount(home, project.id);
   const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — what prior sessions learned; the repo wins on conflict`;
   const tail = [pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", LEAN_LINE, footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
   const lines = [head];
   const room = (extra: string[] = []): number => CARD_BUDGET * 4 - [...lines, ...extra, ...tail].join("\n").length - 1;
-  if (resume) {
-    const text = cutToTokens(resume, Math.floor(room() / 4));
+  if (workingState) {
+    const text = cutToTokens(workingState, Math.floor(room() / 4));
     if (text.trim()) lines.push(text);
   }
   // A recurring fix that does not fit its slot stays eligible as an ordinary note below.

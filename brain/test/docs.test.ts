@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { projectDocs, readAnchor, docAnswer } from "../src/docs.ts";
 import { renderCard } from "../src/card.ts";
-import { readWork, renderResume, writeWork } from "../src/work.ts";
+import { writeWork } from "../src/work.ts";
 import { main } from "../src/cli.ts";
 import { estimateTokens } from "../src/util.ts";
 
@@ -80,16 +80,11 @@ it("renders the current anchor and surrounding delta without rewriting stored st
   expect(child).toContain("Watch out: approvals"); expect(child).not.toMatch(/checkpoint|LOOP|Goal:|Next:/);
   writeWork(home, project.id, "Goal: x\nWatch out: approvals\nSee: docs/LOOP.md#resume\nNext: verify");
   expect(renderCard(home, [], project, { subagent: true })).not.toContain("LOOP.md");
-  expect(renderResume(readWork(home, project.id), project.root)).toContain("New checkpoint.");
   writeFileSync(file, "## Resume\n" + "checkpoint detail ".repeat(300));
-  const resume = renderResume(readWork(home, project.id), project.root);
-  expect(resume).toContain("docs/LOOP.md › Resume:");
-  expect(estimateTokens(resume)).toBeLessThanOrEqual(150);
   expect(estimateTokens(renderCard(home, [], project))).toBeLessThanOrEqual(400);
   for (const missing of [() => writeFileSync(file, "## Renamed\nNo old text."), () => rmSync(file)]) {
     missing();
     expect(renderCard(home, [], project)).toContain("anchor missing: docs/LOOP.md#resume");
-    expect(renderResume(readWork(home, project.id), project.root)).toContain("anchor missing: docs/LOOP.md#resume");
   }
   expect(renderCard(home, [], { ...project, root: null })).toContain("anchor missing: docs/LOOP.md#resume");
 });
@@ -127,17 +122,3 @@ it("refuses symlink escapes and leaves malformed registration data untouched", a
   expect(await main(["project", "docs", "add", "docs/LOOP.md"], io)).not.toBe(0);
   expect(readFileSync(join(home, "projects.json"), "utf8")).toBe(malformed);
 });
-
-it("Claude compaction hook resolves edited anchors and keeps its complete resume budget", async () => {
-  const { home, root, file, project } = setup();
-  writeWork(home, project.id, "Goal: release\nSee: docs/LOOP.md#resume\nNext: validate");
-  writeFileSync(file, "## Resume\nNew hook checkpoint.\n" + "detail ".repeat(300));
-  const out: string[] = [];
-  const code = await main(["hook", "claude-code"], { cwd: root, env: { SECOND_BRAIN_HOME: home }, out: s => out.push(s), err: () => {}, stdin: () => JSON.stringify({ hook_event_name: "SessionStart", source: "compact", session_id: "anchor", cwd: root }) });
-  expect(code).toBe(0);
-  const resume = JSON.parse(out.join("\n")).hookSpecificOutput.additionalContext as string;
-  expect(resume).toContain("docs/LOOP.md › Resume:\nNew hook checkpoint.");
-  expect(resume).toContain("Next: validate");
-  expect(estimateTokens(resume)).toBeLessThanOrEqual(150);
-});
-

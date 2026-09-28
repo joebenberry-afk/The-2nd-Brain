@@ -164,3 +164,16 @@ agentbench or compactbench, judged by cost, not tokens.
 | **D5-5** | Trim the post-compaction resume if long sessions show no benefit either? | Yes; the start card stays. |
 
 **Answered 2026-09-28:** the owner accepted every recommendation (D5-1 to D5-5).
+
+## 8. Status (2026-09-28)
+
+| Phase | State | Evidence |
+|---|---|---|
+| P0 | running | a week of daily use from 2026-09-27; `v2-archive` push waits for the owner's go |
+| P1 | **done** | recall rows keep the masked query and the ids answered (local); fix outcomes helped/missed from the next run of the same command, OMP and Claude Code hook (`74f4c3d`); `recall-real.jsonl` frozen from 34 logged agent queries; long-session compactbench |
+| P2 | **done** | `brain project docs add/list`; `See: path#heading` rendered live in card and state; recall falls back to one plan-doc heading or the named doc's outline (`bf68c06`, `b176d1a`). Real-query eval: wrong 16 → 11 (IDF coverage) → 5 (a keyword list must be about the note's headline), right 9 throughout, 0 silent misses; V3 eval unchanged (`c91ef2c`). Wrong rate 15 %, target ≤ 10 % not yet met |
+| P3 | **mostly done** | fix efficacy: a fix that helped under half of 4+ runs since its note changed is paused and listed in `brain review` (note untouched; `c91ef2c`). Nudge **rejected and deleted**: two-session learn pairs 6+6 (`v5-nudge`), +11.9 % tokens, +4.2 % cost; control agents wrote the note unprompted 6/6 and session B saw it 6/6 (`421beaa`). Capture verdict due 2026-10-12 (D5-3) |
+| P4 | **done** | kits **folded**: 12+12 over two task shapes (`v5-kits`), to first pass +8.1 % tokens, −2.5 % calls, −5.4 % cost; two global procedure notes replace them (`1b152d6`). Post-compaction resume **removed**: long sessions (three compactions, goal changed midway) 7/7 with vs 6/6 without, OMP's summary kept goal B every time (`v5-long-1842`) |
+
+Open: real-query wrong rate to ≤ 10 % on a set grown with two weeks of new logged queries (used as
+held-out, since the 34 frozen ones shaped the rules); capture verdict on 2026-10-12.

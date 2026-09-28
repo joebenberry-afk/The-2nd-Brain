@@ -17,7 +17,7 @@ import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
 import { demotedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, slug, tagKey, writeAtomic } from "./util.ts";
-import { readWork, renderResume, resumeText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
+import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 
 export interface Io {
   out: (text: string) => void;
@@ -212,7 +212,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
 
   state(c) {
     if (!c.args.length) {
-      c.io.out(resumeText(readWork(c.home, c.project.id), c.project.root) || "no working state");
+      c.io.out(workText(readWork(c.home, c.project.id), c.project.root) || "no working state");
       return 0;
     }
     const work = writeWork(c.home, c.project.id, c.args.join(" "));
@@ -490,19 +490,16 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       const project = resolveProject(home, cwd, io.env);
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
         rmSync(hookFixDir(home, key), { recursive: true, force: true });
-        let card: string;
-        if (p.source === "compact") {
-          card = sub ? "" : renderResume(readWork(home, project.id), project.root);
-        } else {
+        if (p.source !== "compact") {
           const { notes } = loadNotes(home);
           if (!sub) {
             try { scanEvents(home, notes); } catch { /* the card matters more than capture */ }
           }
-          card = renderCard(home, notes, project, { tools: false, subagent: sub });
-        }
-        if (card) {
-          output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
-          logUse(home, { kind: p.source === "compact" ? "resume" : "card", project: project.id, tokens: estimateTokens(card), ms: 0, session, via: "hook", sub });
+          const card = renderCard(home, notes, project, { tools: false, subagent: sub });
+          if (card) {
+            output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
+            logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session, via: "hook", sub });
+          }
         }
       } else if (event === "PostToolUse" || (event === "PostToolUseFailure" && p.is_interrupt !== true)) {
         const fields = toolEventFrom(p.tool_name, p.tool_input, event === "PostToolUseFailure", p.error);

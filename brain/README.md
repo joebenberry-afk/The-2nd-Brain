@@ -52,8 +52,8 @@ instead: `docs/LOOP.md › Goals (line 12)`.
 
 **Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`)
 lets the Brain read a project's own plan files: only headings and the text under one heading,
-never code. A working state line `See: docs/LOOP.md#resume` is shown as that section's current
-text wherever the state appears (card, resume, `brain state`), so the state never drifts from the
+never code. A working state line `See: docs/LOOP.md#checkpoint` is shown as that section's current
+text wherever the state appears (card, `brain state`), so the state never drifts from the
 repo; a missing file or heading shows `anchor missing: …`, never an old copy.
 
 ## 2. Verify in the first sessions
@@ -69,11 +69,14 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
    once the mistake stops. Measured on GPT subagents: the OMP edit-grammar mistake fell from
    8/8 first edits to 2/8 with that line in the task; live on OMP 18.4.0, children whose card
    carried it (after 3 had hit the mistake) failed 0/5 first edits vs 3/3 before, for +39 tokens.
-2. **Working state.** Ask the agent to set the plan (`brain_state`). Then force a compaction
-   (`/compact`) and ask "where are we?": the answer should give goal and next step without
-   re-reading files. Compaction re-injects only the working state (≤ 150 tokens: Goal and Next
-   first). Files edited, the last failure and the last ask are kept locally in
-   `state/work/<project>.auto.md`, never synced. A failure clears once the same command succeeds;
+2. **Working state.** Ask the agent to set the plan (`brain_state`) when the goal or next step
+   changes. OMP's own compaction summary carries goal and next: both were recalled in 100% of
+   measured short and long sessions, with or without extra Brain context. The long sessions
+   included three compactions and a goal change; OMP kept the new goal in every run. The Brain
+   adds nothing after compaction. Its working state reaches the next session's start card.
+   At compaction, shutdown and session switches, files edited, the last failure and the last
+   ask are saved locally in `state/work/<project>.auto.md`, never synced; the agent-written
+   plan is preserved. A failure clears once the same command succeeds;
    host plumbing (an aborted `wait`, a cancelled job) is never recorded. A `See: path#heading`
    line in the state is rendered from the checkout at that moment (see *Plan docs and anchors*).
 3. **Known fix.** Run something that fails with an error a tested note names — e.g. an OMP edit
@@ -129,7 +132,7 @@ The hook fails open (`{}`, exit 0). Successful and failed tools share the captur
 failed command followed by its successful repair can become a proposal. PreCompact and
 SessionEnd save edited files, the last failure, and the last user ask available in the last
 256 KiB of the transcript to local auto state; the agent-written plan is never replaced.
-After compaction, SessionStart source `compact` returns only the ≤150-token resume.
+After compaction, SessionStart source `compact` adds no context; saved state feeds the next session's card.
 Hooks with `agent_id`, SubagentStart and SubagentStop never write working state; child tool
 logs are separate from their parent’s. `agent_type` alone is also used by main sessions
 started with `--agent` and does not imply a child. Tool hooks do not spawn git.

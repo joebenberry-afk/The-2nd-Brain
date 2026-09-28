@@ -1,4 +1,4 @@
-/** Working state that survives compaction, per project. */
+/** Per-project working state for the next session's card. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cutToTokens, estimateTokens, nowIso, writeAtomic } from "./util.ts";
@@ -79,40 +79,33 @@ export function readWork(home: string, project: string): Work | null {
   }
 }
 
-/** What of the plan survives the compaction resume. */
-export const PLAN_RESUME_BUDGET = 100;
 /** A field cut shorter than this reads as noise ("Watch out: ca…"): drop it instead. */
 const MIN_FIELD_CHARS = 40;
 
 /**
  * Label-aware truncation: a long Done must never crowd out a late Next; text before the first
- * label leads. `clipped` names the fields cut or dropped, so a writer can learn to be brief.
+ * label leads.
  */
-export function planFit(text: string, budget: number): { text: string; clipped: string[] } {
+export function planFit(text: string, budget: number): string {
   const labels = [...text.matchAll(/(?:^|[\n/.;·]\s*|\s+)(Goal|Done|Next|Watch out):\s*|(?:^|[\n/·]\s*)(Goal|Done|Next|Watch out)\s+/gi)];
-  if (!labels.length) {
-    const cut = cutToTokens(text, budget);
-    return { text: cut, clipped: cut === text ? [] : ["text"] };
-  }
+  if (!labels.length) return cutToTokens(text, budget);
   const parts = labels.map((match, i) => ({
     label: (match[1] ?? match[2]!).toLowerCase(),
     text: text.slice(match.index! + match[0].length, labels[i + 1]?.index ?? text.length).trim(),
   }));
   const preamble = text.slice(0, labels[0]!.index).trim();
   const lines: string[] = [];
-  const clipped: string[] = [];
   let remaining = budget * 4;
   for (const label of ["", "goal", "next", "watch out", "done"]) {
     const value = label ? parts.filter(part => part.label === label).map(part => part.text).join(" ") : preamble;
     if (!value) continue;
     const full = label ? `${label[0]!.toUpperCase()}${label.slice(1)}: ${value}` : value;
     const line = cutToTokens(full, Math.floor(Math.min(remaining, budget * 2) / 4));
-    if (line !== full) clipped.push(label || "text");
     if (line.length - (full.length - value.length) < Math.min(value.length, MIN_FIELD_CHARS)) continue;
     lines.push(line);
     remaining -= line.length + 1;
   }
-  return { text: lines.join("\n"), clipped };
+  return lines.join("\n");
 }
 
 /** Write work text (agent text, drops auto section). Throws WorkError on empty text. */
@@ -120,7 +113,7 @@ export function writeWork(home: string, project: string, text: string): Work {
   const trimmed = scrub(text, { longRuns: false }).text.trim();
   if (!trimmed) throw new WorkError("empty work text");
 
-  const cut = trimmed.length <= WORK_BUDGET * 4 ? trimmed : planFit(trimmed, WORK_BUDGET).text;
+  const cut = trimmed.length <= WORK_BUDGET * 4 ? trimmed : planFit(trimmed, WORK_BUDGET);
   const at = nowIso();
   const frontmatter = `---\nat: ${at}\n---`;
   const content = `${frontmatter}\n\n${cut}\n`;
@@ -131,11 +124,9 @@ export function writeWork(home: string, project: string, text: string): Work {
   return readWork(home, project)!;
 }
 
-/** The write reply tells the writer what a compaction will drop, while it can still rewrite. */
+/** Acknowledge the stored plan without predicting what the host keeps in context. */
 export function stateSaved(work: Work): string {
-  const { clipped } = planFit(work.text, PLAN_RESUME_BUDGET);
-  const saved = `state saved (${estimateTokens(work.text)} tokens)`;
-  return clipped.length ? `${saved}; after compaction only ${PLAN_RESUME_BUDGET} return, so ${clipped.join(", ")} will be cut — shorten to keep it` : saved;
+  return `state saved (${estimateTokens(work.text)} tokens)`;
 }
 
 /**
@@ -201,30 +192,9 @@ function anchoredText(text: string, root: string | null, budget: number): string
 }
 
 /** Full working-state display; plan and observations retain their own timestamps. */
-export function resumeText(work: Work | null, root: string | null = null): string {
+export function workText(work: Work | null, root: string | null = null): string {
   if (!work || (!work.text && !work.auto)) return "";
   const parts = work.text ? [planHeading(work), anchoredText(work.text, root, WORK_BUDGET)] : ["Where we left off:"];
   if (work.auto) parts.push(`Auto (${timestamp(work.autoAt)}):`, work.auto);
   return parts.join("\n");
 }
-
-/**
- * The complete compaction injection, including labels, is at most 150 estimated tokens: the
- * plan's first 100, then whole observation lines while they fit. Nothing is cut mid-line.
- */
-export function renderResume(work: Work | null, root: string | null = null): string {
-  if (!work || (!work.text && !work.auto)) return "";
-  const text = /^See:/m.test(work.text) ? anchoredText(work.text, root, PLAN_RESUME_BUDGET) : planFit(work.text, PLAN_RESUME_BUDGET).text;
-  const lines = work.text ? [planHeading(work), text] : ["Where we left off:"];
-  const label = `Auto (${timestamp(work.autoAt)}):`;
-  let room = WORK_BUDGET * 4 - lines.join("\n").length - label.length - 1;
-  const auto: string[] = [];
-  for (const line of work.auto.split("\n").filter(Boolean)) {
-    if (line.length + 1 > room) continue;
-    auto.push(line);
-    room -= line.length + 1;
-  }
-  if (auto.length) lines.push(label, ...auto);
-  return cutToTokens(lines.join("\n"), WORK_BUDGET);
-}
-

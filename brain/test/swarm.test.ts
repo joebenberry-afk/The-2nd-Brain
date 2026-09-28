@@ -406,7 +406,7 @@ describe("batch 3: CLI", () => {
   });
 });
 
-describe("batch 3: resume card", () => {
+describe("batch 3: auto working state", () => {
   it("keeps the last ask and the failure however many files were edited", async () => {
     const { formatAuto, AUTO_BUDGET } = await import("../src/work.ts");
     const edited = ["brain/src/search.ts", "brain/src/card.ts", "brain/src/omp.ts", "brain/src/work.ts", "brain/test/eval.test.ts", "brain/README.md", "README.md", "docs/intake/2026-09-27-plan-v4-agent-experience.md"];
@@ -419,7 +419,7 @@ describe("batch 3: resume card", () => {
 });
 
 describe("batch 3: OMP lifecycle", async () => {
-  const { default: secondBrain, CARD_TYPE } = await import("../src/omp.ts");
+  const { default: secondBrain } = await import("../src/omp.ts");
   const { readWork } = await import("../src/work.ts");
   type H = (e: unknown, c: unknown) => unknown;
 
@@ -448,16 +448,6 @@ describe("batch 3: OMP lifecycle", async () => {
     createNote(home, { text: "Demo uses pnpm, not npm", project: "demo", kind: "decision" });
     return { home, cwd, ...omp(home) };
   }
-
-  it("puts the resume card after the compaction summary, where native compaction keeps it", () => {
-    const { cwd, fire } = setup();
-    const s = session("s", cwd);
-    fire("before_agent_start", { prompt: "go" }, s);
-    fire("context", { messages: [] }, s);
-    fire("session_compact", {}, s);
-    const out = fire("context", { messages: [{ role: "assistant", content: "old" }, { role: "compactionSummary", summary: "…" }, { role: "user", content: "go on" }] }, s) as { messages: { role?: string; customType?: string }[] };
-    expect(out.messages.map((m) => m.customType ?? m.role)).toEqual(["assistant", "compactionSummary", CARD_TYPE, "user"]);
-  });
 
   it("leaves OMP's background compaction on: no session_before_compact handler", () => {
     expect(setup().handlers.has("session_before_compact")).toBe(false);
@@ -508,15 +498,15 @@ describe("batch 3: OMP lifecycle", async () => {
   });
 
   it("refreshes the working state on /handoff, which compacts without session_before_compact", () => {
-    const { cwd, fire } = setup();
+    const { home, cwd, fire } = setup();
     const s = session("s", cwd);
     fire("before_agent_start", { prompt: "Migrate the auth middleware" }, s);
     fire("context", { messages: [] }, s);
     fire("tool_result", { toolName: "edit", input: { path: "middleware.ts" }, isError: false, content: [] }, s);
     fire("session_compact", {}, s);
-    const out = fire("context", { messages: [{ role: "compactionSummary", summary: "…" }] }, s) as { messages: { content?: string }[] };
-    expect(out.messages[1]?.content).toContain("- edited: middleware.ts");
-    expect(out.messages[1]?.content).toContain("Migrate the auth middleware");
+    const auto = readWork(home, "demo")?.auto;
+    expect(auto).toContain("- edited: middleware.ts");
+    expect(auto).toContain("Migrate the auth middleware");
   });
 
   it("a subagent gets the card but never writes the parent's working state", () => {
@@ -530,15 +520,6 @@ describe("batch 3: OMP lifecycle", async () => {
     fire("session_shutdown", {}, sub);
     expect(readWork(home, "demo")?.auto).toContain("Ship CSV export");
     expect(readWork(home, "demo")?.auto).not.toContain("parse");
-  });
-
-  it("sends one card when compaction runs before the session's first prompt", () => {
-    const { cwd, fire } = setup();
-    const s = session("s", cwd);
-    const start = fire("before_agent_start", { prompt: "go" }, s) as { message: object };
-    fire("session_compact", {}, s);
-    const messages = [{ role: "compactionSummary", summary: "…" }, { role: "custom", ...start.message }, { role: "user", content: "go" }];
-    expect(fire("context", { messages }, s)).toBeUndefined();
   });
 
   it("failures fixed in earlier sessions become proposals after the first card, off its critical path", () => {

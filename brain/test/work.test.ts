@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, renderResume, resumeText, stateSaved, workPath, writeAuto, writeWork } from "../src/work.ts";
+import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, workText, workPath, writeAuto, writeWork } from "../src/work.ts";
 import * as util from "../src/util.ts";
 import { estimateTokens } from "../src/util.ts";
 
@@ -136,16 +136,16 @@ describe("work", () => {
     expect(estimateTokens(formatted)).toBeLessThanOrEqual(AUTO_BUDGET);
   });
 
-  it("resumeText: empty when work is null", () => {
-    expect(resumeText(null)).toBe("");
+  it("workText: empty when work is null", () => {
+    expect(workText(null)).toBe("");
   });
 
-  it("resumeText: empty when both text and auto are empty", () => {
+  it("workText: empty when both text and auto are empty", () => {
     const work = { project: "p", at: "2026-09-27T10:00:00Z", autoAt: "", text: "", auto: "", path: "" };
-    expect(resumeText(work)).toBe("");
+    expect(workText(work)).toBe("");
   });
 
-  it("resumeText: includes timestamp and text/auto", () => {
+  it("workText: includes timestamp and text/auto", () => {
     const work = {
       project: "p",
       at: "2026-09-27T10:30:45Z", autoAt: "",
@@ -153,7 +153,7 @@ describe("work", () => {
       auto: "- edited: a.ts",
       path: "",
     };
-    const result = resumeText(work);
+    const result = workText(work);
     expect(result).toContain("Where we left off");
     expect(result).toContain("2026-09-27 10:30");
     expect(result).toContain("UTC");
@@ -161,16 +161,16 @@ describe("work", () => {
     expect(result).toContain("- edited: a.ts");
   });
 
-  it("resumeText: format with text only", () => {
+  it("workText: format with text only", () => {
     const work = { project: "p", at: "2026-09-27T10:00:00Z", autoAt: "", text: "Goal", auto: "", path: "" };
-    const result = resumeText(work);
+    const result = workText(work);
     expect(result).toContain("Where we left off");
     expect(result).toContain("Goal");
   });
 
-  it("resumeText: format with auto only", () => {
+  it("workText: format with auto only", () => {
     const work = { project: "p", at: "2026-09-27T10:00:00Z", autoAt: "", text: "", auto: "- edited: x", path: "" };
-    const result = resumeText(work);
+    const result = workText(work);
     expect(result).toContain("Where we left off");
     expect(result).toContain("- edited: x");
   });
@@ -218,50 +218,13 @@ describe("work", () => {
     expect(readWork(home, "p")).toMatchObject({ text: "Goal: concurrent new plan", auto: "- last ask: continue" });
   });
 
-  it("resume preserves a late Next after a long Done within the complete budget", () => {
-    const home = tmp();
-    writeWork(home, "p", `Goal: ship migration. Done: ${"completed step ".repeat(100)} Next: run integration. Watch out: preserve data.`);
-    writeAuto(home, "p", { edited: ["db.ts"], failure: "test failed", ask: "ship it" });
-    const text = renderResume(readWork(home, "p"));
-    expect(estimateTokens(text)).toBeLessThanOrEqual(150);
-    expect(text).toContain("Goal: ship migration");
-    expect(text).toContain("Next: run integration");
-    expect(text.indexOf("Next:")).toBeLessThan(text.indexOf("Done:"));
-  });
-
-  it("resume keeps text written before the first label", () => {
-    const home = tmp();
-    writeWork(home, "p", `Do not deploy without owner approval.\nDone: ${"step ".repeat(200)}\nNext: run tests`);
-    const text = renderResume(readWork(home, "p"));
-    expect(text).toContain("Do not deploy without owner approval");
-    expect(text).toContain("Next: run tests");
-  });
-
-  it("resume drops a field it can only stub and never cuts an observation line", () => {
-    const home = tmp();
-    const text = `Goal: ${"make the brain great ".repeat(6)}\nNext: ${"restart and compact ".repeat(8)}\nWatch out: capture precision beats recall for proposals\nDone: ${"round ".repeat(40)}`;
-    writeWork(home, "p", text);
-    writeAuto(home, "p", { edited: ["src/card.ts"], failure: "`ls state/work` → No such file", ask: "where are we?" });
-    const resume = renderResume(readWork(home, "p"));
-    expect(estimateTokens(resume)).toBeLessThanOrEqual(150);
-    for (const line of resume.split("\n")) {
-      expect(line).not.toMatch(/^(Goal|Next|Watch out|Done): .{0,38}…$/);
-      if (line.startsWith("- ")) expect(line).not.toMatch(/…$/);
-    }
-    expect(resume).toContain("Goal: make the brain");
-    expect(stateSaved(readWork(home, "p")!)).toMatch(/after compaction only 100 return, so .*done.* will be cut/);
-    writeWork(home, "p", "Goal: ship. Next: test.");
-    expect(stateSaved(readWork(home, "p")!)).toBe("state saved (6 tokens)");
-  });
-
   it("stale plan and current auto context display their own timestamps", () => {
     const work = { project: "p", path: "", at: "2026-09-20T12:00:00Z", autoAt: "2026-09-27T15:00:00Z", text: "Goal: migrate DB", auto: "- last ask: export CSV" };
-    for (const text of [resumeText(work), renderResume(work)]) {
-      expect(text).toContain("plan may be stale");
-      expect(text).toContain("2026-09-20 12:00");
-      expect(text).toContain("2026-09-27 15:00");
-    }
-    expect(resumeText({ ...work, autoAt: "2026-09-23T12:00:00Z" })).not.toContain("plan may be stale");
+    const text = workText(work);
+    expect(text).toContain("plan may be stale");
+    expect(text).toContain("2026-09-20 12:00");
+    expect(text).toContain("2026-09-27 15:00");
+    expect(workText({ ...work, autoAt: "2026-09-23T12:00:00Z" })).not.toContain("plan may be stale");
   });
 
   it("legacy auto is readable, overridden locally, and dropped on the next plan write", () => {
@@ -275,16 +238,4 @@ describe("work", () => {
     expect(readFileSync(workPath(home, "p"), "utf8")).not.toContain("legacy");
     expect(readWork(home, "p")?.auto).toContain("local");
   });
-
-  it("resume handles slash-separated labels and bounds unlabeled fallback text", () => {
-    const work = { project: "p", path: "", at: "", autoAt: "", text: "Goal ship / Done " + "completed ".repeat(100) + "/ Next verify / Watch out data", auto: "" };
-    const labeled = renderResume(work);
-    expect(labeled).toContain("Next: verify");
-    expect(labeled.indexOf("Next:")).toBeLessThan(labeled.indexOf("Done:"));
-    const fallback = renderResume({ ...work, text: "Continue from checkpoint. " + "detail ".repeat(200) });
-    expect(fallback).toContain("Continue from checkpoint.");
-    expect(estimateTokens(fallback)).toBeLessThanOrEqual(150);
-    expect(renderResume(null)).toBe("");
-  });
-
 });

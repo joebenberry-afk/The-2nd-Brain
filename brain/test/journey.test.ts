@@ -1,6 +1,6 @@
 /**
  * The whole loop through the real extension (a fake OMP host calls the handlers and tools the way
- * OMP does) and the real CLI: work → compaction → resume → capture → review → next session's card
+ * OMP does) and the real CLI: work → compaction → capture → review → next session's card
  * and known fix → cross-project scope.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { main } from "../src/cli.ts";
-import secondBrain, { CARD_TYPE, type HostLike } from "../src/omp.ts";
+import secondBrain, { type HostLike } from "../src/omp.ts";
+import { readWork } from "../src/work.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 interface Tool {
@@ -40,7 +41,7 @@ async function cli(home: string, cwd: string, ...argv: string[]): Promise<string
   return out.join("\n");
 }
 
-it("a failure fixed in one session becomes the known fix, the card and the resume of the next", async () => {
+it("a failure fixed in one session becomes the known fix and the card of the next", async () => {
   const home = mkdtempSync(join(tmpdir(), "journey-home-"));
   const app = repo("shop-app", "package.json");
   const tool = repo("etl-tool", "pyproject.toml");
@@ -54,15 +55,12 @@ it("a failure fixed in one session becomes the known fix, the card and the resum
   day1.fire("tool_result", { toolName: "bash", input: { command: "npm ci && npm test" }, isError: false, content: [{ type: "text", text: "ok" }] }, s1);
   day1.fire("tool_result", { toolName: "edit", input: { path: join(app, "src", "cart.ts") }, isError: false, content: [] }, s1);
 
-  // Compaction mid-run: the model's next calls start with the resume card.
+  // Compaction saves observations for the next session without changing model context.
   day1.fire("session_compact", {}, s1);
-  const patched = day1.fire("context", { messages: [{ role: "compactionSummary", summary: "…" }] }, s1) as { messages: { customType?: string; content?: string }[] };
-  // After the summary: Anthropic's native compaction drops everything before it.
-  const resume = patched.messages[1];
-  expect(resume?.customType).toBe(CARD_TYPE);
-  expect(resume?.content).toContain("Goal: green test suite");
-  expect(resume?.content).toContain("- edited: src/cart.ts");
-  expect(resume?.content).toContain("- last failure: npm test → Error: Cannot find module 'left-pad'");
+  const work = readWork(home, "shop-app");
+  expect(work?.text).toContain("Goal: green test suite");
+  expect(work?.auto).toContain("- edited: src/cart.ts");
+  expect(work?.auto).toContain("- last failure: npm test → Error: Cannot find module 'left-pad'");
   day1.fire("session_shutdown", {}, s1);
 
   // Between sessions: review turns the failed → fixed pair into a tested gotcha.
@@ -71,7 +69,7 @@ it("a failure fixed in one session becomes the known fix, the card and the resum
   expect(pid, review).toBeDefined();
   expect(await cli(home, app, "accept", pid as string)).toMatch(/^accepted p-[0-9a-f]+ → n-[0-9a-f]{10}$/);
 
-  // Session 2 in the app: the card resumes the work and knows the gotcha …
+  // Session 2 in the app: the card carries the working state and knows the gotcha …
   const day2 = omp(home);
   const s2 = { cwd: app, sessionManager: { getSessionId: () => "s2" } };
   const card = (day2.fire("before_agent_start", { prompt: "continue" }, s2) as { message: { content: string } }).message.content;
