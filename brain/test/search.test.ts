@@ -381,7 +381,7 @@ describe("recall and note boundaries", () => {
       const result = answerWithHits(elsewhere, "quartz migration", { project: here, home });
       expect(result.text).toBe("PLAN.md › Quartz migration (line 1)");
       expect(result.hits).toBe(1);
-      expect(result.ids).toEqual([]);
+      expect(result.ids).toEqual(["doc:PLAN.md"]);
       expect(answer([note("local", { body: "quartz migration" })], "quartz migration", { project: here, home })).toContain("local [note]");
       expect(answer(elsewhere, "quartz migration", { project, home })).toContain("related in other projects");
       expect(answer([], "quartz migration", { project: null, home })).not.toContain("PLAN.md");

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -195,6 +195,21 @@ describe("card completeness and scope", () => {
 });
 
 describe("recurring known fix", () => {
+  it("keeps paused fixes out of recurring lines until their note is edited", () => {
+    const home = tmp();
+    const fix = createNote(home, { text: "Repair the runtime", project: "global", tested: true, errors: ["runtime mismatch"] });
+    utimesSync(fix.path, NOW, NOW);
+    for (const session of ["a", "b", "c", "d"]) {
+      logUse(home, { kind: "fix", id: fix.id, project: "demo", session, tokens: 0, ms: 0 }, NOW);
+      logUse(home, { kind: "fixout", id: fix.id, project: "demo", outcome: "missed", tokens: 0, ms: 0 }, NOW);
+    }
+    const card = () => renderCard(home, loadNotes(home).notes, project, { now: NOW });
+    expect(card()).not.toContain("Often hit lately");
+    const edited = new Date(NOW.getTime() + 2000);
+    utimesSync(fix.path, edited, edited);
+    expect(card()).toContain(`4× [note, tested] Repair the runtime (${fix.id})`);
+  });
+
   it("is said up front once it fired in 3 sessions of the same role this week", () => {
     const home = tmp();
     const fix = createNote(home, { text: "OMP edits start with [path#tag] then PUT rows", project: "global", kind: "gotcha", tested: true, errors: ["input must begin with"] });

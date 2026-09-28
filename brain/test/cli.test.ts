@@ -1,8 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { main, type Io } from "../src/cli.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import { appendEvent, renderFix, scanEvents } from "../src/capture.ts";
@@ -34,6 +36,33 @@ function setup(): { home: string; cwd: string; io: Partial<Io> } {
 }
 
 describe("brain cli", () => {
+  it("delivers cards, fixes and auto-save even when pending cleanup is locked", async () => {
+    const { home, cwd, io } = setup();
+    const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const hook = (payload: object) => run(["hook", "claude-code"], { ...io, stdin: () => JSON.stringify({ cwd, session_id: "locked", ...payload }) });
+    const remove = fs.rmSync;
+    const locked = vi.spyOn(fs, "rmSync").mockImplementation((path, options) => {
+      if (String(path).includes("pending-fixes")) throw Object.assign(new Error("locked"), { code: "EPERM" });
+      return remove(path, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      expect((await hook({ hook_event_name: "SessionStart" })).out).toContain(note.id);
+      const failure = { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "npm test" }, error: "runtime mismatch" };
+      expect((await hook(failure)).out).toContain(note.id);
+      expect((await hook(failure)).out).toContain(note.id);
+      for (const event of ["SessionEnd", "PreCompact"]) {
+        await hook({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: event + ".ts" } });
+        await hook({ hook_event_name: event });
+        expect(readWork(home, "demo")?.auto).toContain(event + ".ts");
+      }
+      await hook({ hook_event_name: "SubagentStop", agent_id: "child" });
+    } finally {
+      locked.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
   it("logs CLI recall ids, silence and scrubbed queries without private answer text", async () => {
     const { home, io } = setup();
     const note = createNote(home, { project: "demo", text: "Private deployment detail", private: true });

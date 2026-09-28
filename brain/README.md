@@ -51,7 +51,8 @@ words in the note's first line, or half of a short one. When no note answers, re
 instead: `docs/LOOP.md › Goals (line 12)`.
 
 **Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`)
-lets the Brain read a project's own plan files: only headings and the text under one heading,
+lets the Brain read a project's own plan files: only headings and the text under one heading
+(YAML front matter is skipped),
 never code. A working state line `See: docs/LOOP.md#checkpoint` is shown as that section's current
 text wherever the state appears (card, `brain state`), so the state never drifts from the
 repo; a missing file or heading shows `anchor missing: …`, never an old copy.
@@ -97,9 +98,11 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
    running (latest three), and frequent errors without a fix. Each recall row keeps its query
    (masked, ≤ 200 chars) and the ids it answered with, locally only (`recall: N queries logged,
    S silent`). A fired fix is judged by the next run of the same command: `fix outcomes: <id>
-   helped H/missed M`; a fix that helped under half the time over 4+ runs since its note last
-   changed is paused (no longer fired) and listed under `Fixes to review` in stats and
-   `brain review`. The note file is never changed; editing it gives the fix a new trial.
+   helped H/missed M` (an aborted or cancelled rerun decides nothing); a fix that helped under
+   half the time over 4+ runs since its note last changed is paused (no longer fired, not on the
+   card's `Often hit lately` lines) and listed under `Fixes to review` in stats and
+   `brain review`. The note file is never changed; editing it gives the fix a new trial. A
+   plan-doc answer counts as answered (`doc:<path>`), not silent.
    `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI, hooks and
    MCP; old rows lacking attribution are excluded from this split, not guessed to be OMP. Every
    row carries the build that wrote it (newest source mtime); stats read only the newest build

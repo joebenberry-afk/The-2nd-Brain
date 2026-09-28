@@ -7,6 +7,8 @@ import { renderCard } from "../src/card.ts";
 import { writeWork } from "../src/work.ts";
 import { main } from "../src/cli.ts";
 import { estimateTokens } from "../src/util.ts";
+import { answerWithHits } from "../src/search.ts";
+import { logUse, stats } from "../src/telemetry.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -21,17 +23,41 @@ function setup() {
   return { base, home, root, file, project };
 }
 
+it.each(["---", "..."])("skips YAML front matter closed by %s without shifting heading lines", (end) => {
+  const { home, root, file, project } = setup();
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/LOOP.md"] } } }));
+  writeFileSync(file, '\uFEFF---\r\n# Metadata\r\nstatus: draft\r\n' + end + '\r\n## Goals\r\nShip memory.\r\nResume\r\n---\r\nCheckpoint.\r\n');
+  expect(readAnchor(root, "docs/LOOP.md#metadata")).toBeUndefined();
+  expect(readAnchor(root, "docs/LOOP.md#status-draft")).toBeUndefined();
+  expect(docAnswer(home, project, "LOOP.md")?.text).toBe("docs/LOOP.md: Goals · Resume");
+  expect(docAnswer(home, project, "LOOP.md goals")?.text).toBe("docs/LOOP.md › Goals (line 5)");
+  expect(readAnchor(root, "docs/LOOP.md#resume")).toBe("Checkpoint.");
+  writeFileSync(file, "---\n## Goals\nNo closing delimiter.\n");
+  expect(readAnchor(root, "docs/LOOP.md#goals")).toBe("No closing delimiter.");
+});
+
+it("counts heading and outline recalls as answered in stats", () => {
+  const { home, project } = setup();
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/LOOP.md"] } } }));
+  for (const query of ["LOOP.md goals", "LOOP.md"]) {
+    const answer = answerWithHits([], query, { home, project });
+    logUse(home, { kind: "recall", project: project.id, query, ids: answer.ids, hits: answer.hits, tokens: 1, ms: 0 });
+    expect(answer.ids).toEqual(["doc:docs/LOOP.md"]);
+  }
+  expect(stats(home).recallQueries).toEqual({ logged: 2, silent: 0 });
+});
+
 it("reads only explicitly listed Markdown docs, with heading and first-paragraph precision", () => {
   const { home, root, file, project } = setup();
   expect(projectDocs(home, project)).toEqual([]);
-  expect(docAnswer(home, project, "LOOP.md goals")).toBeUndefined();
+  expect(docAnswer(home, project, "LOOP.md goals")?.text).toBeUndefined();
   writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/LOOP.md", "missing.md", "../outside.md", "code.ts"] } } }));
   expect(projectDocs(home, project)).toEqual([file]);
-  expect(docAnswer(home, project, "LOOP.md goals")).toBe("docs/LOOP.md › Goals (line 3)");
-  expect(docAnswer(home, project, "goals")).toBe("docs/LOOP.md › Goals (line 3)");
-  expect(docAnswer(home, project, "goals unrelated")).toBeUndefined();
+  expect(docAnswer(home, project, "LOOP.md goals")?.text).toBe("docs/LOOP.md › Goals (line 3)");
+  expect(docAnswer(home, project, "goals")?.text).toBe("docs/LOOP.md › Goals (line 3)");
+  expect(docAnswer(home, project, "goals unrelated")?.text).toBeUndefined();
   writeFileSync(file, "## Goals\nFirst paragraph.\n\nSecret zebra detail.\n");
-  expect(docAnswer(home, project, "secret zebra")).toBeUndefined();
+  expect(docAnswer(home, project, "secret zebra")?.text).toBeUndefined();
   expect(projectDocs(home, { ...project, root: null })).toEqual([]);
   expect(readAnchor(root, "docs/LOOP.md#absent")).toBeUndefined();
 });
@@ -41,14 +67,14 @@ it("named registered docs return the best heading or a bounded H2 outline", () =
   writeFileSync(file, "# Plan\n## Loop\nCurrent work.\n### Hidden detail\nOther.\n## Current campaign\nShip the checkpoint.\n## Idea ledger\nIdeas.\n## User decisions pending\nOwner choices.\n## Iteration log\nHistory.");
   writeFileSync(join(root, "docs", "OTHER.md"), "## Goals\nGoals for the unrelated project.");
   writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/OTHER.md", "docs/LOOP.md"] } } }));
-  const outline = docAnswer(home, project, "lOoP.Md goals");
+  const outline = docAnswer(home, project, "lOoP.Md goals")?.text;
   expect(outline).toBe("docs/LOOP.md: Loop · Current campaign · Idea ledger · User decisions pending · Iteration log");
   expect(outline).not.toContain("Hidden detail");
-  expect(docAnswer(home, project, "LOOP.md campaign")).toBe("docs/LOOP.md › Current campaign (line 6)");
-  expect(docAnswer(home, project, "LOOP.md")).toBe(outline);
-  expect(docAnswer(home, project, "MISSING.md goals")).toBeUndefined();
+  expect(docAnswer(home, project, "LOOP.md campaign")?.text).toBe("docs/LOOP.md › Current campaign (line 6)");
+  expect(docAnswer(home, project, "LOOP.md")?.text).toBe(outline);
+  expect(docAnswer(home, project, "MISSING.md goals")?.text).toBeUndefined();
   writeFileSync(file, "## Loop\nCurrent.\n" + Array.from({ length: 20 }, (_, i) => "## Campaign heading number " + i).join("\n"));
-  const bounded = docAnswer(home, project, "LOOP.md goals")!;
+  const bounded = docAnswer(home, project, "LOOP.md goals")?.text!;
   expect(bounded).toContain("docs/LOOP.md: Loop · Campaign heading");
   expect(bounded).toContain("…");
   expect(estimateTokens(bounded)).toBeLessThanOrEqual(30);

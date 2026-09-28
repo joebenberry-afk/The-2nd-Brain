@@ -3,7 +3,7 @@ import { pendingCount } from "./capture.ts";
 import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
 import { recall, staleHere } from "./search.ts";
-import { fixFires } from "./telemetry.ts";
+import { fixFires, pausedFixes } from "./telemetry.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
 import { planFit, readWork, workText } from "./work.ts";
 
@@ -101,9 +101,10 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   // here keep making: say it before the first attempt, not after. It retires itself when the
   // mistake stops, because then it stops firing.
   const fires = fixFires(home, opts.subagent === true, 7, now);
+  const paused = pausedFixes(home, notes);
   // Any note that could fire as a fix here qualifies, untagged globals included.
   const recurring = notes
-    .filter((n) => !n.retired && n.tested && n.errors.length && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project))
+    .filter((n) => !n.retired && n.tested && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
   const ranked = rankForCard(candidates, project, opts.subagent ? workingState : work?.text ?? "", now, home, opts.prompt);

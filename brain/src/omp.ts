@@ -534,7 +534,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // aborted wait, a cancelled job) says nothing about the project and is not tracked.
       const failureKey = fields.command || fields.tool || "unknown";
       const pending = state.pendingFixes?.get(failureKey);
-      if (pending) {
+      if (pending && (fields.ok || !hostNoise(fields.tool, fields.error ?? ""))) {
         state.pendingFixes!.delete(failureKey);
         logUse(home, { kind: "fixout", ...pending, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
       }

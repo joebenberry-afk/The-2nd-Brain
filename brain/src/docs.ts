@@ -24,7 +24,8 @@ function sections(file: string): Section[] {
   const found: Array<Section & { start: number }> = [];
   const used = new Set<string>();
   let fence = "", fenceLength = 0;
-  for (let i = 0; i < lines.length; i++) {
+  const frontEnd = lines[0] === "---" ? lines.findIndex((line, i) => i > 0 && /^(?:---|\.\.\.)[ \t]*$/.test(line)) : -1;
+  for (let i = frontEnd + 1; i < lines.length; i++) {
     const line = lines[i]!;
     const fenced = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fenced) {
@@ -68,20 +69,20 @@ export function readAnchor(root: string, anchor: string): string | undefined {
 }
 
 /** One best heading pointer, or a short H2 outline when a query names a registered doc. */
-export function docAnswer(home: string, project: Project, query: string): string | undefined {
+export function docAnswer(home: string, project: Project, query: string): { text: string; path: string } | undefined {
   const terms = tokens(query, true);
   if (!terms.length || !project.root) return undefined;
   const files = projectDocs(home, project);
   const named = files.filter(file => terms.includes(basename(file).toLowerCase()));
-  let best: { score: number; answer: string } | undefined;
-  let outline: string | undefined;
+  let best: { score: number; text: string; path: string } | undefined;
+  let outline: { text: string; path: string } | undefined;
   for (const file of named.length ? named : files) {
     const path = relative(project.root, file).replace(/\\/g, "/");
     const headings = sections(file);
     const remaining = named.length ? terms.filter(term => term !== basename(file).toLowerCase()) : terms;
     if (named.length && !outline) {
       const h2 = headings.filter(section => section.level === 2).map(section => section.heading);
-      if (h2.length) outline = cutToTokens(path + ": " + h2.join(" · "), 30);
+      if (h2.length) outline = { text: cutToTokens(path + ": " + h2.join(" · "), 30), path };
     }
     for (const section of headings) {
       const heading = new Set(tokens(section.heading, true));
@@ -89,8 +90,8 @@ export function docAnswer(home: string, project: Project, query: string): string
       const matched = remaining.filter(term => words.has(term));
       if (matched.length < (named.length ? 1 : Math.min(2, terms.length))) continue;
       const score = matched.length * 2 + matched.filter(term => heading.has(term)).length;
-      if (!best || score > best.score) best = { score, answer: path + " › " + section.heading + " (line " + section.line + ")" };
+      if (!best || score > best.score) best = { score, text: path + " › " + section.heading + " (line " + section.line + ")", path };
     }
   }
-  return best?.answer ?? outline;
+  return best ?? outline;
 }

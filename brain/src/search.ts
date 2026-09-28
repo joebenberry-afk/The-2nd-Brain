@@ -426,7 +426,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
   }
   if (!hits.length && opts.home && opts.project?.root) {
     const heading = docAnswer(opts.home, opts.project, query);
-    if (heading) return { text: heading, hits: 1, ids: [] };
+    if (heading) return { text: heading.text, hits: 1, ids: ["doc:" + heading.path] };
   }
   if (!hits.length && !opts.all) {
     const related = matchingHits(scored, { ...opts, all: true }).length

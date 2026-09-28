@@ -77,6 +77,21 @@ describe("OMP extension", () => {
     expect(row.ids).toHaveLength(3);
   });
 
+  it.each(["aborted by user", "cancelled by host"])("leaves pending fixes unjudged after %s until a real rerun", (noise) => {
+    const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const { handlers } = load();
+    const result = (session: string, content: string, isError: boolean) => handlers.get("tool_result")!({ toolName: "bash", input: { command: "npm test" }, isError, content }, ctx(session));
+    const outcomes = () => readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => row.kind === "fixout").map(row => [row.session, row.id, row.outcome]);
+    for (const session of ["help", "miss"]) {
+      result(session, "runtime mismatch", true);
+      result(session, noise, true);
+    }
+    expect(outcomes()).toEqual([]);
+    result("help", "ok", false);
+    result("miss", "real failure", true);
+    expect(outcomes()).toEqual([["help", note.id, "helped"], ["miss", note.id, "missed"]]);
+  });
+
   it("scores only the next same-key result in the same session and drops untried fixes", () => {
     const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
     const { handlers } = load();

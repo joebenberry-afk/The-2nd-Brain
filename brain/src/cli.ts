@@ -15,7 +15,7 @@ import { runMcp } from "./mcp.ts";
 import { answerWithHits } from "./search.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
-import { demotedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
+import { pausedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 
@@ -113,14 +113,7 @@ function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, qu
 /** Fixes that stopped helping (see demotedFixes): no longer fired until their note is edited. */
 function fixesToReview(c: Ctx): number {
   const { notes } = loadNotes(c.home);
-  const paused = [...demotedFixes(c.home, (id) => {
-    const path = notes.find((n) => n.id === id)?.path;
-    try {
-      return path ? statSync(path).mtimeMs : undefined;
-    } catch {
-      return undefined;
-    }
-  })].filter((id) => notes.some((n) => n.id === id && n.tested)).sort();
+  const paused = [...pausedFixes(c.home, notes)].filter((id) => notes.some((n) => n.id === id && n.tested)).sort();
   if (paused.length) c.io.out("Fixes to review (helped under half of 4+ runs; paused until the note is edited):");
   for (const id of paused) c.io.out(`  ${id}`);
   return paused.length;
@@ -489,7 +482,8 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       const key = sub ? `${session ?? "claude-code"}:agent:${String(p.agent_id ?? "unknown")}` : session ?? "claude-code";
       const project = resolveProject(home, cwd, io.env);
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
-        rmSync(hookFixDir(home, key), { recursive: true, force: true });
+        try { rmSync(hookFixDir(home, key), { recursive: true, force: true }); }
+        catch { /* pending telemetry cleanup must not suppress the card */ }
         if (p.source !== "compact") {
           const { notes } = loadNotes(home);
           if (!sub) {
@@ -516,7 +510,10 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
               logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session, via: "hook", sub });
             }
           } catch { /* missing or torn local pending state is unmeasured */ }
-          finally { rmSync(claimed, { force: true }); }
+          finally {
+            try { rmSync(claimed, { force: true }); }
+            catch { /* a locked claim must not suppress the next fix */ }
+          }
         }
         if (!fields.ok && fields.error) {
           const fix = findFix(loadNotes(home).notes, fields.error, project, home);
@@ -531,7 +528,8 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           }
         }
       } else if (session && (event === "SessionEnd" || event === "PreCompact" || event === "SubagentStop")) {
-        rmSync(hookFixDir(home, key), { recursive: true, force: true });
+        try { rmSync(hookFixDir(home, key), { recursive: true, force: true }); }
+        catch { /* pending telemetry cleanup must not suppress auto-save */ }
         if (!sub) saveHookAuto(home, project, session, p.transcript_path);
       }
     }

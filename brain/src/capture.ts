@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
 import { cutToTokens, nowIso, writeAtomic } from "./util.ts";
-import { demotedFixes } from "./telemetry.ts";
+import { pausedFixes } from "./telemetry.ts";
 
 export { scrub };
 import {
@@ -885,14 +885,7 @@ export function findFix(
     if (!isActive(note) || !note.tested || !note.errors.length) continue;
     if (!visibleTo(note, project)) continue;
     if (home) {
-      demoted ??= demotedFixes(home, (id) => {
-        const path = notes.find((n) => n.id === id)?.path;
-        try {
-          return path ? statSync(path).mtimeMs : undefined;
-        } catch {
-          return undefined;
-        }
-      });
+      demoted ??= pausedFixes(home, notes);
       if (demoted.has(note.id)) continue;
     }
 

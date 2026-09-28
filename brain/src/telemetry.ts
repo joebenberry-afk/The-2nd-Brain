@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./util.ts";
 import { scrub } from "./scrub.ts";
+import type { Note } from "./notes.ts";
 
 export type UseKind = "card" | "fix" | "fixout" | "recall" | "note" | "state" | "error";
 
@@ -214,6 +215,15 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const fixes = [...fired].map(([id, seen]) => ({ id, sessions: seen.size })).sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
   const fixOutcomes = [...outcomes.values()].filter(f => f.helped + f.missed > 0).sort((a, b) => b.firings - a.firings || a.id.localeCompare(b.id));
   return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors };
+}
+
+/** Apply outcome demotion since each note was last edited. */
+export function pausedFixes(home: string, notes: Note[]): Set<string> {
+  return demotedFixes(home, (id) => {
+    const path = notes.find((note) => note.id === id)?.path;
+    try { return path ? statSync(path).mtimeMs : undefined; }
+    catch { return undefined; }
+  });
 }
 
 /** Outcome rows (fix id, time, helped?) parsed once per telemetry file version. */
