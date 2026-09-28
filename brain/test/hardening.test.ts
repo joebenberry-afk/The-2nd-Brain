@@ -34,6 +34,15 @@ describe("secrets never reach notes or working state", () => {
     }
   });
 
+  it("leaves prose after Basic/Bearer alone but masks scheme tokens", () => {
+    for (const text of ["Basic Upscaler project architecture decisions", "Visual Basic Scripting", "Digest username"]) {
+      expect(scrub(text)).toEqual({ text, scrubbed: false });
+    }
+    for (const text of ["Basic dXNlcjpwYXNzd29yZA==", "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig", "Authorization: Basic Upscaler", "Bearer abcdefghijklmnopqrstuvwxyz"]) {
+      expect(scrub(text).text).toMatch(/(Basic|Bearer) \*\*\*/);
+    }
+  });
+
   it("masks credentials in note bodies and error patterns but keeps commit SHAs", () => {
     const home = tmp();
     const note = createNote(home, {

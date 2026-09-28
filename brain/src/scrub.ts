@@ -71,8 +71,12 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   if (endKey && (beginKey < 0 || beginKey > endKey.index)) result = "***" + result.slice(endKey.index + endKey[0].length);
   result = result.replace(/(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g, "$1 *** -----END PRIVATE KEY-----");
 
-  // Authorization headers and schemes: Bearer ***, Basic ***, Authorization: Token ***
-  result = result.replace(/\b(Bearer|Basic|Digest)\s+[A-Za-z0-9._~+/-]{6,}=*/g, "$1 ***");
+  // Authorization headers and schemes: Bearer ***, Basic ***, Authorization: Token ***. A bare
+  // scheme word before an ordinary word is prose ("Basic Upscaler", "Visual Basic Scripting"):
+  // outside an Authorization header only a token-shaped value (digit, symbol, inner capital, or 20+
+  // letters) is masked.
+  result = result.replace(/\b(Bearer|Basic|Digest)\s+([A-Za-z0-9._~+/-]{6,}=*)/g, (match, scheme: string, value: string) =>
+    /^[A-Za-z][a-z]{0,18}$/.test(value) ? match : `${scheme} ***`);
   result = result.replace(/\b(authorization)(["']?\s*[=:]\s*["']?)(?!(?:Bearer|Basic|Digest) \*\*\*)(?:(\w+)\s+)?([^\s"',;]+)/gi, (_m, name: string, sep: string, scheme: string | undefined) =>
     `${name}${sep}${scheme ? `${scheme} ` : ""}***`,
   );
