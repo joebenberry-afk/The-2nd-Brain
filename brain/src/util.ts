@@ -9,12 +9,15 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-/** Cut `text` to at most `budget` tokens, ending with "…" when cut. */
+/** Cut `text` to at most `budget` tokens, ending with "…" when cut, on a word end when one is near. */
 export function cutToTokens(text: string, budget: number): string {
   const max = Math.floor(budget) * 4;
   if (max <= 0) return "";
   if (text.length <= max) return text;
-  return text.slice(0, Math.max(0, max - 1)).trimEnd() + "…";
+  const cut = text.slice(0, Math.max(0, max - 1));
+  // "…upload the latest 2nd brai…" reads as noise; drop the partial word unless that loses much.
+  const space = /\s/.test(text[cut.length] ?? "") ? cut.length : cut.search(/\s\S*$/);
+  return (space > cut.length / 2 && space >= cut.length - 24 ? cut.slice(0, space) : cut).trimEnd() + "…";
 }
 
 /** ISO-8601 UTC time at second precision, e.g. 2026-09-27T10:00:00Z. */

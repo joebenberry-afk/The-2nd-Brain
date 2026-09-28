@@ -8,7 +8,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { loadNotes } from "./notes.ts";
 import { resolveProject } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
-import { appendEvent, errorSignature, findFix, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
+import { appendEvent, errorSignature, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { logUse } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
@@ -41,6 +41,8 @@ interface SessionState {
   resumeSeen: boolean;
   edited: string[];
   failure?: string;
+  /** The command (or tool) that failed; its next success clears the failure. */
+  failureKey?: string;
   ask?: string;
   /** Notes whose full fix is already in this context; cleared when compaction drops it. */
   fixed?: Set<string>;
@@ -121,6 +123,18 @@ function lastUserAsk(ctx: unknown): string | undefined {
     if (asObject(branch[i])?.type === "message" && message?.role === "user") return cutAsk(textOf(message.content)) || undefined;
   }
   return undefined;
+}
+
+/** The session's persisted branch already holds a Brain card (or resume) after its last compaction. */
+function cardSinceCompaction(ctx: unknown): boolean {
+  const branch = call(sessionManagerOf(ctx), "getBranch");
+  if (!Array.isArray(branch)) return false;
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const entry = asObject(branch[i]);
+    if (entry?.type === "compaction") return false;
+    if (entry?.customType === CARD_TYPE) return true;
+  }
+  return false;
 }
 
 function cutAsk(text: string): string {
@@ -396,6 +410,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       }
 
       // Return card on first call only (unless resume was already delivered via context)
+      // A session resumed in a new process (restart, /resume) already holds its card since the
+      // last compaction: a second one repeats the same lines and echoes this session's own ask.
+      if (!state.carded && !state.resumeSeen && cardSinceCompaction(ctx)) state.carded = true;
       if (!state.carded && !state.resumeSeen) {
         const { notes } = loadNotes(home);
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
@@ -586,17 +603,14 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.edited = [...state.edited.filter((f) => !paths.includes(f)), ...paths].slice(-20);
       }
 
-      // Track last failure
-      if (!fields.ok && fields.error) {
-        const tool = fields.tool || "unknown";
-        const cmd = fields.command;
+      // Track the last failure until the same command (or tool) succeeds; host plumbing (an
+      // aborted wait, a cancelled job) says nothing about the project and is not tracked.
+      const failureKey = fields.command || fields.tool || "unknown";
+      if (fields.ok && state.failureKey === failureKey) state.failure = state.failureKey = undefined;
+      if (!fields.ok && fields.error && !hostNoise(fields.tool, fields.error)) {
         // Masked before the signature cuts it: a cut must not keep half a secret.
-        const sig = errorSignature(scrubCut(fields.error, 2000));
-        if (cmd) {
-          state.failure = `${cmd} → ${sig}`;
-        } else {
-          state.failure = `${tool} → ${sig}`;
-        }
+        state.failure = `${failureKey} → ${errorSignature(scrubCut(fields.error, 2000))}`;
+        state.failureKey = failureKey;
       }
 
       // On failed result, find and append a fix if available

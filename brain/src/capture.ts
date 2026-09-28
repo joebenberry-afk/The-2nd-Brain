@@ -276,12 +276,14 @@ function scratchPath(arg: string): boolean {
   return /^(?:\.\/)?(?:tmp|temp|cache|\.cache)\//i.test(path);
 }
 
-/** Throwaway scripts and scratch paths describe an experiment, not a reusable repair. */
+/** Throwaway scripts, scratch paths and help requests describe an experiment, not a reusable repair. */
 function ephemeralCommand(command: string): boolean {
   return commandSegments(command).some(({ argv }) => {
     const identity = commandIdentity(argv);
     // A heredoc is an unquoted shell token; quoted text containing "<<" is an argument.
     if (identity.argv.some((arg) => /^<<-?\s*['"]?\w/.test(arg) || arg === "<<")) return true;
+    // `tool --help` asks what the tool does; a usage text on stderr is its answer, not a failure.
+    if (identity.argv.slice(1).some((arg) => arg === "--help" || arg === "-help" || arg === "/?")) return true;
     // Interpreter options end at the script: `python train.py -c config.toml` runs a file.
     const inline = INLINE_FLAG[identity.program.replace(/[\d.]+$/, "")];
     if (inline) {
@@ -329,6 +331,11 @@ const CODE_TOOL = /python|notebook|repl|jupyter|^js$|javascript|eval/i;
 
 /** A host's exit-status wrapper says that a command failed, never why. */
 const EXIT_WRAPPER = /^(?:command|process)? ?exited with (?:code|status) -?\d+\.?$|^exit (?:code|status):? -?\d+$/i;
+
+/** Host plumbing, not the project: an aborted wait or a cancelled job says nothing about the code. */
+export function hostNoise(tool: string, error: string): boolean {
+  return /^(?:wait|await|cancel|job|jobs|yield|todo|ask)$/i.test(tool) || /\b(?:aborted|cancell?ed)\b/i.test(errorSignature(error));
+}
 
 /** Error-like diagnostic, not an echoed source line; prefer whole words without losing specificity. */
 export function errorSignature(error: string, max = 120): string {
@@ -939,7 +946,7 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
     }
     for (const line of bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1).toString("utf8").split("\n")) {
       const event = parseEvent(line);
-      if (!event || event.ok || !event.error || touchesPrivate(event) || !(Date.parse(event.at) >= since)) continue;
+      if (!event || event.ok || !event.error || touchesPrivate(event) || hostNoise(event.tool, event.error) || !(Date.parse(event.at) >= since)) continue;
       let project: Project | null = null;
       if (event.cwd) {
         project = projects.get(event.cwd) ?? resolveProject(home, event.cwd, {});

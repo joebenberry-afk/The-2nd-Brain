@@ -111,6 +111,22 @@ describe("OMP extension", () => {
     expect(second).toBeUndefined();
   });
 
+  it("a session resumed in a new process keeps its card: none again until a compaction", () => {
+    createNote(home, { text: "Test note for card", project: "work", kind: "fact" });
+    const branch: unknown[] = [
+      { type: "message", message: { role: "user", content: "first" } },
+      { type: "custom_message", customType: CARD_TYPE, content: "Brain · work", details: { v: 4 } },
+    ];
+    const resumed = { cwd: join(root, "work"), sessionManager: { getSessionId: () => "s-resumed", getBranch: () => branch } };
+    // A fresh process (new handlers, empty memory) resumes the persisted session.
+    expect(load().handlers.get("before_agent_start")!({ prompt: "continue" }, resumed)).toBeUndefined();
+
+    // After a compaction the old card is gone from the context: the next process cards again.
+    branch.push({ type: "compaction", summary: "…" });
+    const after = load().handlers.get("before_agent_start")!({ prompt: "continue" }, resumed) as { message?: { customType?: string } } | undefined;
+    expect(after?.message?.customType).toBe(CARD_TYPE);
+  });
+
   it("empty home → no card message", () => {
     const { handlers } = load();
     const start = handlers.get("before_agent_start")!;
@@ -600,6 +616,27 @@ describe("OMP extension", () => {
     // Check work file was written
     const workFile = readWork(home, "work");
     expect(workFile?.auto).toContain("last failure");
+  });
+
+  it("keeps host plumbing and resolved failures out of the working state", () => {
+    const { handlers } = load();
+    const toolResult = handlers.get("tool_result")!;
+    const c = ctx("s-failures");
+    const fail = (toolName: string, command: string | undefined, text: string) => toolResult({ toolName, input: command ? { command } : {}, isError: true, content: [{ type: "text", text }] }, c);
+
+    fail("wait", undefined, "Daemon broker request aborted");
+    fail("bash", "sleep 100", "Command aborted by user");
+    handlers.get("session_shutdown")!({}, c);
+    expect(readWork(home, "work")?.auto ?? "").not.toContain("last failure");
+
+    fail("bash", "npm test", "Error: 3 tests failed");
+    toolResult({ toolName: "bash", input: { command: "npm test" }, isError: false, content: [{ type: "text", text: "ok" }] }, c);
+    handlers.get("session_shutdown")!({}, c);
+    expect(readWork(home, "work")?.auto ?? "").not.toContain("last failure");
+
+    fail("bash", "npm run build", "Error: tsc exited");
+    handlers.get("session_shutdown")!({}, c);
+    expect(readWork(home, "work")?.auto).toContain("last failure: npm run build → Error: tsc exited");
   });
 
   it("context returns undefined when no event.messages or no resume", () => {

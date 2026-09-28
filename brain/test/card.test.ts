@@ -228,6 +228,13 @@ describe("card completeness and scope", () => {
     expect(cutToTokens("hello", -2)).toBe("");
   });
 
+  it("cuts on a word end, not mid-word, unless that would lose too much", () => {
+    const ask = "when these agents are done, I want you to pause development so i can upload the latest 2nd brain build";
+    expect(cutToTokens(ask, 24)).toBe("when these agents are done, I want you to pause development so i can upload the latest 2nd…");
+    expect(cutToTokens("x".repeat(30) + " " + "y".repeat(60), 10)).toBe("x".repeat(30) + "…");
+    expect(cutToTokens("z".repeat(100), 10)).toBe("z".repeat(39) + "…");
+  });
+
   it("prefers fewer complete facts over five clipped facts", () => {
     const home = tmp();
     const notes = Array.from({ length: 5 }, (_, i) => createNote(home, { text: "Fact " + i + ": " + "complete words ".repeat(19).trim(), project: "demo" }));

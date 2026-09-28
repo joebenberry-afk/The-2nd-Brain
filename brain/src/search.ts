@@ -109,14 +109,17 @@ export const STOPWORDS = new Set([
   "me",
 ]);
 
-/** Extract tokens from text: 3+ alphanumeric, lowercased, no stopwords, duplicates removed. */
 /** Lower-cased, accents removed (é → e), so queries and notes compare letter for letter. */
 export function fold(text: string): string {
   return text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
-export function tokens(text: string): string[] {
-  const found = fold(text).match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+/**
+ * Extract tokens from text: 3+ alphanumeric, lowercased, no stopwords, duplicates removed. With
+ * `dotted`, a file name or version ("LOOP.md", "18.4.1", "ctx.agent.kind") stays one token.
+ */
+export function tokens(text: string, dotted = false): string[] {
+  const found = fold(text).match(dotted ? DOTTED_OR_WORD : /[\p{L}\p{N}]{3,}/gu) ?? [];
   const seen = new Set<string>();
   const result: string[] = [];
   for (const token of found) {
@@ -127,6 +130,8 @@ export function tokens(text: string): string[] {
   }
   return result;
 }
+
+const DOTTED_OR_WORD = /[\p{L}\p{N}]+(?:\.[\p{L}\p{N}]+)+|[\p{L}\p{N}]{3,}/gu;
 
 export interface Hit {
   note: Note;
@@ -179,8 +184,10 @@ export interface Scored {
 
 /** BM25 over the whole corpus (IDF is corpus-wide, like the V3 index): the expensive half of recall. */
 export function scoreQuery(notes: Note[], query: string): Scored {
-  const q = tokens(query);
-  if (!q.length) return { q, candidates: [] };
+  const terms = tokens(query);
+  // The match rule sees file names and versions whole: "LOOP.md" is not any note about a loop.
+  const q = tokens(query, true);
+  if (!terms.length) return { q, candidates: [] };
 
   // Build FTS columns for every note
   interface Row {
@@ -204,12 +211,12 @@ export function scoreQuery(notes: Note[], query: string): Scored {
   // counts[row][term][column] = tokens in that column starting with the term
   const D: number[] = [];
   const counts: number[][][] = [];
-  const present = q.map(() => 0);
+  const present = terms.map(() => 0);
   for (const row of rows) {
     const cols = columnTokens(row.id, row.title, row.terms, row.body);
     D.push(cols.reduce((sum, t) => sum + t.length, 0));
     counts.push(
-      q.map((term, ti) => {
+      terms.map((term, ti) => {
         const perCol = cols.map((col) => col.filter((token) => token.startsWith(term)).length);
         if (perCol.some((c) => c > 0)) present[ti] = (present[ti] ?? 0) + 1;
         return perCol;
@@ -239,7 +246,7 @@ export function scoreQuery(notes: Note[], query: string): Scored {
     const row = rows[rowIdx] as Row;
     const d = D[rowIdx] ?? 0;
     let score = 0;
-    q.forEach((_term, ti) => {
+    terms.forEach((_term, ti) => {
       const perCol = counts[rowIdx]?.[ti] ?? [];
       const fi = perCol.reduce((sum, c, ci) => sum + (weights[ci] ?? 0) * c, 0);
       if (fi > 0) score += (idf[ti] ?? 0) * ((fi * (k1 + 1)) / (fi + k1 * (1 - b + (b * d) / avgdl)));
@@ -260,7 +267,11 @@ export function scoreQuery(notes: Note[], query: string): Scored {
 
 /** The cheap half of recall: visibility, history, the match rule, the relative floor, the limit. */
 function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
-  const q = scored.q;
+  // The project's own name says nothing inside its scope: "Absolute Laya …" matched every Laya note.
+  const scope = new Set(opts.project ? tokens(opts.project.id) : []);
+  const q = scored.q.some((term) => !scope.has(term)) ? scored.q.filter((term) => !scope.has(term)) : scored.q;
+  // Two of a longer query must match; the project's own name does not count.
+  const minMatched = q.length <= 2 ? 1 : 2;
   const hits: Hit[] = [];
   for (const { note, score, words: text } of scored.candidates) {
     // Visibility filter
@@ -269,17 +280,9 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
     // Retired filter
     if (!opts.history && note.retired) continue;
 
-    // Match rule: need enough matched tokens
     const allText = fold(text);
-    const words = allText.match(/[\p{L}\p{N}]{3,}/gu) ?? [];
-    const matched: string[] = [];
-    for (const term of q) {
-      if (words.some((word) => word.startsWith(term))) {
-        matched.push(term);
-      }
-    }
-
-    const minMatched = q.length <= 2 ? 1 : 2;
+    const words = [...(allText.match(DOTTED_OR_WORD) ?? []), ...(allText.match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
+    const matched = q.filter((term) => words.some((word) => word.startsWith(term)));
     if (matched.length < minMatched) continue;
 
     hits.push({ note, score, matched });

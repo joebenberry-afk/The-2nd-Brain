@@ -291,6 +291,26 @@ describe("bm25 parity with SQLite FTS5 (hand-computed)", () => {
 describe("recall and note boundaries", () => {
   const project = { id: "test", tags: [], root: null };
 
+  it("does not answer with one generic word: file names and versions must match whole", () => {
+    const notes = [
+      note("n-loop", { body: "Swarm loop for multi-file work: reviewers then implementers" }),
+      note("n-edit", { body: "GPT edits: Update File diffs are rejected; use anchored rows" }),
+      note("n-sealed", { body: "sealed.py resolves ./paths against the run directory" }),
+    ];
+    const ids = (q: string) => recall(notes, q, { project }).map((h) => h.note.id);
+    expect(ids("LOOP.md goals")).toEqual([]);
+    expect(ids("18.4.1 version update")).toEqual([]);
+    expect(ids("sealed.py path bug")).toEqual(["n-sealed"]);
+    expect(ids("swarm loop")).toEqual(["n-loop"]);
+  });
+
+  it("does not count the project's own name as a match inside that project", () => {
+    const laya = { id: "absolute-laya", tags: [], root: null };
+    const notes = [note("n-git", { project: "absolute-laya", body: "Absolute Laya is not a git checkout" })];
+    expect(recall(notes, "Absolute Laya queue runner thermal abort", { project: laya })).toEqual([]);
+    expect(recall(notes, "Absolute Laya git checkout", { project: laya }).map((h) => h.note.id)).toEqual(["n-git"]);
+  });
+
   it("does not merge distinct full first lines sharing the display prefix", () => {
     const prefix = "x".repeat(159);
     const stored = note("note-1", { body: prefix + " keep the cache" });

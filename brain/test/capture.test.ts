@@ -1271,6 +1271,20 @@ describe("capture ignores ephemeral experiments", () => {
     expect(scanEvents(home, [])).toEqual([]);
   });
 
+  it("does not learn from a help request followed by a real subcommand", () => {
+    const home = tmp();
+    appendEvent(home, "help", home, { tool: "bash", command: "python scripts/jobq.py --help", ok: false, error: "Error: Standing job queue so the GPU never waits on the orchestrator" });
+    appendEvent(home, "help", home, { tool: "bash", command: "python scripts/jobq.py status && python scripts/jobq.py service status", ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("leaves host plumbing out of the unmatched errors", () => {
+    const home = tmp();
+    appendEvent(home, "host", home, { tool: "wait", ok: false, error: "Daemon broker request aborted" });
+    appendEvent(home, "host", home, { tool: "bash", command: "npm test", ok: false, error: "Error: 3 tests failed" });
+    expect(capture.unmatchedErrors(home, []).map((e) => e.signature)).toEqual(["Error: 3 tests failed"]);
+  });
+
   it.each([
     "npx vitest run test/cache/x.test.ts",
     "deno run scripts/task.ts eval",
