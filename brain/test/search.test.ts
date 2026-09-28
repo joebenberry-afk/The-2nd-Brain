@@ -98,29 +98,34 @@ describe("search", () => {
     for (const hit of hits) expect(hit.score).toBeGreaterThan(0);
   });
 
-  it("match rule: 3-token query needs 2 matches, 1-2 token needs 1 match", () => {
+  it("rejects weak coverage even when two query terms match", () => {
     const project = { id: "test", tags: [], root: null };
     const corpus = [
-      note("n-1", { body: "apple banana cherry" }),
-      note("n-2", { body: "apple banana" }),
-      note("n-3", { body: "apple" }),
+      note("n-weak", { body: "runtime service" }),
+      note("n-other", { body: "runtime service deployment" }),
     ];
+    const query = "runtime service quartz retry watchdog scheduler shutdown";
+    expect(recall(corpus, query, { project })).toEqual([]);
+    expect(answerWithHits(corpus, query, { project }).hits).toBe(0);
+  });
 
-    // 3-token query with only 1 match should return nothing
-    const hits1 = recall(corpus, "apple date elder", { project, all: true });
-    expect(hits1).toHaveLength(0);
+  it("discounts common matches and counts absent terms in query coverage", () => {
+    const project = { id: "test", tags: [], root: null };
+    const corpus = [
+      note("n-rare", { body: "quartz rollback" }),
+      ...Array.from({ length: 9 }, (_, i) => note(`n-common-${i}`, { body: "deployment runtime" })),
+    ];
+    expect(recall(corpus, "deployment unknown", { project })).toEqual([]);
+    expect(recall(corpus, "quartz deployment", { project }).map(hit => hit.note.id)).toEqual(["n-rare"]);
+    expect(recall(corpus, "quartz", { project }).map(hit => hit.note.id)).toEqual(["n-rare"]);
+    expect(recall(corpus, "deployment", { project }).map(hit => hit.note.id)).toContain("n-common-0");
+  });
 
-    // 3-token query with 2+ matches should return the note
-    const hits2 = recall(corpus, "apple banana date", { project, all: true });
-    expect(hits2.length).toBeGreaterThan(0);
-
-    // 2-token query with 1 match should return the note
-    const hits3 = recall(corpus, "apple date", { project, all: true });
-    expect(hits3.length).toBeGreaterThan(0);
-
-    // 1-token query with 1 match should return the note
-    const hits4 = recall(corpus, "apple", { project, all: true });
-    expect(hits4.length).toBeGreaterThan(0);
+  it("keeps informative partial matches in long queries without counting the project name", () => {
+    const project = { id: "unknown-absent", tags: [], root: null };
+    const corpus = [note("n-repair", { project: project.id, body: "quartz rollback" })];
+    expect(recall(corpus, "unknown absent quartz rollback repair procedure", { project }).map(hit => hit.note.id)).toEqual(["n-repair"]);
+    expect(recall(corpus, "unknown absent quartz repair procedure", { project })).toEqual([]);
   });
 
   it("relative floor: drops hits below 50% of top score", () => {
@@ -354,6 +359,27 @@ describe("recall and note boundaries", () => {
     expect(answer(stored, "quartz", { project })).toBe("no match here; 1 related in other projects (all: true)");
     expect(answer(stored, "quartz", { project, all: true })).toContain("quartz migration");
     expect(answerWithHits(stored, "nonexistent", { project }).hits).toBe(0);
+  });
+  it("answers from listed docs before suggesting other projects, but never before a note", () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-doc-answer-"));
+    try {
+      writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { test: { docs: ["PLAN.md"] } } }));
+      writeFileSync(join(home, "PLAN.md"), "# Quartz migration\nUse staged updates.\n");
+      const here = { ...project, root: home };
+      const elsewhere = [note("elsewhere", { project: "other", body: "quartz migration" })];
+      const result = answerWithHits(elsewhere, "quartz migration", { project: here, home });
+      expect(result.text).toBe("PLAN.md › Quartz migration (line 1)");
+      expect(result.hits).toBe(1);
+      expect(result.ids).toEqual([]);
+      expect(answer([note("local", { body: "quartz migration" })], "quartz migration", { project: here, home })).toContain("local [note]");
+      expect(answer(elsewhere, "quartz migration", { project, home })).toContain("related in other projects");
+      expect(answer([], "quartz migration", { project: null, home })).not.toContain("PLAN.md");
+      expect(answer([], "quartz migration", { project: here })).not.toContain("PLAN.md");
+      writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { test: {} } }));
+      expect(answer(elsewhere, "quartz migration", { project: here, home })).toContain("related in other projects");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("suggests widening when the only related answer is retired history", () => {

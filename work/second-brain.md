@@ -1,5 +1,6 @@
 ---
-at: 2026-09-28T07:48:18Z
+at: 2026-09-28T12:29:09Z
 ---
 
-Goal: V4 sign-off, then V5 (docs/intake/2026-09-28-plan-v5-anchored-memory.md, draft awaiting owner D5-1..5). Done: 28f537a owner-report fixes, 63c16f2 plan/README. Next: owner decisions; a week of daily use then P6 (v2-archive push needs go); V5 P1 measure-first. Watch out: running OMP sessions keep old code until restarted.
+Goal: V5 (owner-approved). Done: P1 74f4c3d; P2 anchors+precision (uncommitted→commit next). Next: long-session resume verdict (§3.5), P3 learning. Watch out: gate timeouts under benchmark load are load, rerun.
+See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#5-phases

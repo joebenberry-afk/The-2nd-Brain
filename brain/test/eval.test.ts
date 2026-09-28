@@ -3,12 +3,14 @@
  * V3 (SQLite FTS5) scored dev 13/15 and held-out 7/8 in the top 3; V4 must not regress.
  * The misses V3 had: the retired 2-worker-cap policy (correctly not current) and one long prompt.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { loadNotes } from "../src/notes.ts";
 import { answer, recall } from "../src/search.ts";
 import { PACKAGE_HOME } from "../src/util.ts";
+import { loadProjects } from "../src/project.ts";
 
 interface Case {
   id: string;
@@ -89,17 +91,36 @@ interface RealCase {
   verdict: "note" | "silence";
   doc?: string;
 }
+function answeredDoc(text: string): string | undefined {
+  return /^([^\n]+) › [^\n]+ \(line [1-9]\d*\)$/.exec(text)?.[1];
+}
+
+it("grades only a single heading line naming the hinted document as a doc answer", () => {
+  const home = mkdtempSync(join(tmpdir(), "brain-eval-doc-"));
+  try {
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { test: { docs: ["PLAN.md"] } } }));
+    writeFileSync(join(home, "PLAN.md"), "# Quartz migration\nStage the update.\n");
+    const text = answer([], "quartz migration", { project: { id: "test", tags: [], root: home }, home });
+    expect(answeredDoc(text)).toBe("PLAN.md");
+    expect(answeredDoc(text)).not.toBe("OTHER.md");
+    expect(answeredDoc(text + "\nUnrelated answer")).toBeUndefined();
+    expect(answeredDoc(answer([], "unknown topic", { project: null }))).toBeUndefined();
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 describe.skipIf(!hasNotes)("real queries", () => {
   it("keeps right answers and bounds wrong answers on the frozen session queries", () => {
     const text = readFileSync(join(import.meta.dirname, "fixtures", "recall-real.jsonl"), "utf8");
     const set = text.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as RealCase);
     const { notes } = loadNotes(PACKAGE_HOME);
+    const projects = loadProjects(PACKAGE_HOME);
     let right = 0, silentMiss = 0, correctSilence = 0;
     const wrong: string[] = [];
     for (const c of set) {
-      const ids = recall(notes, c.query, { project: { id: c.project, tags: [], root: null } })
-        .slice(0, 3).map((hit) => hit.note.id);
+      const project = { id: c.project, tags: [], root: projects[c.project]?.paths?.find(path => existsSync(path)) ?? null };
+      const ids = recall(notes, c.query, { project }).slice(0, 3).map((hit) => hit.note.id);
       if (c.verdict === "note") {
         expect(c.expect.length, c.id).toBeGreaterThan(0);
         for (const id of c.expect) expect(notes.some((note) => note.id === id && !note.retired && !note.private), `${c.id}: ${id}`).toBe(true);
@@ -109,7 +130,10 @@ describe.skipIf(!hasNotes)("real queries", () => {
       } else {
         expect(c.verdict, c.id).toBe("silence");
         expect(c.expect, c.id).toEqual([]);
-        if (ids.length) wrong.push(`${c.id}: ${ids.join(",")}`);
+        const text = !ids.length && c.doc ? answer(notes, c.query, { project, home: PACKAGE_HOME }) : "";
+        const heading = answeredDoc(text);
+        if (heading && heading === c.doc) right++;
+        else if (ids.length || heading) wrong.push(`${c.id}: ${ids.length ? ids.join(",") : text}`);
         else correctSilence++;
       }
     }
@@ -117,8 +141,9 @@ describe.skipIf(!hasNotes)("real queries", () => {
     console.log(`real-query wrong ${wrong.length}/${set.length} (target <=10%); cases ${wrong.join("; ")}`);
     expect(set).toHaveLength(34);
     expect(right).toBeGreaterThanOrEqual(9);
-    // Frozen 2026-09-28: 9 right, 16 wrong, 0 silent misses, 9 correct silences.
-    // Wrong exceeds the plan's <=10% target: hold today's ceiling, never bless it as target success.
-    expect(wrong.length).toBeLessThanOrEqual(16);
+    // Frozen 2026-09-28 baseline: 9 right, 16 wrong, 0 silent misses, 9 correct silences.
+    // P2 IDF coverage: 9 right, 11 wrong, 0 silent misses, 14 correct silences.
+    // Still above the plan's <=10% target; this is a regression ceiling, not target success.
+    expect(wrong.length).toBeLessThanOrEqual(11);
   });
 });

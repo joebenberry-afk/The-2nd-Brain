@@ -84,7 +84,7 @@ export const brainTools: BrainTool[] = [
   },
   {
     name: "brain_state",
-    description: "When the goal or next step changes, save working state for resuming: Goal:/Next:/Watch out:/Done:, under 60 words.",
+    description: "When the goal or next step changes, save working state: Goal:/Next:/Watch out:/Done:, under 60 words. See: path#heading keeps it anchored to the repo plan.",
     params: { text: { type: "string", description: "goal, done, next, watch out" } },
     run(params, { home, cwd, env, sub }) {
       const project = resolveProject(home, cwd, env);

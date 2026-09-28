@@ -11,7 +11,7 @@ import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { draftKit, findKit, kitsDir, loadKits } from "./kits.ts";
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, parseFrontmatter, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
-import { gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
+import { addProjectDoc, gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { runMcp } from "./mcp.ts";
 import { answerWithHits } from "./search.ts";
 import { scrub } from "./scrub.ts";
@@ -40,6 +40,7 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
   brain review · accept <pid>… · reject <pid>…
   brain kit list · kit show <name> · kit new <name> [--from <project>] [--tag T]…
+  brain project docs add <path> · project docs list
   brain sync [--no-push] [-m <message>]
   brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
   brain hook claude-code                       Claude Code hook (JSON on stdin)
@@ -119,6 +120,18 @@ function fixesToReview(io: Io, measured: Stats): number {
 }
 
 const COMMANDS: Record<string, (c: Ctx) => number> = {
+  project(c) {
+    const [kind, action, path, ...extra] = c.args;
+    if (kind !== "docs" || extra.length || (action !== "add" && action !== "list") || (action === "list" && path)) throw new UsageError("use brain project docs add <path> or brain project docs list");
+    if (action === "add") {
+      const added = addProjectDoc(c.home, c.project, need(path, "a repo-relative Markdown path"));
+      c.io.out(added ? `added ${path}` : `already listed: ${path}`);
+    } else {
+      const docs = loadProjects(c.home)[c.project.id]?.docs;
+      c.io.out(Array.isArray(docs) && docs.length ? docs.filter(d => typeof d === "string").join("\n") : "no project docs");
+    }
+    return 0;
+  },
   card(c) {
     const card = renderCard(c.home, loadNotes(c.home).notes, c.project, { tools: false });
     if (card) {
@@ -192,7 +205,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
 
   state(c) {
     if (!c.args.length) {
-      c.io.out(resumeText(readWork(c.home, c.project.id)) || "no working state");
+      c.io.out(resumeText(readWork(c.home, c.project.id), c.project.root) || "no working state");
       return 0;
     }
     const work = writeWork(c.home, c.project.id, c.args.join(" "));
@@ -407,7 +420,7 @@ function configErrors(home: string): string[] {
           const e = entry as Record<string, unknown> | null;
           if (!e || typeof e !== "object" || Array.isArray(e)) errors.push(`${projectsFile}: ${id} is not an object, ignored`);
           else {
-            for (const key of ["paths", "tags", "aliases"]) if (key in e && !strings(e[key])) errors.push(`${projectsFile}: ${id}.${key} must be a list of strings`);
+            for (const key of ["paths", "tags", "aliases", "docs"]) if (key in e && !strings(e[key])) errors.push(`${projectsFile}: ${id}.${key} must be a list of strings`);
             if ("remote" in e && typeof e.remote !== "string") errors.push(`${projectsFile}: ${id}.remote must be a string`);
           }
         }
@@ -511,7 +524,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         rmSync(hookFixDir(home, key), { recursive: true, force: true });
         let card: string;
         if (p.source === "compact") {
-          card = sub ? "" : renderResume(readWork(home, project.id));
+          card = sub ? "" : renderResume(readWork(home, project.id), project.root);
         } else {
           const { notes } = loadNotes(home);
           if (!sub) {

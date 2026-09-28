@@ -769,6 +769,25 @@ describe("OMP extension", () => {
     expect(readWork(home, "work")?.text).toBe("Goal: headless plan");
   });
 
+  it("compaction resolves the current repo anchor without another state write", () => {
+    const cwd = join(root, "work");
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    const file = join(cwd, "PLAN.md");
+    writeFileSync(file, "## Resume\nOld checkpoint.");
+    writeWork(home, "work", "Goal: release\nSee: PLAN.md#resume\nNext: validate");
+    const { handlers } = load();
+    const c = ctx("anchored", cwd);
+    handlers.get("before_agent_start")!({ prompt: "release" }, c);
+    handlers.get("context")!({ messages: [] }, c);
+    writeFileSync(file, "## Resume\nNew checkpoint.");
+    handlers.get("session_compact")!({}, c);
+    const result = handlers.get("context")!({ messages: [{ role: "compactionSummary", content: "summary" }] }, c) as any;
+    const resume = result.messages[1].content as string;
+    expect(resume).toContain("PLAN.md › Resume:\nNew checkpoint.");
+    expect(resume).not.toContain("Old checkpoint");
+    expect(estimateTokens(resume)).toBeLessThanOrEqual(150);
+  });
+
   it("compaction freezes only bounded working state and preserves it on fork", () => {
     writeWork(home, "work", "Goal: ship release. Next: run integration.");
     createNote(home, { project: "work", text: "Unrelated durable fact " + "detail ".repeat(100) });

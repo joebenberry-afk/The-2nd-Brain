@@ -72,7 +72,7 @@ function measure(name: string, target: string, expected?: number): Row {
     .find((value) => recall(notes, value, { project }).length >= 3) ?? "session";
   const card = renderCard(target, notes, project, { tools: true });
   const recalled = answer(notes, query, { project, home: target });
-  const resume = renderResume(readWork(target, project.id));
+  const resume = renderResume(readWork(target, project.id), project.root);
   const error = notes.flatMap((note) => note.tested && !note.retired ? note.errors : [])
     .find((value) => !value.startsWith("re:") && findFix(notes, value, project));
   const fix = error ? findFix(notes, error, project) : null;

@@ -546,7 +546,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
       // Freeze only working state; compaction never resends notes, kits or the tool footer.
       const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-      const cardContent = isSubagent(ctx) ? "" : renderResume(readWork(home, project.id));
+      const cardContent = isSubagent(ctx) ? "" : renderResume(readWork(home, project.id), project.root);
 
       if (cardContent) {
         const now = Date.now();

@@ -135,8 +135,8 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const work = readWork(home, project.id);
   // Parse labels before extracting warnings so parent goals, next steps and Done never leak.
   const warning = opts.subagent && work?.text
-    ? planFit(work.text, work.text.length).text.split(/(?=^Done:)/m)[0]?.match(/^Watch out: [\s\S]*/m)?.[0] ?? "" : "";
-  const resume = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : resumeText(work);
+    ? planFit(work.text.replace(/^See:.*$/gm, ""), work.text.length).text.split(/(?=^Done:)/m)[0]?.match(/^Watch out: [\s\S]*/m)?.[0] ?? "" : "";
+  const resume = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : resumeText(work, project.root);
   const candidates = cardCandidates(notes, project);
   // A fix that fired in several recent sessions of this role (child or not) is a mistake agents
   // here keep making: say it before the first attempt, not after. It retires itself when the

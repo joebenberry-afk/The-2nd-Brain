@@ -11,7 +11,7 @@
  * the stack implied by manifest files at the root (package.json → node, pyproject.toml → python, …).
  */
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
 import { slug, tagKey, tagList, writeAtomic } from "./util.ts";
 import { scrub } from "./scrub.ts";
@@ -24,6 +24,8 @@ export interface Project {
 }
 
 export interface ProjectEntry {
+  /** Explicit repo-relative Markdown plan files; never auto-discovered. */
+  docs?: string[];
   paths?: string[];
   remote?: string;
   tags?: string[];
@@ -124,6 +126,47 @@ export function addProjectTag(home: string, id: string, tag: string): boolean {
   const tags = Array.isArray(current?.tags) ? (current.tags as unknown[]) : [];
   if (tags.some((t) => typeof t === "string" && tagKey(t) === tagKey(tag))) return false;
   data.projects[key] = { ...current, tags: [...tags, tagKey(tag)] };
+  writeAtomic(file, JSON.stringify(data, null, 2) + "\n");
+  return true;
+}
+
+/** An existing Markdown file contained in the checkout, including after symlink resolution. */
+export function projectDocPath(root: string | null, path: string): string | undefined {
+  if (!root || !path || isAbsolute(path) || win32.isAbsolute(path) || /[:\r\n\0#]/.test(path) || !/\.md$/i.test(path)) return undefined;
+  const portable = path.replace(/\\/g, "/");
+  if (portable.split("/").includes("..")) return undefined;
+  const file = resolve(root, portable);
+  try {
+    const rel = relative(realpathSync(root), realpathSync(file));
+    if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel) || !statSync(file).isFile()) return undefined;
+    return file;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Register one explicit document without changing unrelated project configuration. */
+export function addProjectDoc(home: string, project: Project, path: string): boolean {
+  const target = projectDocPath(project.root, path);
+  if (!target) throw new Error("doc must be an existing relative .md file inside the project root");
+  if (scrub(path).scrubbed) throw new Error("doc path contains a credential");
+  const file = join(home, "projects.json");
+  let data: { projects: Record<string, unknown> } = { projects: {} };
+  if (existsSync(file)) {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    const inner = (parsed as { projects?: unknown } | null)?.projects;
+    if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(file + ': expected { "projects": { … } }');
+    data = parsed as { projects: Record<string, unknown> };
+  }
+  const key = Object.keys(data.projects).find(k => (slug(k) === GLOBAL ? "global-project" : slug(k)) === project.id) ?? project.id;
+  const entry = data.projects[key];
+  if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(file + ": project " + key + " is not an object");
+  const current = entry as Record<string, unknown> | undefined;
+  if (current?.docs !== undefined && (!Array.isArray(current.docs) || !current.docs.every(d => typeof d === "string"))) throw new Error(file + ": " + key + ".docs must be a list of strings");
+  const docs = (current?.docs ?? []) as string[];
+  const normalized = relative(project.root!, target).replace(/\\/g, "/");
+  if (docs.some(d => normalizePath(d) === normalizePath(normalized))) return false;
+  data.projects[key] = { ...current, docs: [...docs, normalized] };
   writeAtomic(file, JSON.stringify(data, null, 2) + "\n");
   return true;
 }

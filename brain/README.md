@@ -44,7 +44,16 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
 `no match here; N related in other projects (--all)`. Recall answers with silence rather than a
 weak match: two words of a longer query must match, the project's own name ("Absolute Laya …")
 does not count inside that project, and file names and versions (`LOOP.md`, `18.4.1`) match
-whole, not as "loop" or "update".
+whole, not as "loop" or "update". The matched words must also carry at least a fifth of the
+query's information (half for one- or two-word queries), so words common across the notes count
+for little. When no note answers, recall names the best heading of the project's plan docs
+instead: `docs/LOOP.md › Goals (line 12)`.
+
+**Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`)
+lets the Brain read a project's own plan files: only headings and the text under one heading,
+never code. A working state line `See: docs/LOOP.md#resume` is shown as that section's current
+text wherever the state appears (card, resume, `brain state`), so the state never drifts from the
+repo; a missing file or heading shows `anchor missing: …`, never an old copy.
 
 ## 2. Verify in the first sessions
 
@@ -64,7 +73,8 @@ whole, not as "loop" or "update".
    re-reading files. Compaction re-injects only the working state (≤ 150 tokens: Goal and Next
    first). Files edited, the last failure and the last ask are kept locally in
    `state/work/<project>.auto.md`, never synced. A failure clears once the same command succeeds;
-   host plumbing (an aborted `wait`, a cancelled job) is never recorded.
+   host plumbing (an aborted `wait`, a cancelled job) is never recorded. A `See: path#heading`
+   line in the state is rendered from the checkout at that moment (see *Plan docs and anchors*).
 3. **Known fix.** Run something that fails with an error a tested note names — e.g. an OMP edit
    without a `[path#tag]` header (`notes/global/` holds fixes taken from logged OMP failures): the
    failed result ends with `Brain: … [id]` on its own line. The same fix again in the same context

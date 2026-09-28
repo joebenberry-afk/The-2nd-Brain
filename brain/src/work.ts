@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { cutToTokens, estimateTokens, nowIso, writeAtomic } from "./util.ts";
 import { parseFrontmatter } from "./notes.ts";
 import { scrub } from "./scrub.ts";
+import { anchorSection } from "./docs.ts";
 
 export const WORK_BUDGET = 150;
 export const AUTO_BUDGET = 80;
@@ -186,10 +187,23 @@ function planHeading(work: Work): string {
   return `${stale ? "plan may be stale — " : ""}Where we left off (${timestamp(work.at)}):`;
 }
 
+/** Resolve See lines at display time, preserving the agent-owned delta around them. */
+function anchoredText(text: string, root: string | null, budget: number): string {
+  const pattern = /^See:[ \t]*(.+?)[ \t]*$/gm;
+  const count = [...text.matchAll(pattern)].length;
+  if (!count) return text;
+  const room = Math.floor((budget * 4 - text.replace(pattern, "").length) / Math.max(1, count) / 4);
+  return cutToTokens(text.replace(pattern, (_line, anchor: string) => {
+    const section = root ? anchorSection(root, anchor) : undefined;
+    const rendered = section ? `${anchor.slice(0, anchor.indexOf("#"))} › ${section.heading}:\n${section.text}` : `anchor missing: ${anchor}`;
+    return cutToTokens(rendered, Math.max(0, room));
+  }), budget);
+}
+
 /** Full working-state display; plan and observations retain their own timestamps. */
-export function resumeText(work: Work | null): string {
+export function resumeText(work: Work | null, root: string | null = null): string {
   if (!work || (!work.text && !work.auto)) return "";
-  const parts = work.text ? [planHeading(work), work.text] : ["Where we left off:"];
+  const parts = work.text ? [planHeading(work), anchoredText(work.text, root, WORK_BUDGET)] : ["Where we left off:"];
   if (work.auto) parts.push(`Auto (${timestamp(work.autoAt)}):`, work.auto);
   return parts.join("\n");
 }
@@ -198,9 +212,10 @@ export function resumeText(work: Work | null): string {
  * The complete compaction injection, including labels, is at most 150 estimated tokens: the
  * plan's first 100, then whole observation lines while they fit. Nothing is cut mid-line.
  */
-export function renderResume(work: Work | null, _now?: Date): string {
+export function renderResume(work: Work | null, root: string | null = null): string {
   if (!work || (!work.text && !work.auto)) return "";
-  const lines = work.text ? [planHeading(work), planFit(work.text, PLAN_RESUME_BUDGET).text] : ["Where we left off:"];
+  const text = /^See:/m.test(work.text) ? anchoredText(work.text, root, PLAN_RESUME_BUDGET) : planFit(work.text, PLAN_RESUME_BUDGET).text;
+  const lines = work.text ? [planHeading(work), text] : ["Where we left off:"];
   const label = `Auto (${timestamp(work.autoAt)}):`;
   let room = WORK_BUDGET * 4 - lines.join("\n").length - label.length - 1;
   const auto: string[] = [];

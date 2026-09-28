@@ -5,6 +5,7 @@ import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
 import { findKit, loadKits } from "./kits.ts";
+import { docAnswer } from "./docs.ts";
 
 export const STOPWORDS = new Set([
   "the",
@@ -176,10 +177,11 @@ function columnTokens(...columns: string[]): string[][] {
   return cols;
 }
 
-/** The scored query: its tokens and the 200 best candidates, before any filter. */
+/** The scored query and corpus-wide term information, before visibility or history filters. */
 export interface Scored {
   q: string[];
-  candidates: { note: Note; score: number; words: string }[];
+  information: Map<string, number>;
+  candidates: { note: Note; score: number; matched: string[] }[];
 }
 
 /** BM25 over the whole corpus (IDF is corpus-wide, like the V3 index): the expensive half of recall. */
@@ -187,7 +189,7 @@ export function scoreQuery(notes: Note[], query: string): Scored {
   const terms = tokens(query);
   // The match rule sees file names and versions whole: "LOOP.md" is not any note about a loop.
   const q = tokens(query, true);
-  if (!terms.length) return { q, candidates: [] };
+  if (!terms.length) return { q, information: new Map(), candidates: [] };
 
   // Build FTS columns for every note
   interface Row {
@@ -262,7 +264,15 @@ export function scoreQuery(notes: Note[], query: string): Scored {
   // (V3's SQL took the top 200 before filtering; here visibility filters first, so a project's own
   // match is never crowded out by other projects' notes.)
 
-  return { q, candidates: candidates.map(({ row, score }) => ({ note: row.note, score, words: `${row.title} ${row.terms} ${row.body}` })) };
+  const matchedCandidates = candidates.map(({ row, score }) => {
+    const text = fold(`${row.title} ${row.terms} ${row.body}`);
+    const words = [...(text.match(DOTTED_OR_WORD) ?? []), ...(text.match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
+    return { note: row.note, score, matched: q.filter(term => words.some(word => word.startsWith(term))) };
+  });
+  // Smoothed IDF includes absent query terms: unknown subjects are not free matches.
+  const information = new Map(q.map(term => [term, 1 + Math.log((N + 1) /
+    (1 + matchedCandidates.filter(candidate => candidate.matched.includes(term)).length))]));
+  return { q, information, candidates: matchedCandidates };
 }
 
 /** The cheap half of recall: visibility, history, the match rule, the relative floor, the limit. */
@@ -270,20 +280,20 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
   // The project's own name says nothing inside its scope: "Absolute Laya …" matched every Laya note.
   const scope = new Set(opts.project ? tokens(opts.project.id) : []);
   const q = scored.q.some((term) => !scope.has(term)) ? scored.q.filter((term) => !scope.has(term)) : scored.q;
-  // Two of a longer query must match; the project's own name does not count.
+  // Keep the two-term minimum, then require a meaningful share of the query information.
+  // Short queries need half; longer prompts allow context around the actual question.
   const minMatched = q.length <= 2 ? 1 : 2;
+  const requiredInformation = q.reduce((sum, term) => sum + scored.information.get(term)!, 0) * (q.length <= 2 ? 0.5 : 0.2);
   const hits: Hit[] = [];
-  for (const { note, score, words: text } of scored.candidates) {
+  for (const { note, score, matched: allMatched } of scored.candidates) {
     // Visibility filter
     if (!opts.all && !visibleTo(note, opts.project)) continue;
 
     // Retired filter
     if (!opts.history && note.retired) continue;
 
-    const allText = fold(text);
-    const words = [...(allText.match(DOTTED_OR_WORD) ?? []), ...(allText.match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
-    const matched = q.filter((term) => words.some((word) => word.startsWith(term)));
-    if (matched.length < minMatched) continue;
+    const matched = allMatched.filter(term => q.includes(term));
+    if (matched.length < minMatched || matched.reduce((sum, term) => sum + scored.information.get(term)!, 0) < requiredInformation) continue;
 
     hits.push({ note, score, matched });
   }
@@ -412,6 +422,10 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
           .sort((a, b) => Number(a.stale) - Number(b.stale)).slice(0, opts.limit);
       }
     }
+  }
+  if (!hits.length && opts.home && opts.project?.root) {
+    const heading = docAnswer(opts.home, opts.project, query);
+    if (heading) return { text: heading, hits: 1, ids: [] };
   }
   if (!hits.length && !opts.all) {
     const related = matchingHits(scored, { ...opts, all: true }).length
