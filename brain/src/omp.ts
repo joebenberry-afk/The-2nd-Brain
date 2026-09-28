@@ -534,7 +534,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         return undefined;
       }
 
-      // Freeze only working state; compaction never resends notes, kits or the tool footer.
+      // Freeze only working state; compaction never resends notes or the tool footer.
       const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
       const cardContent = isSubagent(ctx) ? "" : renderResume(readWork(home, project.id), project.root);
 

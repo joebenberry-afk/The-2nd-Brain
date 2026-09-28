@@ -171,7 +171,7 @@ describe("second review", () => {
     expect(readWork(home, "demo")?.autoAt).toBe(after?.autoAt);
   });
 
-  it("move and kit new resolve aliases", async () => {
+  it("move resolves aliases", async () => {
     const home = tmp();
     writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { "second-brain": { aliases: ["the-2nd-brain"] } } }));
     const out: string[] = [];
@@ -180,8 +180,6 @@ describe("second review", () => {
     const id = out[0]?.replace("saved ", "") ?? "";
     await main(["move", id, "--to", "The-2nd-Brain"], io);
     expect(loadNotes(home).notes[0]?.project).toBe("second-brain");
-    await main(["kit", "new", "web", "--from", "the-2nd-brain"], io);
-    expect(readFileSync(join(home, "kits", "web", "SKILL.md"), "utf8")).toContain("We chose vite");
   });
 
   it("counts only file-changing tools as edits", () => {
@@ -233,16 +231,6 @@ describe("third review", () => {
 });
 
 describe("fourth review", () => {
-  it("kits never include private notes", async () => {
-    const { draftKit } = await import("../src/kits.ts");
-    const home = tmp();
-    createNote(home, { text: "Public stack decision", project: "demo", kind: "decision" });
-    createNote(home, { text: "Private vendor pricing decision", project: "demo", kind: "decision", private: true });
-    const kit = draftKit(home, "k", "demo", loadNotes(home).notes);
-    expect(kit.body).toContain("Public stack decision");
-    expect(kit.body).not.toContain("Private vendor pricing");
-  });
-
   it("sync commits the working state even when notes/ holds only private notes", async () => {
     const { sync } = await import("../src/sync.ts");
     const home = tmp();
@@ -253,7 +241,6 @@ describe("fourth review", () => {
     createNote(home, { text: "only private", project: "demo", private: true });
     mkdirSync(join(home, "work"));
     writeFileSync(join(home, "work", "demo.md"), "---\nat: 2026-09-27T10:00:00Z\n---\n\nGoal: x\n");
-    mkdirSync(join(home, "kits"));
     const result = sync(home, { push: false });
     expect(result.committed).toBe(true);
     expect(git(home, "show", "--name-only", "--format=", "HEAD").stdout.trim()).toBe("work/demo.md");

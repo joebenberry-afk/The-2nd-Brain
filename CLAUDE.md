@@ -9,7 +9,7 @@ This repository **is** Second Brain — not a project consuming it.
 Plan and binding rules: `docs/intake/2026-09-27-plan-v4-agent-experience.md` (§3.2).
 The product is `brain/` (TypeScript, Node built-ins only, no build step; Node ≥ 22.18 or Bun
 runs `.ts` directly). Truth is plain files: `notes/<project>/*.md` (one fact each; scope comes
-from the path), `notes/global/`, `kits/<name>/SKILL.md`, `work/<project>.md` (working state),
+from the path), `notes/global/`, `work/<project>.md` (working state),
 `projects.json`. No database; nothing derived is committed.
 
 Use it while working here (`node brain/bin/brain.mjs …` in the cloud, `brain …` once installed):

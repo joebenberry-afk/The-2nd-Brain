@@ -1,7 +1,7 @@
 {
   "name": "second-brain",
   "version": "4.0.0-dev",
-  "description": "Agent memory that survives compaction: start card, recall, notes, working state, known fixes and MVP kits.",
+  "description": "Agent memory that survives compaction: start card, recall, notes, working state and known fixes.",
   "type": "module",
   "private": true,
   "bin": { "brain": "bin/brain.mjs" },

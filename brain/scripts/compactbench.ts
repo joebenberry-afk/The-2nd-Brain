@@ -108,7 +108,7 @@ async function runOne(rep: number, condition: string, goal: string, next: string
   const fixture = join(scratch, `fixture-${id}`);
   const sessions = join(dir, "sessions");
   for (const path of [home, fixture, sessions]) mkdirSync(path, { recursive: true });
-  for (const name of ["notes", "kits", "projects.json"]) {
+  for (const name of ["notes", "projects.json"]) {
     if (existsSync(join(HOME, name))) cpSync(join(HOME, name), join(home, name), { recursive: true });
   }
   // A brand-new project is deliberately silent; seed prior knowledge to exercise its start card.

@@ -2,12 +2,12 @@
  * Agent benchmark: the same small coding tasks run by headless OMP agents with the Brain off, on,
  * or on with experiments (BRAIN_EXPERIMENT), scored from the agents' own session files.
  *
- *   node scripts/agentbench.ts [--conditions off,on] [--tasks rename,fix,find,scaffold,learn] [--reps 2]
+ *   node scripts/agentbench.ts [--conditions off,on] [--tasks rename,fix,find,scaffold,jsonstdin,learn] [--reps 2]
  *                              [--concurrency 4] [--model openai-codex/gpt-6-astra] [--label text]
  *
  * A condition is `off`, `on`, or `on+<experiment>[+<experiment>]`; a `@<preset>` part adds an OMP
  * settings overlay (PI_CONFIG_FILES) from SETTINGS below, with or without the Brain (`off+@x`). Each run gets a fresh copy of a
- * small fixture project; each condition gets its own copy of the Brain home (notes, kits,
+ * small fixture project; each condition gets its own copy of the Brain home (notes,
  * projects, telemetry), so conditions never see each other's sessions. Results append to
  * state/agentbench.jsonl; the summary compares every condition with its best earlier run on the
  * same task set. Costs real model usage: meant for GPT models, run deliberately.
@@ -123,6 +123,32 @@ const TASKS: Record<string, Task> = {
           writeFileSync(input, text);
           const actual = execFileSync(process.execPath, ["bin/wordcount.mjs", input], { cwd: dir, encoding: "utf8", timeout: 10_000 });
           if (actual.trim() !== expected) return false;
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  },
+  jsonstdin: {
+    empty: true,
+    prompt: "Create a small Node TypeScript CLI named jsonsum in this empty directory. Running `node bin/jsonsum.mjs` must read one JSON array of finite numbers from stdin and print just their sum (zero for an empty array). Malformed JSON, non-arrays, and non-number array entries must produce a nonzero exit code, a diagnostic on stderr, and no stdout. Include tests at test/jsonsum.test.ts covering valid and failing input and a non-watch `npm test` script, then run it and demonstrate the CLI. Keep it small; stop once it works.",
+    verify: (dir) => {
+      try {
+        if (!existsSync(join(dir, "test/jsonsum.test.ts"))) return false;
+        execFileSync(process.platform === "win32" ? "cmd.exe" : "npm", process.platform === "win32" ? ["/d", "/s", "/c", "npm test"] : ["test"], { cwd: dir, stdio: "ignore", timeout: 60_000 });
+        for (const [input, expected] of [["[3, -2, 0.5]\n", "1.5"], ["[]", "0"]] as const) {
+          const actual = execFileSync(process.execPath, ["bin/jsonsum.mjs"], { cwd: dir, input, encoding: "utf8", timeout: 10_000 });
+          if (actual.trim() !== expected) return false;
+        }
+        for (const input of ["[", "{}", '[1, "2"]', "[null]", "[1e400]"]) {
+          try {
+            execFileSync(process.execPath, ["bin/jsonsum.mjs"], { cwd: dir, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 10_000 });
+            return false;
+          } catch (error) {
+            const result = error as { status?: number | null; stdout?: string; stderr?: string };
+            if (typeof result.status !== "number" || result.status === 0 || result.stdout?.trim() || !result.stderr?.trim()) return false;
+          }
         }
         return true;
       } catch {
@@ -254,13 +280,13 @@ const scratch = mkdtempSync(join(tmpdir(), "agentbench-"));
 /** Session files stay (local, never committed) so the next experiment can study where turns went. */
 const kept = join(HOME, "state", "agentbench", new Date().toISOString().replace(/[:.]/g, "-"));
 
-/** One Brain home per condition: the real notes, kits, projects and telemetry, nothing shared. */
+/** One Brain home per condition: the real notes, projects and telemetry, nothing shared. */
 const homes = new Map<string, string>();
 for (const condition of conditions) {
   if (condition === "off") continue;
   const home = join(scratch, `home-${condition.replace(/[^a-z0-9]+/gi, "_")}`);
   mkdirSync(join(home, "state"), { recursive: true });
-  for (const path of ["notes", "kits", "projects.json"]) if (existsSync(join(HOME, path))) cpSync(join(HOME, path), join(home, path), { recursive: true });
+  for (const path of ["notes", "projects.json"]) if (existsSync(join(HOME, path))) cpSync(join(HOME, path), join(home, path), { recursive: true });
   if (existsSync(join(HOME, "state", "telemetry.jsonl"))) cpSync(join(HOME, "state", "telemetry.jsonl"), join(home, "state", "telemetry.jsonl"));
   // What only memory knows (the deploy task): the same note a previous session would have saved.
   createNote(home, { project: "benchapp", kind: "fact", text: "benchapp deploy targets: staging is amber, production is blue (green is retired)\nRun: node scripts/deploy.mjs --target amber" });
@@ -280,8 +306,8 @@ function runOne(run: Run, pairHome?: string): Promise<SessionRow> {
   const [mode, ...parts] = run.condition.split("+");
   const experiments = parts.filter((part) => !part.startsWith("@"));
   const presets = parts.filter((part) => part.startsWith("@")).map((part) => part.slice(1));
-  // Fresh scaffold projects must not inherit another repetition's working state or notes.
-  const project = run.task === "scaffold" ? id : run.task === "learn" ? "benchapp-learn" : "benchapp";
+  // Fresh empty-directory projects must not inherit another repetition's working state or notes.
+  const project = TASKS[run.task]!.empty ? id : run.task === "learn" ? "benchapp-learn" : "benchapp";
   const env: NodeJS.ProcessEnv = { ...process.env, BRAIN: mode === "off" ? "off" : "on", BRAIN_PROJECT: project, BRAIN_EXPERIMENT: experiments.join(",") };
   const runner = join(sessions, "host-runner.mjs");
   const receipt = join(sessions, "test-passed.txt");
@@ -298,7 +324,7 @@ function runOne(run: Run, pairHome?: string): Promise<SessionRow> {
   }
   if (mode !== "off" || pairHome) {
     env.SECOND_BRAIN_HOME = pairHome ?? homes.get(run.condition)!;
-    if (run.task === "scaffold" || run.task === "learn") {
+    if (run.task === "learn") {
       const path = join(env.SECOND_BRAIN_HOME, "projects.json");
       const registry = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
       registry.projects ??= {};

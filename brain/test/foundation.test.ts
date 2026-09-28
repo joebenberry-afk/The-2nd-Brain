@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { createNote, differentBody, formatNote, headline, loadNotes, parseNote, retireNote, saveNote, staleEvidence, type Note } from "../src/notes.ts";
 import { addProjectTag, normalizePath, normalizeRemote, resolveProject, visibleTo } from "../src/project.ts";
 import { cutToTokens, estimateTokens, slug } from "../src/util.ts";
-import { draftKit } from "../src/kits.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-"));
 
@@ -174,18 +173,11 @@ describe("file evidence", () => {
 });
 
 describe("project", () => {
-  it("refuses credential tags before writing projects or kits", () => {
+  it("refuses credential tags before writing projects", () => {
     const home = tmp();
     const tag = "ghp_" + "x".repeat(30);
     expect(() => addProjectTag(home, "demo", tag)).toThrow(/tag.*credential/i);
     expect(existsSync(join(home, "projects.json"))).toBe(false);
-  });
-
-  it("refuses credential tags before writing kits", () => {
-    const home = tmp();
-    const tag = "ghp_" + "x".repeat(30);
-    expect(() => draftKit(home, "safe-kit", "demo", [], ["node", tag])).toThrow(/tag.*credential/i);
-    expect(existsSync(join(home, "kits", "safe-kit", "SKILL.md"))).toBe(false);
   });
 
   it("matches registered paths through directory junctions in either direction", () => {

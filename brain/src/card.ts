@@ -1,8 +1,5 @@
 /** Start-of-session memory: complete facts, scoped context, and a hard total budget. */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { pendingCount } from "./capture.ts";
-import { kitsFor, loadKits, type Kit } from "./kits.ts";
 import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
 import { recall, staleHere } from "./search.ts";
@@ -82,44 +79,6 @@ function noteLine(n: Note, room: number): string {
   return line.length <= room ? line : "";
 }
 
-/** Inspect git metadata without spawning git on the host's first-turn hot path. */
-function freshRoot(root: string | null): boolean {
-  if (!root) return false;
-  try {
-    if (readdirSync(root).filter((name) => name !== ".git").length <= 3) return true;
-    let gitdir = join(root, ".git");
-    if (statSync(gitdir).isFile()) {
-      const target = /^gitdir:\s*(.+)$/m.exec(readFileSync(gitdir, "utf8"))?.[1];
-      if (!target) return false;
-      gitdir = resolve(root, target.trim());
-    }
-    const head = readFileSync(join(gitdir, "HEAD"), "utf8").trim();
-    const ref = /^ref: (refs\/.+)$/.exec(head)?.[1];
-    if (!ref) return false; // Detached HEAD, or unreadable metadata: not known to be fresh.
-    const commonPath = join(gitdir, "commondir");
-    const common = existsSync(commonPath) ? resolve(gitdir, readFileSync(commonPath, "utf8").trim()) : gitdir;
-    if (existsSync(join(common, ref))) return false;
-    const packed = join(common, "packed-refs");
-    return !existsSync(packed) || !readFileSync(packed, "utf8").split("\n").some((line) => line.trimEnd().endsWith(` ${ref}`));
-  } catch {
-    return false;
-  }
-}
-
-/** Include complete kit names and a callable recall, reserving at most 64 tokens. */
-function kitsLine(kits: Kit[], tools: boolean): string {
-  const label = "Kits: ";
-  const where = tools ? ' → brain_recall("kit <name>")' : ' → brain recall "kit <name>"';
-  const names: string[] = [];
-  for (const kit of kits) {
-    if (/[\r\n]/.test(kit.name)) continue;
-    if (estimateTokens(label + [...names, kit.name].join(", ") + where) > 64) continue;
-    names.push(kit.name);
-    if (names.length === 5) break;
-  }
-  return names.length ? label + names.join(", ") + where : "";
-}
-
 function footer(tools: boolean, subagent: boolean): string {
   const recall = tools ? "brain_recall(query)" : '`brain recall "<query>"`';
   const note = tools ? "brain_note(text)" : '`brain note "<text>"`';
@@ -148,12 +107,9 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
   const ranked = rankForCard(candidates, project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
-  const allKits = opts.subagent ? [] : loadKits(home);
-  const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
-  const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);
   const pending = pendingCount(home, project.id);
   const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — what prior sessions learned; the repo wins on conflict`;
-  const tail = [kits, pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", LEAN_LINE, footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
+  const tail = [pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", LEAN_LINE, footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
   const lines = [head];
   const room = (extra: string[] = []): number => CARD_BUDGET * 4 - [...lines, ...extra, ...tail].join("\n").length - 1;
   if (resume) {
@@ -179,7 +135,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     lines.push(...label, line);
     if (++count === CARD_NOTES) break;
   }
-  if (lines.length === 1 && !kits && !pending) return "";
+  if (lines.length === 1 && !pending) return "";
   const card = [...lines, ...tail].join("\n");
   return estimateTokens(card) <= CARD_BUDGET ? card : "";
 }

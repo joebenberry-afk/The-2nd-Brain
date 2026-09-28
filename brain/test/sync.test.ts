@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { sync, shareNote, SyncError, SYNC_PATHS } from "../src/sync.ts";
+import { sync, shareNote, SyncError } from "../src/sync.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-sync-"));
@@ -259,10 +259,6 @@ describe("sync", () => {
 
     const shared = shareNote(home, note.id, "learning");
     expect(shared.tags).toEqual(["learning"]);
-  });
-
-  it("exports SYNC_PATHS", () => {
-    expect(SYNC_PATHS).toEqual(["notes", "kits", "work", "projects.json", "rejected.json"]);
   });
 });
 

@@ -183,7 +183,21 @@ describe("brain cli", () => {
     expect(loadNotes(home).notes.find((n) => n.body.startsWith("private"))?.private).toBe(true);
   });
 
-  it("card is empty on a fresh project with no kits, and shows notes and state otherwise", async () => {
+  it("recalls global procedures from an empty project without pushing them onto cards", async () => {
+    const { home, io } = setup();
+    const text = "Node TypeScript CLI scaffold setup\n\nRun TypeScript directly with Node type stripping.\nUse node:util parseArgs for the command interface.";
+    expect((await run(["note", text, "--kind", "procedure", "--global"], io)).code).toBe(0);
+    const note = loadNotes(home).notes[0]!;
+    const other = { env: { SECOND_BRAIN_HOME: home }, cwd: tmp("brain-empty-") };
+    const recalled = await run(["recall", "node typescript cli scaffold setup"], other);
+    expect(recalled.code).toBe(0);
+    expect(recalled.out).toContain(note.id + " [procedure]");
+    expect((await run(["recall", note.id], other)).out).toContain(text);
+    expect((await run(["card"], other)).out).toBe("");
+    expect((await run(["card"], io)).out).toBe("");
+  });
+
+  it("card is empty on a fresh project, and shows notes and state otherwise", async () => {
     const { io } = setup();
     expect((await run(["card"], io)).out).toBe("");
     await run(["note", "We ship with vite", "--kind", "decision"], io);
@@ -235,22 +249,10 @@ describe("brain cli", () => {
     expect((await run(["accept", "p-nope"], io)).code).toBe(1);
   });
 
-  it("kit new, list and show", async () => {
-    const { io } = setup();
-    await run(["note", "We use vite for the frontend", "--kind", "decision"], io);
-    const drafted = await run(["kit", "new", "Web MVP", "--tag", "web"], io);
-    expect(drafted.out).toMatch(/drafted .*kits[/\\]web-mvp[/\\]SKILL\.md$/);
-    expect((await run(["kit", "list"], io)).out).toMatch(/^web-mvp — MVP kit drafted from demo/);
-    expect((await run(["kit", "show", "web-mvp"], io)).out).toContain("We use vite for the frontend");
-    expect((await run(["kit", "show", "nope"], io)).code).toBe(1);
-    expect((await run(["kit", "new", "Web MVP"], io)).code).toBe(1);
-    expect((await run(["kit"], io)).code).toBe(1);
-  });
-
   it("check reports load errors with exit 1; stats summarises telemetry", async () => {
     const { home, io } = setup();
     await run(["note", "fine note"], io);
-    expect((await run(["check"], io)).out).toBe("notes: 1 (1 active) · projects: 0 · kits: 0");
+    expect((await run(["check"], io)).out).toBe("notes: 1 (1 active) · projects: 0");
     writeFileSync(join(home, "notes", "demo", "broken.md"), "no frontmatter");
     const check = await run(["check"], io);
     expect(check.code).toBe(1);
@@ -373,22 +375,19 @@ describe("brain move", () => {
 });
 
 describe("brain check reports silent failures", () => {
-  it("flags an unreadable projects.json and a kit that would be skipped", async () => {
+  it("flags an unreadable projects.json", async () => {
     const home = mkdtempSync(join(tmpdir(), "brain-check-"));
     const io = { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: home };
     expect((await run(["check"], io)).code).toBe(0);
     writeFileSync(join(home, "projects.json"), '{ "projects": { "x": { "aliases": ["y"], } } }');
-    mkdirSync(join(home, "kits", "half-done"), { recursive: true });
-    writeFileSync(join(home, "kits", "half-done", "SKILL.md"), "---\nname: half-done\n---\nbody\n");
     const r = await run(["check"], io);
     expect(r.code).toBe(1);
     expect(r.err).toContain("projects.json");
-    expect(r.err).toContain(join("half-done", "SKILL.md"));
   });
 });
 
 
-describe("note privacy and recall kits", () => {
+describe("note privacy", () => {
   it.each(["demo", "global"])("private notes never upgrade a public %s duplicate", async (scope) => {
     const { home, io } = setup();
     const publicNote = createNote(home, { text: "Deployment needs approval", project: scope });
@@ -421,22 +420,6 @@ describe("note privacy and recall kits", () => {
     expect(updated.tags).toContain("password=***");
     expect(updated.evidence).toContain("password=***");
     expect(readFileSync(updated.path, "utf8")).not.toContain(secret);
-  });
-
-  it("recalls kits by prefixed or exact name with their instructions", () => {
-    const { home, cwd } = setup();
-    const path = join(home, "kits", "node-cli", "SKILL.md");
-    mkdirSync(join(home, "kits", "node-cli"), { recursive: true });
-    writeFileSync(path, '---\nname: Node CLI\ndescription: |\n  Build a command line app.\n  Use native modules.\n---\n# Scaffold');
-    for (const query of ["kit Node CLI", "Node CLI", "kit node-cli"]) {
-      const result = spawnSync(process.execPath, [join(import.meta.dirname, "..", "bin", "brain.mjs"), "recall", query, "--home", home, "--project", "demo"], { cwd, encoding: "utf8" });
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(path);
-      expect(result.stdout).toContain("# Scaffold");
-      expect(result.stdout).not.toContain("description:");
-    }
-    const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(rows.map(row => [row.query, row.ids])).toEqual(["kit Node CLI", "Node CLI", "kit node-cli"].map(query => [query, ["Node CLI"]]));
   });
 });
 

@@ -203,7 +203,7 @@ export function gitRemote(root: string): string | null {
   }
 }
 
-/** Stack tags implied by files at the project root, so shared notes and kits find projects without setup. */
+/** Stack tags implied by files at the project root, so shared notes find projects without setup. */
 const MARKERS: ReadonlyArray<readonly [string, string]> = [
   ["package.json", "node"],
   ["tsconfig.json", "typescript"],

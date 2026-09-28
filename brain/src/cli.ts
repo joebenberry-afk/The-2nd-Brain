@@ -9,8 +9,7 @@ import { parseArgs } from "node:util";
 import { acceptProposal, appendEvent, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, toolEventFrom, unmatchedErrors } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
-import { draftKit, findKit, kitsDir, loadKits } from "./kits.ts";
-import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, parseFrontmatter, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
+import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
 import { addProjectDoc, gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { runMcp } from "./mcp.ts";
 import { answerWithHits } from "./search.ts";
@@ -39,7 +38,6 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain state [<text…>]                        show or replace the working state
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
   brain review · accept <pid>… · reject <pid>…
-  brain kit list · kit show <name> · kit new <name> [--from <project>] [--tag T]…
   brain project docs add <path> · project docs list
   brain sync [--no-push] [-m <message>]
   brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
@@ -297,32 +295,6 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     return 0;
   },
 
-  kit(c) {
-    const [sub, name] = c.args;
-    const kits = loadKits(c.home);
-    if (sub === "list") {
-      c.io.out(kits.length ? kits.map((k) => `${k.name} — ${k.description}`).join("\n") : "no kits");
-      return 0;
-    }
-    if (sub === "show") {
-      const kit = findKit(kits, need(name, "a kit name"));
-      if (!kit) throw new Error(`no kit ${name}`);
-      c.io.out(readFileSync(kit.path, "utf8").trimEnd());
-      return 0;
-    }
-    if (sub === "new") {
-      const tags = c.opts.tag ?? [];
-      const from = c.opts.from ? projectById(c.home, c.opts.from, c.io.cwd).id : c.project.id;
-      const notes = loadNotes(c.home).notes;
-      // A --from that matches no project is a typo, not a request for an empty scaffold.
-      if (c.opts.from && !notes.some((n) => n.project === from && !n.retired)) throw new Error(`no notes in project ${from}`);
-      const kit = draftKit(c.home, need(name, "a kit name"), from, notes, tags.length ? tags : undefined);
-      c.io.out(`drafted ${kit.path}`);
-      return 0;
-    }
-    throw new UsageError("kit list | kit show <name> | kit new <name>");
-  },
-
   sync(c) {
     c.io.out(sync(c.home, { message: c.opts.message, push: c.opts["no-push"] !== true }).message);
     return 0;
@@ -357,7 +329,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const { notes, errors: noteErrors } = loadNotes(c.home);
     const errors = [...noteErrors, ...configErrors(c.home)];
     const active = notes.filter((n) => !n.retired).length;
-    c.io.out(`notes: ${notes.length} (${active} active) · projects: ${Object.keys(loadProjects(c.home)).length} · kits: ${loadKits(c.home).length}`);
+    c.io.out(`notes: ${notes.length} (${active} active) · projects: ${Object.keys(loadProjects(c.home)).length}`);
     for (const e of errors) c.io.err(e);
     return errors.length ? 1 : 0;
   },
@@ -373,7 +345,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
 /**
  * Problems that would otherwise be silent: a home that is not a directory, files the loader never
  * reads (outside a project folder, in a folder that is not a project id, not named *.md), merge
- * leftovers in working states, an unreadable or mistyped projects.json, a kit that is skipped.
+ * leftovers in working states, an unreadable or mistyped projects.json.
  */
 function configErrors(home: string): string[] {
   const errors: string[] = [];
@@ -437,19 +409,6 @@ function configErrors(home: string): string[] {
     } catch (error) {
       errors.push(`${projectsFile}: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-  const loaded = new Set(loadKits(home).map((k) => k.path));
-  for (const entry of list(kitsDir(home))) {
-    const skill = join(kitsDir(home), entry.name, "SKILL.md");
-    if (!entry.isDirectory() || loaded.has(skill)) continue;
-    let why = "missing";
-    try {
-      const { fields } = parseFrontmatter(readFileSync(skill, "utf8"));
-      why = fields.get("description") ? "unreadable" : "without a description";
-    } catch (error) {
-      if (existsSync(skill)) why = error instanceof Error ? error.message : String(error);
-    }
-    errors.push(`${skill}: ${why}`);
   }
   return errors;
 }

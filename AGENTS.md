@@ -11,7 +11,7 @@ This file governs agents working **on the Brain itself** (this repo).
 
 ## Rules
 
-1. **Files are the truth.** `notes/`, `kits/`, `work/`, `projects.json` are canonical and
+1. **Files are the truth.** `notes/`, `work/`, `projects.json` are canonical and
    Git-versioned. `state/` is local and derived; nothing derived is committed.
 2. **No secrets.** Never write credential values, tokens or private keys into any file here.
    `notes/*/private/` never leaves the machine.

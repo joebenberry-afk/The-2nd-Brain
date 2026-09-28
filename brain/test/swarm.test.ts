@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 import { acceptProposal, errorSignature, findFix, program, rejectProposal, scanEvents } from "../src/capture.ts";
 import { main, type Io } from "../src/cli.ts";
 import { convertV3 } from "../src/convert.ts";
-import { loadKits } from "../src/kits.ts";
 import { createNote, formatNote, loadNotes, parseNote, retireNote, saveNote } from "../src/notes.ts";
 import { scrub } from "../src/scrub.ts";
 import { loadProjects, normalizeRemote } from "../src/project.ts";
@@ -376,26 +375,6 @@ describe("batch 3: CLI", () => {
       "Clear PYTHONHOME",
     ].join("\n");
     expect(parseNote(text, "x.md", "demo", false)).toMatchObject({ kind: "gotcha", source: "agent", tags: ["python"], errors: ["SRE module mismatch"], tested: true });
-  });
-
-  it("loads an Agent Skill with a metadata map and a folded description, and finds it by the name it was created with", async () => {
-    const { home, io } = cliSetup();
-    mkdirSync(join(home, "kits", "fastapi-mvp"), { recursive: true });
-    writeFileSync(
-      join(home, "kits", "fastapi-mvp", "SKILL.md"),
-      "---\nname: fastapi-mvp\ndescription: >\n  Build a FastAPI MVP:\n  one service, one database.\nlicense: MIT\nmetadata:\n  author: example-org\n  version: \"1.0\"\ntags: [python]\n---\n\n# FastAPI MVP\n",
-    );
-    expect(loadKits(home)).toMatchObject([{ name: "fastapi-mvp", description: "Build a FastAPI MVP: one service, one database.", tags: ["python"] }]);
-    expect((await cli(["kit", "show", "FastAPI MVP"], io)).code).toBe(0);
-    expect((await cli(["check"], io)).code).toBe(0);
-  });
-
-  it("kit new --from a project with no notes is an error, not an empty kit", async () => {
-    const { home, io } = cliSetup();
-    const result = await cli(["kit", "new", "x", "--from", "typo"], io);
-    expect(result).toMatchObject({ code: 1 });
-    expect(result.err).toContain("no notes in project typo");
-    expect(existsSync(join(home, "kits", "x"))).toBe(false);
   });
 
   it("--help and -h print the usage", async () => {

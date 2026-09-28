@@ -4,7 +4,6 @@ import { firstLine, GLOBAL, restOfBody, staleEvidence, type Note } from "./notes
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
-import { findKit, loadKits } from "./kits.ts";
 import { docAnswer } from "./docs.ts";
 
 export const STOPWORDS = new Set([
@@ -367,7 +366,7 @@ export function renderHit(hit: Hit, max = 240): string {
 
 /** Longest first answer: most questions are settled by the top hit, so it gets room to say it. */
 export const FIRST_HIT_CHARS = 600;
-/** A note or kit read explicitly is cut to this many tokens. */
+/** A note read explicitly is cut to this many tokens. */
 export const FULL_NOTE_TOKENS = 600;
 
 const NO_MATCH = "no match; note it once you learn it";
@@ -379,13 +378,13 @@ export function renderHits(hits: Hit[]): string {
 }
 
 export interface AnswerOptions extends RecallOptions {
-  /** Explicit Brain home also enables kit recall without process-global state. */
+  /** Explicit Brain home for evidence and registered document lookup. */
   home?: string;
   /** The CLI has flags rather than tool arguments. */
   tools?: boolean;
 }
 
-/** One call answers: exact ids, named kits, then scoped note search. */
+/** One call answers: exact ids, then scoped note search. */
 export function answer(notes: Note[], query: string, opts: AnswerOptions): string {
   return answerWithHits(notes, query, opts).text;
 }
@@ -399,12 +398,6 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
     const retiredMeta = note.retired ? `retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""}` : "";
     const meta = [note.kind, note.tested ? "tested" : "", retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
     return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [note.id] };
-  }
-  if (opts.home && id) {
-    const kit = findKit(loadKits(opts.home), id.replace(/^kit\s+/i, ""));
-    if (kit) {
-      return { text: cutToTokens(`${kit.path}\n${kit.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [kit.name] };
-    }
   }
   // Search summaries stay within the three-line budget; explicit id reads above retain history.
   opts = { ...opts, limit: Math.max(1, Math.min(3, opts.limit ?? 3)) };

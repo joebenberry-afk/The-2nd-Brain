@@ -14,12 +14,6 @@ const tmp = () => mkdtempSync(join(tmpdir(), "brain-card-"));
 const project: Project = { id: "demo", tags: ["web"], root: null };
 const NOW = new Date("2026-09-27T12:00:00Z");
 
-function kit(home: string, name: string, tags: string[]): void {
-  mkdirSync(join(home, "kits", name), { recursive: true });
-  const tagLines = tags.length ? `tags:\n${tags.map((t) => `  - ${t}`).join("\n")}\n` : "";
-  writeFileSync(join(home, "kits", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} kit\n${tagLines}---\n\n# ${name}\n`);
-}
-
 describe("card", () => {
   it("is empty when there is nothing to say", () => {
     expect(renderCard(tmp(), [], project, { now: NOW })).toBe("");
@@ -94,22 +88,6 @@ describe("card", () => {
     expect(renderCard(home, loadNotes(home).notes, project, { now: NOW })).toContain('brain note "<text>"');
   });
 
-  it("offers every kit on a new project and tag-matched kits otherwise", () => {
-    const home = tmp();
-    kit(home, "fastapi-mvp", ["python"]);
-    kit(home, "vite-react", ["web"]);
-    const root = tmp();
-    execFileSync("git", ["init", root]);
-    for (let i = 0; i < 4; i++) writeFileSync(join(root, "file" + i), "new source");
-    const fresh = renderCard(home, [], { ...project, root }, { now: NOW });
-    expect(fresh).toContain("fastapi-mvp");
-    expect(fresh).toContain("vite-react");
-    createNote(home, { text: "we use vite", project: "demo", kind: "decision" });
-    const known = renderCard(home, loadNotes(home).notes, project, { now: NOW });
-    expect(known).toContain("vite-react");
-    expect(known).not.toContain("fastapi-mvp");
-  });
-
   it("mentions waiting proposals", () => {
     const home = tmp();
     mkdirSync(join(home, "state", "inbox"), { recursive: true });
@@ -133,17 +111,6 @@ describe("card completeness and scope", () => {
     expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
   });
 
-  it.each([true, false])("advertises directly callable kits with tools=%s", (tools) => {
-    const home = tmp();
-    kit(home, "node-ts-cli", ["web"]);
-    kit(home, "omp-extension", ["web"]);
-    const card = renderCard(home, [], project, { tools });
-    const command = tools ? 'brain_recall("kit <name>")' : 'brain recall "kit <name>"';
-    expect(card).toContain("Kits: node-ts-cli, omp-extension → " + command);
-    expect(card).not.toContain(home);
-    expect(card).not.toContain("SKILL.md");
-  });
-
   it("renders long facts completely and skips oversized facts without hiding later facts", () => {
     const home = tmp();
     const long = "OMP compaction must retain the active session plan and insert the continuation after the compaction summary; " + "the complete instruction remains useful only when its final clause is visible.";
@@ -158,20 +125,8 @@ describe("card completeness and scope", () => {
     expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
   });
 
-  it("bounds pathological kit names without losing useful notes or the footer", () => {
+  it("keeps parent plans out of subagent cards", () => {
     const home = tmp();
-    kit(home, "normal", ["web"]);
-    writeFileSync(join(home, "kits", "normal", "SKILL.md"), "---\nname: " + "k".repeat(2000) + "\ndescription: kit\ntags: [web]\n---\nbody");
-    const note = createNote(home, { text: "A useful complete fact", project: "demo" });
-    const card = renderCard(home, [note], project, { tools: true });
-    expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
-    expect(card).toContain(note.body);
-    expect(card).toContain("brain_state(");
-  });
-
-  it("keeps parent plans and kits out of subagent cards", () => {
-    const home = tmp();
-    kit(home, "web-kit", ["web"]);
     writeWork(home, "demo", "Goal: parent private plan");
     writeAuto(home, "demo", { edited: ["parent.ts"] });
     const note = createNote(home, { text: "Shared fact", project: "demo" });
@@ -179,7 +134,7 @@ describe("card completeness and scope", () => {
     expect(card).toContain(note.body);
     expect(card).toContain("brain_recall(");
     expect(card).not.toContain("brain_note(");
-    expect(card).not.toMatch(/parent|Where we left off|brain_state|web-kit/);
+    expect(card).not.toMatch(/parent|Where we left off|brain_state/);
   });
 
   it("ranks the first prompt ahead of unrelated static rank and previous work", () => {
@@ -207,20 +162,6 @@ describe("card completeness and scope", () => {
     const line = long.split("\n").find(line => line.startsWith("Watch out:"))!;
     expect(line).toContain("keep authentication isolated");
     expect(estimateTokens(line)).toBeLessThanOrEqual(40);
-  });
-
-  it("does not advertise unrelated MVP kits in an established foreign repository", () => {
-    const home = tmp();
-    const root = tmp();
-    execFileSync("git", ["init", root]);
-    for (let i = 0; i < 4; i++) writeFileSync(join(root, "file" + i), "existing source");
-    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-m", "existing project"]);
-    kit(home, "python-kit", ["python"]);
-    expect(renderCard(home, [], { ...project, root })).toBe("");
-    kit(home, "web-kit", ["web"]);
-    const card = renderCard(home, [], { ...project, root });
-    expect(card).toContain("web-kit");
-    expect(card).not.toMatch(/New project|python-kit/);
   });
 
   it("returns nothing for zero or negative token room", () => {
@@ -251,23 +192,6 @@ describe("card completeness and scope", () => {
       expect(notes.some((note) => line.includes(note.body))).toBe(true);
     }
   });
-
-  it("does not mistake packed refs or linked worktrees for unborn repositories", () => {
-    const home = tmp();
-    const root = tmp();
-    execFileSync("git", ["init", root]);
-    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-m", "existing"]);
-    execFileSync("git", ["-C", root, "pack-refs", "--all"]);
-    kit(home, "python-kit", ["python"]);
-    const linked = join(tmp(), "linked");
-    execFileSync("git", ["-C", root, "worktree", "add", "-b", "linked", linked]);
-    execFileSync("git", ["-C", root, "pack-refs", "--all"]);
-    for (const dir of [root, linked]) {
-      for (let i = 0; i < 4; i++) writeFileSync(join(dir, "file" + i), "existing");
-      expect(renderCard(home, [], { ...project, root: dir })).toBe("");
-    }
-  });
-
 });
 
 describe("recurring known fix", () => {

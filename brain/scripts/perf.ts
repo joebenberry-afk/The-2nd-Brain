@@ -90,7 +90,7 @@ function measure(name: string, target: string, expected?: number): Row {
   // The real home is read directly above. Hook writes go to a local snapshot, not real telemetry/work.
   const hookHome = join(scratch, `hook-${name}`);
   mkdirSync(hookHome, { recursive: true });
-  for (const path of ["notes", "kits", "work", "projects.json"]) {
+  for (const path of ["notes", "work", "projects.json"]) {
     if (existsSync(join(target, path))) cpSync(join(target, path), join(hookHome, path), { recursive: true });
   }
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();

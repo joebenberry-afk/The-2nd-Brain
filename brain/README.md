@@ -30,7 +30,7 @@ tests.
 Open a **new terminal** (it picks up PATH and `SECOND_BRAIN_HOME`), then:
 
 ```powershell
-brain check     # notes: N (A active) · projects: P · kits: K — exit 0
+brain check     # notes: N (A active) · projects: P — exit 0
 brain card      # what a session in this checkout will see
 ```
 
@@ -59,10 +59,10 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
 ## 2. Verify in the first sessions
 
 1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message
-   (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt, matching
-   kits); later prompts add nothing, and a session resumed in a new OMP process (restart,
+   (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt);
+   later prompts add nothing, and a session resumed in a new OMP process (restart,
    `/resume`) keeps the card it already holds until a compaction. Subagents inherit only the parent plan’s Watch out field
-   (≤40 tokens), never Goal/Next/Done, auto observations or kits, and cannot overwrite state.
+   (≤40 tokens), never Goal/Next/Done or auto observations, and cannot overwrite state.
    Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
    A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
    the card up front (`Often hit lately …`, at most two), before the first attempt; it drops off by itself
@@ -155,7 +155,7 @@ must withhold `brain_state` from child agents to protect the parent’s working 
 .\scripts\uninstall-v4.ps1 -Restore      # removes the V4 extension, restores the parked one
 ```
 
-Restart OMP. `-RemovePath` also takes `brain\bin` off your PATH. Notes, kits and working state
+Restart OMP. `-RemovePath` also takes `brain\bin` off your PATH. Notes and working state
 stay as files. The parked V2/V3 extensions expect the pre-V4 tree (tag `v2-archive`), which
 this checkout no longer contains.
 
@@ -198,8 +198,11 @@ both sides. Recall prefers a visible current replacement with a short retired-no
 explicit note ids and `--history` still expose retired details. A working state, `work/<project>.md`,
 is the agent’s plan as free text under a
 one-line frontmatter (`at:`); an `## auto` section left by older versions is shown until the next
-`brain_state` drops it. A kit, `kits/<name>/SKILL.md`, is an Agent Skill (`name`, `description`,
-optional `tags`); `brain recall "kit <name>"` returns its path and instructions (≤ 600 tokens). Projects need nothing;
+`brain_state` drops it. Proven setups live as global `procedure` notes in `notes/global/`.
+Recall them normally: `brain recall "node typescript cli scaffold setup"` or
+`brain recall "omp extension setup"`; recall a returned note id for its instructions
+(≤ 600 tokens). These setup notes are untagged: available from an empty directory,
+but pull-only, so they do not occupy unrelated start cards. Projects need nothing;
 `projects.json` adds `paths`, `remote`, `aliases` and `tags`:
 
 ```json

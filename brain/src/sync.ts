@@ -11,7 +11,7 @@ import { scrub } from "./scrub.ts";
 
 export class SyncError extends Error {}
 
-export const SYNC_PATHS = ["notes", "kits", "work", "projects.json", "rejected.json"] as const;
+export const SYNC_PATHS = ["notes", "work", "projects.json", "rejected.json"] as const;
 
 export interface SyncResult {
   committed: boolean;
@@ -56,7 +56,7 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     // Write pathspecs to a temp file for git commit
     const tempFile = join(tmpdir(), `brain-pathspecs-${process.pid}-${Math.random().toString(16).slice(2)}`);
     // Exactly the staged Brain files: a directory with no tracked file (notes/ holding only
-    // private notes, an empty kits/) would make git reject the whole pathspec.
+    // private notes, an empty work/) would make git reject the whole pathspec.
     // --no-renames: a moved note must list both its new path and the deletion of its old one
     const staged = spawnSync("git", ["-C", home, "diff", "--cached", "--name-only", "--no-renames", "--relative", "-z", "--", ...pathspecs], { encoding: "utf8" });
     const pathspecContent = staged.stdout.split("\0").filter(Boolean).map((f) => `:(literal)${f}`).join("\0");

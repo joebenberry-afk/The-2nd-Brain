@@ -3,7 +3,7 @@
   Remove the Second Brain V4 OMP extension; with -Restore, bring back the most recently parked
   older extension (second-brain or second-brain-v3). -RemovePath takes brain\bin (and the checkout,
   where earlier versions put brain.cmd) off the user PATH, keeping every other entry as stored.
-  Notes, kits and working state are untouched. Works with Windows PowerShell 5.1 and 7.
+  Notes and working state are untouched. Works with Windows PowerShell 5.1 and 7.
 #>
 [CmdletBinding()]
 param(

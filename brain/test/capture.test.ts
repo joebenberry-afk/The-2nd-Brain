@@ -1026,7 +1026,7 @@ describe("capture batch five regressions", () => {
 
   it.each(["npx vitest run", "bunx vitest run", "npm exec vitest run", "npm run test --", "pnpm vitest run", "yarn vitest run", "python -m pytest", "uv run pytest", "bun run test"])("requires the launched target to be retried: %s", (launcher) => {
     const home = tmp();
-    log(home, row({ command: `${launcher} test/cli.test.ts`, ok: false, error: "Error: test failure" }) + row({ command: `${launcher} test/kits.test.ts` }));
+    log(home, row({ command: `${launcher} test/cli.test.ts`, ok: false, error: "Error: test failure" }) + row({ command: `${launcher} test/card.test.ts` }));
     expect(scanEvents(home, [])).toEqual([]);
   });
 
