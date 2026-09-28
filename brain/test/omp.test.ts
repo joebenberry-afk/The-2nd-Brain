@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import secondBrain, { CARD_TYPE, editedPaths, type HostLike } from "../src/omp.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
@@ -654,9 +654,14 @@ describe("OMP extension", () => {
     appendEvent(home, "previous", cwd, { tool: "bash", command: "npm ci && npm test", ok: true });
     const { handlers } = load({ SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" });
     const start = handlers.get("before_agent_start")!;
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const tick = () => vi.runOnlyPendingTimers();
     start({ prompt: "run tests" }, { ...ctx("child", cwd), agent: { kind: "sub" } });
+    tick();
     expect(listProposals(home)).toEqual([]);
     start({ prompt: "run tests" }, { ...ctx("parent", cwd), agent: { kind: "main" } });
+    tick();
+    vi.useRealTimers();
     expect(listProposals(home).map(p => p.text)).toEqual([expect.stringContaining("npm ci && npm test works")]);
   });
 

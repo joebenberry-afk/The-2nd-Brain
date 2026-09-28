@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { acceptProposal, errorSignature, findFix, program, rejectProposal, scanEvents } from "../src/capture.ts";
 import { main, type Io } from "../src/cli.ts";
 import { convertV3 } from "../src/convert.ts";
@@ -562,13 +562,20 @@ describe("batch 3: OMP lifecycle", async () => {
     expect(fire("context", { messages }, s)).toBeUndefined();
   });
 
-  it("the first card counts failures fixed in earlier sessions without a brain review", () => {
+  it("failures fixed in earlier sessions become proposals after the first card, off its critical path", () => {
     const { home, cwd, fire } = setup();
     mkdirSync(join(home, "state", "events"), { recursive: true });
     const line = (o: object) => JSON.stringify({ v: 1, at: "2026-09-27T10:00:00Z", session: "old", cwd, tool: "bash", ...o }) + "\n";
     writeFileSync(join(home, "state", "events", "old.jsonl"), line({ command: "npm test", ok: false, error: "Error: missing dependency" }) + line({ command: "npm ci && npm test", ok: true }));
-    const card = fire("before_agent_start", { prompt: "go" }, session("new", cwd)) as { message: { content: string } };
-    expect(card.message.content).toMatch(/1 proposal/);
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      fire("before_agent_start", { prompt: "go" }, session("new", cwd));
+      vi.runOnlyPendingTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+    const next = fire("before_agent_start", { prompt: "go" }, session("next", cwd)) as { message: { content: string } };
+    expect(next.message.content).toMatch(/1 proposal/);
   });
 });
 

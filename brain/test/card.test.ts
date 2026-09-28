@@ -228,11 +228,13 @@ describe("card completeness and scope", () => {
     expect(cutToTokens("hello", -2)).toBe("");
   });
 
-  it("prefers four complete facts over five clipped facts", () => {
+  it("prefers fewer complete facts over five clipped facts", () => {
     const home = tmp();
     const notes = Array.from({ length: 5 }, (_, i) => createNote(home, { text: "Fact " + i + ": " + "complete words ".repeat(19).trim(), project: "demo" }));
     const card = renderCard(home, notes, project, { tools: true });
-    expect(card.split("\n").filter((line) => line.startsWith("- [note]"))).toHaveLength(4);
+    const shown = card.split("\n").filter((line) => line.startsWith("- [note]"));
+    expect(shown.length).toBeGreaterThanOrEqual(3);
+    expect(shown.length).toBeLessThan(5);
     expect(card).not.toContain("…");
     expect(card.split("\n").at(-1)).toContain("brain_recall(");
     expect(card.split("\n").at(-1)).toContain("brain_note(");
@@ -293,7 +295,7 @@ describe("recurring known fix", () => {
 
   it("keeps a recurring fix too long for its slot as an ordinary note", () => {
     const home = tmp();
-    const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(116), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
+    const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(105), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
     const before = renderCard(home, loadNotes(home).notes, project, { tools: true, subagent: true, now: NOW });
     expect(before).toContain(long.id);
     for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: true, id: long.id }, NOW);

@@ -324,14 +324,18 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
         const subagent = isSubagent(ctx);
         // Only the parent scans earlier sessions; children share its proposals without rescanning.
+        // After the card, not before: catching up on a long session's events took ~400 ms on the
+        // first prompt's path. The card's proposal count is then at most one scan behind.
         if (!subagent) {
-          try {
-            scanEvents(home, notes);
-          } catch {
-            // the card matters more than the count
-          }
+          setTimeout(() => {
+            try {
+              scanEvents(home, notes);
+            } catch (error) {
+              failed("scanEvents", error);
+            }
+          }, 0);
         }
-        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, prompt: typeof prompt === "string" ? prompt : undefined, lean: experiments.has("lean") });
+        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, prompt: typeof prompt === "string" ? prompt : undefined });
 
         if (cardContent) {
           state.carded = true;

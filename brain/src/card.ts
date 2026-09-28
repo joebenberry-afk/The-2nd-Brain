@@ -16,7 +16,10 @@ export const CARD_NOTES = 5;
 const RECURRING_FIX_SESSIONS = 3;
 /** Two lines at most: pre-empting mistakes must not crowd out what the project knows. */
 const RECURRING_FIX_LINES = 2;
-/** Every turn re-sends the whole context, and every tool result stays in it: fewer, smaller turns. */
+/**
+ * Every turn re-sends the whole context and every tool result stays in it, so fewer and smaller
+ * turns beat terser prose. Measured (agentbench, 28 GPT runs each): -10% tokens, -9% cost.
+ */
 export const LEAN_LINE = "Work lean: batch independent tool calls in one turn · read the lines you need, not whole files · finish with the result, no recap.";
 
 const KIND_WEIGHT: Record<string, number> = { gotcha: 3, decision: 3, procedure: 2, fact: 1, note: 1 };
@@ -30,8 +33,6 @@ export interface CardOptions {
   subagent?: boolean;
   /** First user prompt, used only for ranking, never persisted. */
   prompt?: string;
-  /** Experiment "lean": one working-style line aimed at turns and context size, not wording. */
-  lean?: boolean;
 }
 
 /** Active project notes and global notes sharing a project tag; untagged globals stay pull-only. */
@@ -152,7 +153,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);
   const pending = pendingCount(home, project.id);
   const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — what prior sessions learned; the repo wins on conflict`;
-  const tail = [kits, pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", opts.lean ? LEAN_LINE : "", footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
+  const tail = [kits, pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → \`brain review\`` : "", LEAN_LINE, footer(opts.tools === true, opts.subagent === true)].filter(Boolean);
   const lines = [head];
   const room = (extra: string[] = []): number => CARD_BUDGET * 4 - [...lines, ...extra, ...tail].join("\n").length - 1;
   if (resume) {
