@@ -14,6 +14,8 @@ export const CARD_BUDGET = 400;
 export const CARD_NOTES = 5;
 /** Distinct sessions of the same role in 7 days before a fix is said up front (E1: 8/8 → 2/8). */
 const RECURRING_FIX_SESSIONS = 3;
+/** Two lines at most: pre-empting mistakes must not crowd out what the project knows. */
+const RECURRING_FIX_LINES = 2;
 
 const KIND_WEIGHT: Record<string, number> = { gotcha: 3, decision: 3, procedure: 2, fact: 1, note: 1 };
 const DAY_MS = 86_400_000;
@@ -138,8 +140,9 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   // Any note that could fire as a fix here qualifies, untagged globals included.
   const recurring = notes
     .filter((n) => !n.retired && n.tested && n.errors.length && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project))
-    .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))[0];
-  const ranked = rankForCard(candidates.filter((n) => n !== recurring), project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
+    .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
+    .slice(0, RECURRING_FIX_LINES);
+  const ranked = rankForCard(candidates.filter((n) => !recurring.includes(n)), project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
   const allKits = opts.subagent ? [] : loadKits(home);
   const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
   const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);
@@ -152,10 +155,14 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     const text = cutToTokens(resume, Math.floor(room() / 4));
     if (text.trim()) lines.push(text);
   }
-  if (recurring) {
-    const label = [`Often hit lately (${fires.get(recurring.id)} sessions this week):`];
-    const line = noteLine(recurring, room(label));
-    if (line) lines.push(...label, line);
+  let shown = 0;
+  for (const fix of recurring) {
+    const label = shown ? [] : ["Often hit lately (sessions this week):"];
+    const count = `${fires.get(fix.id)}× `;
+    const line = noteLine(fix, room(label) - count.length);
+    if (!line) continue;
+    lines.push(...label, "- " + count + line.slice(2));
+    shown += 1;
   }
   let count = 0;
   for (const note of ranked) {

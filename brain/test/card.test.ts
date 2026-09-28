@@ -275,12 +275,20 @@ describe("recurring known fix", () => {
     expect(card(true)).not.toContain("Often hit lately");
     fire("c", true);
     const child = card(true);
-    expect(child).toContain("Often hit lately (3 sessions this week):");
+    expect(child).toContain("Often hit lately (sessions this week):\n- 3× [gotcha, tested]");
     expect(child.split(fix.id)).toHaveLength(2);
     expect(child.indexOf(fix.id)).toBeLessThan(child.indexOf(other.id));
     expect(estimateTokens(child)).toBeLessThanOrEqual(400);
     // Main sessions never made this mistake: their card stays as it was.
     expect(card(false)).not.toContain("Often hit lately");
+    // A second recurring fix gets its own line; a third never does.
+    for (const [i, text] of ["Second recurring fix", "Third recurring fix"].entries()) {
+      const extra = createNote(home, { text, project: "global", kind: "gotcha", tested: true, errors: [`error number ${i}`] });
+      for (const s of ["x", "y", "z"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: true, id: extra.id }, NOW);
+    }
+    const two = card(true);
+    expect(two.match(/^- 3× /gm)).toHaveLength(2);
+    expect(estimateTokens(two)).toBeLessThanOrEqual(400);
   });
 });
 

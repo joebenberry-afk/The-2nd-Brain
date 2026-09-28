@@ -51,7 +51,7 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    (≤40 tokens), never Goal/Next/Done, auto observations or kits, and cannot overwrite state.
    Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
    A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
-   the card up front (`Often hit lately …`), before the first attempt; it drops off by itself
+   the card up front (`Often hit lately …`, at most two), before the first attempt; it drops off by itself
    once the mistake stops. Measured on GPT subagents: the OMP edit-grammar mistake fell from
    8/8 first edits to 2/8 with that line in the task; live on OMP 18.4.0, children whose card
    carried it (after 3 had hit the mistake) failed 0/5 first edits vs 3/3 before, for +39 tokens.

@@ -329,7 +329,10 @@ function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Not
       const stat = statSync(path, { bigint: true });
       const signature = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}:${stat.ino}`;
       let cached = previous?.get(path);
-      if (cached?.signature !== signature) {
+      // Racily clean (git's term): timestamps may tick at ~16 ms on NTFS, so a same-size edit just
+      // after a write can keep the signature. A file changed in the last 2 s is always re-read.
+      const recent = BigInt(Date.now()) * 1_000_000n - (stat.ctimeNs > stat.mtimeNs ? stat.ctimeNs : stat.mtimeNs) < 2_000_000_000n;
+      if (recent || cached?.signature !== signature) {
         const note = parseNote(readFileSync(path, "utf8"), path, project, isPrivate);
         if (`${note.id}.md` !== name) throw new NoteError(`id ${note.id} does not match file name`);
         cached = { signature, note };
