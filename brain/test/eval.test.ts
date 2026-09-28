@@ -113,7 +113,10 @@ it("grades only a single heading line naming the hinted document as a doc answer
 
 describe.skipIf(!hasNotes)("real queries", () => {
   const recordings = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "recall-judge.json"), "utf8")) as Record<string, Record<string, number>>;
-  const { notes } = loadNotes(PACKAGE_HOME);
+  // The labels judged the notes that existed when the pools were built: a note written later was
+  // never judged, so it must not change this score (or fail the gate for want of a recording).
+  const LABELLED_AT = "2026-09-28T14:12:00Z";
+  const notes = loadNotes(PACKAGE_HOME).notes.filter(note => note.at <= LABELLED_AT);
   const projects = loadProjects(PACKAGE_HOME);
 
   function recordedJudge(caseId: string, shown: string[]): Judge {
