@@ -290,6 +290,8 @@ correctly stop and ask), on 20/20; overall on vs off −19 % tokens, −33 % cos
 (44 runs) found todo-only turns, whole-object eval prints and `'\b'` in JS strings; shipped the
 last as a targeted hint (fires only on the mistake; agents fixed the next script every time).
 A wider lean wording measured −9 % then +4 % cost across two batches: noise, not shipped.
+Shipped-build regression (GPT, v3, 20 runs each): on vs off −30 % tokens, −39 % cost, 6.7 vs 9.2
+turns, 20/20 vs 16/20; beats the best earlier `on` ($0.320 vs $0.366 per run).
 
 ## 7. Owner decisions needed before P1
 

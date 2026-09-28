@@ -200,4 +200,13 @@ both Vitest projects; `npm run check` adds lint and type checking. The full gate
 `test/eval.test.ts`, which runs the frozen V3 recall queries against the committed live `notes/`.
 `npm run perf` measures real-home read paths plus isolated synthetic 1,000/5,000-note corpora,
 using Node built-ins and recording aggregates in `state/perf.json` with previous-run deltas.
+
+`node scripts/agentbench.ts` runs small coding tasks (rename, fix, find, combo, and a memory
+task whose answer lives only in a Brain note) with headless OMP agents, Brain `off` vs `on` vs
+experiments (`on+<name>`, read from `BRAIN_EXPERIMENT`) and host settings (`+@<preset>`), scores
+each run from its session file and ranks by cost against the same-batch control (batches drift
+±5–10 %). It costs real model usage: GPT first, then Grok/Google, Claude last. Results append to
+`state/agentbench.jsonl`; session files stay in `state/agentbench/` for turn-by-turn analysis.
+Latest (GPT, v3, 20 runs each): Brain on vs off −30 % tokens, −39 % cost, 6.7 vs 9.2 turns,
+20/20 vs 16/20 passing.
 Rules: [the V4 plan](../docs/intake/2026-09-27-plan-v4-agent-experience.md) §3.2.
