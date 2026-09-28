@@ -114,7 +114,9 @@ function footer(tools: boolean, subagent: boolean): string {
   const recall = tools ? "brain_recall(query)" : '`brain recall "<query>"`';
   const note = tools ? "brain_note(text)" : '`brain note "<text>"`';
   const state = tools ? "brain_state(text)" : '`brain state "<text>"`';
-  return `${recall} before explore/choose/retry · ${note} for what code can't tell` + (subagent ? "" : ` · ${state} when goal/next changes`);
+  // Children keep only recall: their notes went unused (0 of 27) and their state writes are refused.
+  if (subagent) return `${recall} before explore/choose/retry`;
+  return `${recall} before explore/choose/retry · ${note} for what code can't tell · ${state} when goal/next changes`;
 }
 
 /** Complete card including header and tail fits CARD_BUDGET; nothing useful means no injection. */

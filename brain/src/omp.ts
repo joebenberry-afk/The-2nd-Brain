@@ -26,6 +26,9 @@ export interface HostLike {
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
   registerTool?: (tool: unknown) => void;
   typebox?: unknown;
+  /** Per session: OMP binds each child session to its own API, so this changes only that child. */
+  getActiveTools?: () => string[];
+  setActiveTools?: (names: string[]) => Promise<void>;
 }
 
 type Json = Record<string, unknown>;
@@ -506,7 +509,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
           // Hosts join text blocks without a separator: the fix must start on its own line.
           const resultContent = [...contentArray, { type: "text", text: `\n${fixText}` }];
-          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx) });
+          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: fix.id });
           return { content: resultContent };
         }
       }
@@ -516,6 +519,23 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       return undefined;
     }
   });
+
+  // A child pays every resident schema on every request: keep only recall, which children use.
+  // Their notes went unused and brain_state is refused for them. session_start is awaited
+  // before a child's first prompt, and the child's API changes only the child's tool set.
+  if (toolsOn) {
+    on("session_start", async (_event, ctx) => {
+      try {
+        if (!isSubagent(ctx) || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return undefined;
+        const active = pi.getActiveTools();
+        const keep = active.filter((name) => name !== "brain_note" && name !== "brain_state");
+        if (keep.length !== active.length) await pi.setActiveTools(keep);
+      } catch {
+        // the child keeps every tool; nothing else changes
+      }
+      return undefined;
+    });
+  }
 
   // Handle session_shutdown
   on("session_shutdown", (_event, ctx) => {

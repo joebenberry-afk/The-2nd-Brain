@@ -178,7 +178,7 @@ describe("card completeness and scope", () => {
     const card = renderCard(home, [note], project, { tools: true, subagent: true });
     expect(card).toContain(note.body);
     expect(card).toContain("brain_recall(");
-    expect(card).toContain("brain_note(");
+    expect(card).not.toContain("brain_note(");
     expect(card).not.toMatch(/parent|Where we left off|brain_state|web-kit/);
   });
 
@@ -262,6 +262,24 @@ describe("card completeness and scope", () => {
 });
 
 describe("local usage telemetry", () => {
+  it("reads the newest build by default and counts each fix once per session", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state"), { recursive: true });
+    const row = (v: string, extra: object) => JSON.stringify({ at: NOW.toISOString(), project: "demo", tokens: 1, ms: 1, v, ...extra });
+    writeFileSync(telemetryPath(home), [
+      row("old", { kind: "card", session: "old-child" }),
+      row("new", { kind: "fix", session: "a", id: "n-edit" }),
+      row("new", { kind: "fix", session: "a", id: "n-edit" }),
+      row("new", { kind: "fix", session: "b", id: "n-edit" }),
+      row("new", { kind: "fix", session: "b", id: "n-read" }),
+    ].join("\n") + "\n");
+    const s = stats(home, 7, NOW);
+    expect(s.olderBuildRows).toBe(1);
+    expect(s.cards.main).toBe(0);
+    expect(s.fixes).toEqual([{ id: "n-edit", sessions: 2 }, { id: "n-read", sessions: 1 }]);
+    expect(stats(home, 7, NOW, { allBuilds: true })).toMatchObject({ olderBuildRows: 0, cards: { main: 1, sub: 0 } });
+  });
+
   it("separates parent and subagent cards and counts measured recall hits", () => {
     const home = tmp();
     const base = { project: "demo", tokens: 12, ms: 1 };
@@ -299,7 +317,7 @@ describe("local usage telemetry", () => {
     const rows = readFileSync(telemetryPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(rows.map((r) => r.project)).toEqual(["newest"]);
     expect(statSync(join(home, "state", "telemetry.1.jsonl")).size).toBe(old.length * oldRows);
-    expect(stats(home, 7, NOW).byKind).toEqual({ card: { count: oldRows, tokens: oldRows }, note: { count: 1, tokens: 1 } });
+    expect(stats(home, 7, NOW, { allBuilds: true }).byKind).toEqual({ card: { count: oldRows, tokens: oldRows }, note: { count: 1, tokens: 1 } });
   });
 });
 

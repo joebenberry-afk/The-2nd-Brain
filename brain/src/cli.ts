@@ -60,6 +60,7 @@ const OPTIONS = {
   global: { type: "boolean" },
   private: { type: "boolean" },
   all: { type: "boolean" },
+  "all-builds": { type: "boolean" },
   history: { type: "boolean" },
   limit: { type: "string", short: "n" },
   by: { type: "string" },
@@ -105,8 +106,8 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
-function use(c: Ctx, kind: UseKind, text: string, hits?: number): void {
-  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits });
+function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string): void {
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits, id });
 }
 
 const COMMANDS: Record<string, (c: Ctx) => number> = {
@@ -138,7 +139,7 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
     const fix = findFix(loadNotes(c.home).notes, need(c.args.join(" "), "error text"), c.project);
     const text = fix ? renderFix(fix) : "";
     if (text) c.io.out(text);
-    use(c, "fix", text);
+    use(c, "fix", text, undefined, fix?.id);
     return 0;
   },
 
@@ -297,14 +298,15 @@ const COMMANDS: Record<string, (c: Ctx) => number> = {
   },
 
   stats(c) {
-    const s = stats(c.home, positiveInt(c.opts.days, 7));
-    c.io.out(`last ${s.days} days · ${s.sessions} sessions`);
+    const s = stats(c.home, positiveInt(c.opts.days, 7), new Date(), { allBuilds: c.opts["all-builds"] === true });
+    c.io.out(`last ${s.days} days · ${s.sessions} sessions` + (s.olderBuildRows ? ` · newest build only (${s.olderBuildRows} older rows left out; --all-builds)` : ""));
     for (const [kind, v] of Object.entries(s.byKind).sort()) c.io.out(`${kind}: ${v.count} (${v.tokens} tokens)`);
     c.io.out(`cards: ${s.cards.main} main · ${s.cards.sub} sub`);
     const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.hook} hook · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
+    if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
     const unmatched = unmatchedErrors(c.home, loadNotes(c.home).notes, { days: s.days }).slice(0, 5);
     if (unmatched.length) {
       c.io.out("Unmatched errors:");
@@ -507,7 +509,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           if (fix) {
             const text = renderFix(fix);
             output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };
-            logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session, via: "hook", sub });
+            logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session, via: "hook", sub, id: fix.id });
           }
         }
       } else if (!sub && session && (event === "SessionEnd" || event === "PreCompact")) {

@@ -67,13 +67,18 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    heredocs (`python -c`, `node -e`, `<<EOF` before the script) and scripts under OS temp roots or
    a top-level `tmp/`, `temp/`, `cache/`, `.cache/` are never proposed.
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
-   hit rate, and frequent errors without a fix. `tool use by surface:` counts recall/note/state
-   calls separately for OMP tools, CLI, hooks and MCP; old rows lacking attribution are excluded
-   from this split, not guessed to be OMP. Anything never used for a week gets removed (plan rule 1).
+   hit rate, which fixes fired in how many sessions, and frequent errors without a fix.
+   `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI, hooks and
+   MCP; old rows lacking attribution are excluded from this split, not guessed to be OMP. Every
+   row carries the build that wrote it (newest source mtime); stats read only the newest build
+   unless `--all-builds`, because a running session keeps the code it started with. Anything
+   never used for a week gets removed (plan rule 1).
 
 Tool descriptions and card footers say when to act: recall before exploring, choosing or retrying;
-notes for repo-invisible learning; state when goal/next changes. Subagent-written notes remain
-untested until a parent confirms them or runs `brain tested <id>`.
+notes for repo-invisible learning; state when goal/next changes. OMP subagents keep only
+`brain_recall` (their card says so): the Brain deactivates `brain_note` and `brain_state` in each
+child session at `session_start`, saving ~250 schema tokens per child request. A child note
+written another way (CLI) stays untested until a parent confirms it or runs `brain tested <id>`.
 
 **Opt-in: end-of-turn learning nudge.** With `BRAIN_STOP_NUDGE=on` in OMP's environment
 (`[Environment]::SetEnvironmentVariable("BRAIN_STOP_NUDGE", "on", "User")`, then restart OMP),

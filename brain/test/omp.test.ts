@@ -808,6 +808,22 @@ describe("OMP extension under a hostile or limited host", () => {
   it("survives a host that does not know some events", () => {
     const { pi, handlers } = host({ unknownEvents: ["context", "session_compact"] });
     expect(() => secondBrain(pi, { SECOND_BRAIN_HOME: home })).not.toThrow();
-    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "session_before_branch", "session_before_compact", "session_before_switch", "session_branch", "session_shutdown", "session_switch", "tool_result"]);
+    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "session_before_branch", "session_before_compact", "session_before_switch", "session_branch", "session_shutdown", "session_start", "session_switch", "tool_result"]);
+  });
+
+  it("a child session keeps brain_recall and drops brain_note and brain_state; the parent keeps all", async () => {
+    const handlers = new Map<string, Handler>();
+    let active = ["read", "brain_recall", "brain_note", "brain_state"];
+    const pi: HostLike = {
+      on: (name, handler) => void handlers.set(name, handler),
+      registerTool: () => undefined,
+      getActiveTools: () => [...active],
+      setActiveTools: async (names) => { active = names; },
+    };
+    secondBrain(pi, { SECOND_BRAIN_HOME: home });
+    await handlers.get("session_start")!({}, { ...ctx("parent"), agent: { kind: "main" } });
+    expect(active).toEqual(["read", "brain_recall", "brain_note", "brain_state"]);
+    await handlers.get("session_start")!({}, { ...ctx("child"), agent: { kind: "sub" } });
+    expect(active).toEqual(["read", "brain_recall"]);
   });
 });
