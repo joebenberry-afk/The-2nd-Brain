@@ -6,6 +6,7 @@ source: convert
 evidence:
   - outputs/reports/v1-v2-completion-campaign-20260909T232221Z/native-identity-repair/frozen-native/proof.json@6085cec59596 (repo C:\Users\assas\Documents\The-Second-Brain)
   - outputs/reports/v1-v2-completion-campaign-20260909T232221Z/qualified-79483dd/independent-adoption-review.json@4b05c52d33ff (repo C:\Users\assas\Documents\The-Second-Brain)
+retired: 2026-09-28T02:36:29Z
 ---
 
 In installed OMP18.1.15, Brain session identity must bind the native header time

@@ -5,6 +5,7 @@ at: 2026-08-24T05:29:54.120348+00:00
 source: convert
 evidence:
   - outputs/reports/rc2/P3_1_ACTIVE_STATE_CAPSULE_REQUALIFICATION.md
+retired: 2026-09-28T02:36:29Z
 ---
 
 P3.1 Active State Capsule proven

@@ -7,6 +7,7 @@ evidence:
   - /Users/assas/Documents/The-Second-Brain-physical-safety/outputs/reports/v2/omp-burnin/20260905-physical-worktree-safety/190-strict-fallback-regression-evidence.json
   - /Users/assas/Documents/The-Second-Brain-physical-safety/outputs/reports/v2/omp-burnin/20260905-physical-worktree-safety/199-local-functional-regression-checkpoint.json
   - /Users/assas/Documents/The-Second-Brain-physical-safety/outputs/reports/v2/omp-burnin/20260905-physical-worktree-safety/200-material-functional-requirements-binding.json
+retired: 2026-09-28T02:36:28Z
 ---
 
 Current-source qualification must not use empty gates or snapshot-inflated counts
