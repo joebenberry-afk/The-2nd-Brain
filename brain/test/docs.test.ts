@@ -36,6 +36,24 @@ it("reads only explicitly listed Markdown docs, with heading and first-paragraph
   expect(readAnchor(root, "docs/LOOP.md#absent")).toBeUndefined();
 });
 
+it("named registered docs return the best heading or a bounded H2 outline", () => {
+  const { home, root, file, project } = setup();
+  writeFileSync(file, "# Plan\n## Loop\nCurrent work.\n### Hidden detail\nOther.\n## Current campaign\nShip the checkpoint.\n## Idea ledger\nIdeas.\n## User decisions pending\nOwner choices.\n## Iteration log\nHistory.");
+  writeFileSync(join(root, "docs", "OTHER.md"), "## Goals\nGoals for the unrelated project.");
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/OTHER.md", "docs/LOOP.md"] } } }));
+  const outline = docAnswer(home, project, "lOoP.Md goals");
+  expect(outline).toBe("docs/LOOP.md: Loop · Current campaign · Idea ledger · User decisions pending · Iteration log");
+  expect(outline).not.toContain("Hidden detail");
+  expect(docAnswer(home, project, "LOOP.md campaign")).toBe("docs/LOOP.md › Current campaign (line 6)");
+  expect(docAnswer(home, project, "LOOP.md")).toBe(outline);
+  expect(docAnswer(home, project, "MISSING.md goals")).toBeUndefined();
+  writeFileSync(file, "## Loop\nCurrent.\n" + Array.from({ length: 20 }, (_, i) => "## Campaign heading number " + i).join("\n"));
+  const bounded = docAnswer(home, project, "LOOP.md goals")!;
+  expect(bounded).toContain("docs/LOOP.md: Loop · Campaign heading");
+  expect(bounded).toContain("…");
+  expect(estimateTokens(bounded)).toBeLessThanOrEqual(30);
+});
+
 it("matches GitHub-style Unicode, punctuation and duplicate heading slugs, ignoring fences", () => {
   const { root, file } = setup();
   writeFileSync(file, "```md\n## Fake\n```\n## Café & Next!\nFirst.\n## Café & Next!\nSecond.\n## End\nOther.\n");

@@ -1,8 +1,9 @@
 /** Explicit project plans, read fresh from the checkout; never a derived index. */
 import { readFileSync } from "node:fs";
-import { relative } from "node:path";
+import { basename, relative } from "node:path";
 import { loadProjects, projectDocPath, type Project } from "./project.ts";
 import { tokens } from "./search.ts";
+import { cutToTokens } from "./util.ts";
 
 /** Plan docs explicitly listed in projects.json, resolved under project.root. */
 export function projectDocs(home: string, project: Project): string[] {
@@ -14,7 +15,7 @@ export function projectDocs(home: string, project: Project): string[] {
   }))];
 }
 
-interface Section { heading: string; slug: string; line: number; text: string }
+interface Section { heading: string; slug: string; level: number; line: number; text: string }
 
 /** ATX and setext headings; fenced examples cannot create anchors. */
 function sections(file: string): Section[] {
@@ -41,7 +42,8 @@ function sections(file: string): Section[] {
     let slug = base, suffix = 0;
     while (used.has(slug)) slug = `${base}-${++suffix}`;
     used.add(slug);
-    found.push({ heading, slug, line: i + 1, start: i + (setext ? 2 : 1), text: "" });
+    const level = atx ? line.trimStart().match(/^#+/)![0].length : lines[i + 1]!.trimStart().startsWith("=") ? 1 : 2;
+    found.push({ heading, slug, level, line: i + 1, start: i + (setext ? 2 : 1), text: "" });
     if (setext) i++;
   }
   return found.map((section, i) => {
@@ -65,21 +67,30 @@ export function readAnchor(root: string, anchor: string): string | undefined {
   return anchorSection(root, anchor)?.text;
 }
 
-/** One best heading pointer; only the path, heading and first paragraph participate in matching. */
+/** One best heading pointer, or a short H2 outline when a query names a registered doc. */
 export function docAnswer(home: string, project: Project, query: string): string | undefined {
   const terms = tokens(query, true);
   if (!terms.length || !project.root) return undefined;
+  const files = projectDocs(home, project);
+  const named = files.filter(file => terms.includes(basename(file).toLowerCase()));
   let best: { score: number; answer: string } | undefined;
-  for (const file of projectDocs(home, project)) {
+  let outline: string | undefined;
+  for (const file of named.length ? named : files) {
     const path = relative(project.root, file).replace(/\\/g, "/");
-    for (const section of sections(file)) {
+    const headings = sections(file);
+    const remaining = named.length ? terms.filter(term => term !== basename(file).toLowerCase()) : terms;
+    if (named.length && !outline) {
+      const h2 = headings.filter(section => section.level === 2).map(section => section.heading);
+      if (h2.length) outline = cutToTokens(path + ": " + h2.join(" · "), 30);
+    }
+    for (const section of headings) {
       const heading = new Set(tokens(section.heading, true));
-      const words = new Set(tokens(`${path} ${section.heading} ${section.text.split(/\n\s*\n/)[0] ?? ""}`, true));
-      const matched = terms.filter(term => words.has(term));
-      if (matched.length < Math.min(2, terms.length)) continue;
+      const words = new Set(tokens((named.length ? "" : path + " ") + section.heading + " " + (section.text.split(/\n\s*\n/)[0] ?? ""), true));
+      const matched = remaining.filter(term => words.has(term));
+      if (matched.length < (named.length ? 1 : Math.min(2, terms.length))) continue;
       const score = matched.length * 2 + matched.filter(term => heading.has(term)).length;
-      if (!best || score > best.score) best = { score, answer: `${path} › ${section.heading} (line ${section.line})` };
+      if (!best || score > best.score) best = { score, answer: path + " › " + section.heading + " (line " + section.line + ")" };
     }
   }
-  return best?.answer;
+  return best?.answer ?? outline;
 }

@@ -38,6 +38,11 @@
       "tags": [
         "sparking-zero"
       ]
+    },
+    "absolute-laya": {
+      "docs": [
+        "docs/LOOP.md"
+      ]
     }
   }
 }
