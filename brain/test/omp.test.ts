@@ -311,6 +311,34 @@ describe("OMP extension", () => {
     expect(fixText()).toContain("Fix for SRE mismatch");
   });
 
+  it("opt-in stop nudge: once per main session, only after 30 results without a Brain write", () => {
+    const env = { SECOND_BRAIN_HOME: home, BRAIN_STOP_NUDGE: "on" };
+    expect(load().handlers.has("session_stop")).toBe(false);
+    const { handlers, tools } = load(env, true);
+    const stop = handlers.get("session_stop")!;
+    const work = (c: unknown, n: number) => {
+      for (let i = 0; i < n; i++) handlers.get("tool_result")!({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [] }, c);
+    };
+    const main = { ...ctx("nudge-main"), agent: { kind: "main" } };
+    work(main, 29);
+    expect(stop({ stop_hook_active: false }, main)).toBeUndefined();
+    const stateTool = tools.find((t: any) => t.name === "brain_state") as any;
+    stateTool.execute("s", { text: "Goal: keep going" }, undefined, undefined, main);
+    work(main, 29);
+    expect(stop({ stop_hook_active: false }, main)).toBeUndefined();
+    work(main, 1);
+    expect(stop({ stop_hook_active: true }, main)).toBeUndefined();
+    const nudge = stop({ stop_hook_active: false }, main) as { continue: boolean; additionalContext: string };
+    expect(nudge.continue).toBe(true);
+    expect(nudge.additionalContext).toContain("brain_note(text)");
+    expect(estimateTokens(nudge.additionalContext)).toBeLessThanOrEqual(80);
+    work(main, 40);
+    expect(stop({ stop_hook_active: false }, main)).toBeUndefined();
+    const child = { ...ctx("nudge-child"), agent: { kind: "sub" } };
+    work(child, 40);
+    expect(stop({ stop_hook_active: false }, child)).toBeUndefined();
+  });
+
   it("untested note → no fix appended", () => {
     const { handlers } = load();
     const toolResult = handlers.get("tool_result")!;

@@ -8,7 +8,7 @@ import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "n
 import { join } from "node:path";
 import { nowIso } from "./util.ts";
 
-export type UseKind = "card" | "resume" | "fix" | "recall" | "note" | "state";
+export type UseKind = "card" | "resume" | "fix" | "recall" | "note" | "state" | "nudge";
 
 export interface Use {
   kind: UseKind;

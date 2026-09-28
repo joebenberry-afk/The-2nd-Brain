@@ -16,6 +16,9 @@ import { readWork, renderResume, writeAuto } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
+const STOP_NUDGE_AFTER = 30;
+const STOP_NUDGE_TOOLS = "Brain: before you stop, save what the next session needs. If the goal or next step changed: brain_state(text). If you learned what the repo cannot tell (a decision and why, an environment gotcha with its error line): brain_note(text). Otherwise reply \"nothing to save\".";
+const STOP_NUDGE_CLI = STOP_NUDGE_TOOLS.replace("brain_state(text)", "`brain state \"<text>\"`").replace("brain_note(text)", "`brain note \"<text>\"`");
 
 export interface HostLike {
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
@@ -36,6 +39,10 @@ interface SessionState {
   ask?: string;
   /** Notes whose full fix is already in this context; cleared when compaction drops it. */
   fixed?: Set<string>;
+  /** Tool results since this session last wrote a note or its working state. */
+  sinceWrite?: number;
+  /** The one end-of-turn learning nudge this session may get has been sent. */
+  nudged?: boolean;
 }
 
 function asObject(value: unknown): Json | undefined {
@@ -252,6 +259,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             const sub = isSubagent(ctx);
             const result = definition.run(params, { home, cwd, env, session, sub });
             if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, via: "tool" });
+            if (result.kind === "note" || result.kind === "state") getSession(session).sinceWrite = 0;
             return { content: [{ type: "text", text: result.text }], details: {} };
           } catch (error) {
             return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
@@ -451,6 +459,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
       // Log the event
       appendEvent(home, key, cwd, fields);
+      state.sinceWrite = (state.sinceWrite ?? 0) + 1;
 
       // Track edited path on success
       // Only tools that change files count as edits; reads and searches also carry a path.
@@ -508,4 +517,25 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     }
     return undefined;
   });
+
+  // Owner opt-in (BRAIN_STOP_NUDGE=on), an amendment to rule 4: after a long stretch of work with
+  // no Brain write, ask once per session for one more turn to save what was learned. Never for
+  // children, never twice, never while a stop continuation is already running.
+  if (env.BRAIN_STOP_NUDGE === "on") {
+    on("session_stop", (event, ctx) => {
+      try {
+        if (isSubagent(ctx) || asObject(event)?.stop_hook_active === true) return undefined;
+        const key = sessionKey(ctx);
+        const state = getSession(key);
+        if (state.nudged || (state.sinceWrite ?? 0) < STOP_NUDGE_AFTER) return undefined;
+        state.nudged = true;
+        const text = toolsOn ? STOP_NUDGE_TOOLS : STOP_NUDGE_CLI;
+        const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
+        logUse(home, { kind: "nudge", project: project.id, tokens: estimateTokens(text), ms: 0, session: key, sub: false });
+        return { continue: true, additionalContext: text };
+      } catch {
+        return undefined;
+      }
+    });
+  }
 }

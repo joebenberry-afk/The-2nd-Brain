@@ -57,13 +57,15 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    `state/work/<project>.auto.md`, never synced.
 3. **Known fix.** Run something that fails with an error a tested note names — e.g. an OMP edit
    without a `[path#tag]` header (`notes/global/` holds fixes taken from logged OMP failures): the
-   failed result ends with `Brain: … [id]`.
+   failed result ends with `Brain: … [id]` on its own line. The same fix again in the same context
+   is a one-line pointer (`Brain: same fix as above [id]`) until a compaction drops the original.
 4. **Learning.** After a few sessions, `brain review` lists, with their full bodies, failed
    commands that later succeeded as retries (same program and arguments, flags or a preparatory
    step added — `npm test` → `npm ci && npm test`), plus `Brain-Decision:` / `Brain-Gotcha:`
    commit trailers; `brain accept <id>` makes a note. A pair is `tested` only when the failed
-   command itself succeeded afterwards. Exploration (grep, ls, cat …), inline scripts/eval/
-   heredocs and commands targeting tmp/temp/cache paths are never proposed.
+   command itself succeeded afterwards. Exploration (grep, ls, cat …), inline scripts and
+   heredocs (`python -c`, `node -e`, `<<EOF` before the script) and scripts under OS temp roots or
+   a top-level `tmp/`, `temp/`, `cache/`, `.cache/` are never proposed.
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
    hit rate, and frequent errors without a fix. `tool use by surface:` counts recall/note/state
    calls separately for OMP tools, CLI, hooks and MCP; old rows lacking attribution are excluded
@@ -72,6 +74,13 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
 Tool descriptions and card footers say when to act: recall before exploring, choosing or retrying;
 notes for repo-invisible learning; state when goal/next changes. Subagent-written notes remain
 untested until a parent confirms them or runs `brain tested <id>`.
+
+**Opt-in: end-of-turn learning nudge.** With `BRAIN_STOP_NUDGE=on` in OMP's environment
+(`[Environment]::SetEnvironmentVariable("BRAIN_STOP_NUDGE", "on", "User")`, then restart OMP),
+a main session that ran 30 tool calls since its last `brain_note`/`brain_state` gets one hidden
+continuation turn when it is about to stop: save the working state or a learning, or reply
+"nothing to save". At most once per session, never for subagents; `brain stats` counts `nudge`.
+This amends plan rule 4 ("never continues host work") for this one moment, by owner decision.
 
 ## 3. Other harnesses
 
