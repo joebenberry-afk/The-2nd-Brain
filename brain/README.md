@@ -51,8 +51,9 @@ words in the note's first line, or half of a short one. When no note answers, re
 instead: `docs/LOOP.md › Goals (line 12)`.
 
 **Recall relevance check.** With `TYPESAFE_API_KEY` set, CLI, OMP and MCP recall use TypeSafe
-Jev (`jev-latest`) to check the notes the lexical search would show. Notes scoring below **0.75**
-are dropped, without promoting unjudged runners-up; the usual doc-heading or no-match fallback
+Jev (`jev-latest`) to check the notes the lexical search would show. Notes scoring below **0.78**
+are dropped (0.75 let 1-2 wrong answers through on reruns of the same 54 queries: Jev drifts about
+±0.02 between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual doc-heading or no-match fallback
 still applies. Only the scrubbed query and note body text (whitespace collapsed, cut to 450
 characters, then scrubbed) are sent. Private notes are never sent and remain lexical, unjudged.
 A plan-doc heading answer (its heading and first paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.

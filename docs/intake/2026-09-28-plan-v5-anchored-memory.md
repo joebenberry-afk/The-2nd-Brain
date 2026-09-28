@@ -197,3 +197,22 @@ headings below 0.75 (owner decision; fail open to the lexical answer; private no
 Live calls: ~300 ms (5 s timeout). The price is more silence: some useful notes score just
 under 0.75 and are dropped. Next: keep logging real queries; re-label and re-measure held-out
 monthly so 0 wrong is checked on queries the threshold never saw.
+
+### 8.2 Judge robustness and call-time context (2026-09-28)
+
+**Drift.** The same 54 real queries re-scored three more times: Jev moves about ±0.02 per pair
+(mean |Δ| 0.016), enough to flip borderline notes. At 0.75 the reruns showed 1, 2 and 1 wrong
+answers (the first recording, 0, was lucky). At **0.78** all four runs had 0 wrong; right answers
+fall from 6–7 to 5–6 (frozen) and 2–3 to 2–3 (held-out); V3 dev 12/15 (D28 "migration" sits at
+0.75–0.78). Threshold raised to 0.78; the eval now requires 0 wrong on every recorded run
+(`recall-judge-reruns.json`).
+
+**Agent context in the judge: rejected.** Hypothesis: misses happen because the judge sees only the
+keyword query, while the labellers saw what the agent was doing. On the 40 queries with a logged
+call-time intent (`i`) and user task, one batch: AUC query-only 0.904, + intent 0.900, + intent
+and task 0.915. The differences are one case each way, inside run-to-run noise, and sending the
+user's task text adds exposure for no measured gain. Not shipped.
+
+**What limits recall now** is not the judge but coverage: of 13 frozen misses, most have their
+relevant note scoring 0.4–0.7 on a keyword query. Next lever to test: ask agents (tool
+description) for a one-sentence question instead of a keyword list, measured by agentbench.

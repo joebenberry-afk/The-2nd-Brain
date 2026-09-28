@@ -3,7 +3,8 @@ import type { Note } from "./notes.ts";
 import { answerWithHits, type AnswerOptions } from "./search.ts";
 import { scrub } from "./scrub.ts";
 
-export const JUDGE_THRESHOLD = 0.75;
+/** 0.75 gave 0-2 wrong answers across four runs of the same 54 real queries (Jev drifts about ±0.02); 0.78 gave 0 in all four. */
+export const JUDGE_THRESHOLD = 0.78;
 /** Warm calls take ~300 ms; a spike waits here rather than letting an unchecked answer through. */
 export const JUDGE_TIMEOUT_MS = 5000;
 export type Judge = (query: string, candidates: { id: string; text: string }[]) => Promise<Map<string, number> | undefined>;

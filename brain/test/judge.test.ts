@@ -14,13 +14,13 @@ const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const rejectAll: Judge = async (_query, candidates) => new Map(candidates.map(c => [c.id, 0.1]));
 
-it("drops probabilities below 0.75, keeps the boundary, and does not backfill unjudged notes", async () => {
+it("drops probabilities below the threshold, keeps the boundary, and does not backfill unjudged notes", async () => {
   const notes = [note("low"), note("boundary"), note("high"), note("unshown")];
   const lexical = answerWithHits(notes, "quartz migration", { project });
   expect(lexical.ids).toHaveLength(3);
-  const judge: Judge = async (_query, candidates) => new Map(candidates.map((c, i) => [c.id, [0.749, 0.75, 1][i]!]));
+  const judge: Judge = async (_query, candidates) => new Map(candidates.map((c, i) => [c.id, [JUDGE_THRESHOLD - 0.001, JUDGE_THRESHOLD, 1][i]!]));
   const result = await judgedAnswer(notes, "quartz migration", { project }, judge);
-  expect(JUDGE_THRESHOLD).toBe(0.75);
+  expect(JUDGE_THRESHOLD).toBe(0.78);
   expect(result.ids).toEqual(lexical.ids.slice(1));
   expect(result).toMatchObject({ judged: true, dropped: 1, hits: 2 });
 });
