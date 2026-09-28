@@ -100,7 +100,7 @@ function measure(name: string, target: string, expected?: number): Row {
   const handler = handlers.get("tool_result");
   assert(handler, "Missing failed-tool hook");
   const result = handler(failure, ctx) as { content?: { text?: string }[] } | undefined;
-  if (fix) assert.equal(result?.content?.at(-1)?.text, renderFix(fix));
+  if (fix) assert.equal(result?.content?.at(-1)?.text, `\n${renderFix(fix)}`);
   bench(metrics, "failedToolResult.snapshot", () => handler(failure, ctx));
   return { name, count: notes.length, metrics };
 }
