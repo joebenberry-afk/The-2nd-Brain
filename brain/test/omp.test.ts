@@ -834,4 +834,22 @@ describe("OMP extension under a hostile or limited host", () => {
     expect(handlers.get("before_agent_start")!({ prompt: "x" }, bad)).toBeUndefined();
     expect(stats(home).errors.map((e) => e.error)).toEqual(["before_agent_start: Error: host ctx broke"]);
   });
+
+  it("experiment dedupe: a repeated large result becomes a pointer only while the original is still in context", () => {
+    const { handlers } = load({ SECOND_BRAIN_HOME: home, BRAIN_EXPERIMENT: "dedupe" });
+    const c = ctx("dedupe");
+    const big = [{ type: "text", text: "line of file content\n".repeat(40) }];
+    const read = (id: string) => handlers.get("tool_result")!({ toolName: "read", toolCallId: id, input: { path: "a.ts" }, isError: false, content: big }, c) as { content: { text: string }[] } | undefined;
+    const contextWith = (...ids: string[]) => handlers.get("context")!({ messages: ids.map((id) => ({ role: "toolResult", toolCallId: id, content: big })) }, c);
+    expect(read("r1")).toBeUndefined();
+    contextWith("r1");
+    expect(read("r2")?.content[0]?.text).toMatch(/^Brain: identical to an earlier read result/);
+    // Once the host has pruned or compacted the original away, the full result goes through.
+    contextWith();
+    expect(read("r3")).toBeUndefined();
+    // Small results and other experiments-off sessions are never touched.
+    const plain = load().handlers;
+    plain.get("context")!({ messages: [{ role: "toolResult", toolCallId: "x1", content: big }] }, c);
+    expect(plain.get("tool_result")!({ toolName: "read", toolCallId: "x2", input: {}, isError: false, content: big }, c)).toBeUndefined();
+  });
 });
