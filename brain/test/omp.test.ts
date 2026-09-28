@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import secondBrain, { CARD_TYPE, editedPaths, type HostLike } from "../src/omp.ts";
+import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, type HostLike } from "../src/omp.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
 import { readWork, writeWork } from "../src/work.ts";
@@ -835,6 +835,23 @@ describe("OMP extension under a hostile or limited host", () => {
 
 
 
+  it("spots a quoted \\b (a backspace at runtime) in eval code, never a regex literal or String.raw", () => {
+    expect(hasBackspaceEscape(String.raw`await tool.grep({ pattern: "\badd\b", path: "src" })`)).toBe(true);
+    expect(hasBackspaceEscape(String.raw`await tool.grep({ pattern: '\badd\(' })`)).toBe(true);
+    expect(hasBackspaceEscape(String.raw`await tool.grep({ pattern: "\\badd\\b" })`)).toBe(false);
+    expect(hasBackspaceEscape("await tool.grep({ pattern: String.raw`\\badd\\b` })")).toBe(false);
+    expect(hasBackspaceEscape(String.raw`const found = /\badd\b/.test(text)`)).toBe(false);
+    expect(hasBackspaceEscape(String.raw`print("tab\tnewline\n")`)).toBe(false);
+  });
+
+  it("appends the backspace hint to an eval whose quoted pattern holds \\b, then only a pointer", () => {
+    const { handlers } = load();
+    const c = ctx("raw");
+    const run = (code: string) => handlers.get("tool_result")!({ toolName: "eval", toolCallId: "e", input: { code }, isError: false, content: [{ type: "text", text: "(no matches)" }] }, c) as { content: { text: string }[] } | undefined;
+    expect(run(String.raw`await tool.grep({ pattern: String.raw` + "`\\badd\\b`" + " })")).toBeUndefined();
+    expect(run(String.raw`await tool.grep({ pattern: '\badd\b' })`)?.content.at(-1)?.text).toContain("is a backspace, not a word boundary");
+    expect(run(String.raw`await tool.grep({ pattern: '\bsum\b' })`)?.content.at(-1)?.text).toBe("\nBrain: quoted '\\b' is a backspace again (see above).");
+  });
 
   it("fails open but records a swallowed handler error for brain stats", () => {
     const { handlers } = load();

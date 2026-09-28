@@ -198,6 +198,17 @@ export function toolArgs(args: unknown[], key: string): { params: Json; cwd: str
   return { params, cwd: cwdOf(ctx) ?? process.cwd(), ctx };
 }
 
+/**
+ * A quoted JS string literal holding an unescaped `\\b`: a backspace at runtime, never the regex
+ * word boundary its author meant. Regex literals and String.raw templates are not quoted strings.
+ */
+export function hasBackspaceEscape(code: string): boolean {
+  for (const literal of code.matchAll(/(['"])((?:\\.|(?!\1)[^\\\n])*)\1/g)) {
+    if (/(?:^|[^\\])(?:\\\\)*\\b/.test(literal[2] ?? "")) return true;
+  }
+  return false;
+}
+
 /** A path as the agent should read it: relative to the project root when inside it, forward slashes. */
 export function displayPath(path: string, root: string | null, cwd: string): string {
   const absolute = isAbsolute(path) ? path : resolve(cwd, path);
@@ -530,6 +541,19 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: fix.id });
           return { content: resultContent };
         }
+      }
+
+      // `'\b'` inside a plain JS string in an eval script is a backspace, so a grep for a word
+      // boundary silently matches nothing and agents chase a "tool bug" (benchmark autopsy: 15 of
+      // 44 GPT runs). With this line the next script dropped the broken pattern every time.
+      const code = asObject(input)?.code;
+      if (toolName === "eval" && typeof code === "string" && hasBackspaceEscape(code)) {
+        const fixed = (state.fixed ??= new Set());
+        const hint = fixed.has("rawhint") ? "Brain: quoted '\\b' is a backspace again (see above)." : "Brain: in this script a quoted '\\b' is a backspace, not a word boundary; write String.raw`\\bword\\b` or '\\\\b'.";
+        fixed.add("rawhint");
+        const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
+        logUse(home, { kind: "fix", project: resolveProject(home, cwd, env).id, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "rawhint" });
+        return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
       }
 
       return undefined;

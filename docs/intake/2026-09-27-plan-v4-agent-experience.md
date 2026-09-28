@@ -285,6 +285,11 @@ one failure — a changed tool set loses the shared prompt-cache prefix (uncache
 it in `before_provider_request`) changed nothing: the provider already serves the identical
 ~18 k host prefix from cache across sessions once warm (+3 % cost, noise). Lesson: judge by cost;
 keep the request prefix stable; check the control before crediting a cache effect.
+Fixture v3 adds a memory task (deploy target known only to a note): Brain off 16/20 (agents
+correctly stop and ask), on 20/20; overall on vs off −19 % tokens, −33 % cost. A turn autopsy
+(44 runs) found todo-only turns, whole-object eval prints and `'\b'` in JS strings; shipped the
+last as a targeted hint (fires only on the mistake; agents fixed the next script every time).
+A wider lean wording measured −9 % then +4 % cost across two batches: noise, not shipped.
 
 ## 7. Owner decisions needed before P1
 
