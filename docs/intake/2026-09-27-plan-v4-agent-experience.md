@@ -281,7 +281,10 @@ are not retried blind: duplicate-result pointers +18 % tokens (agents re-read on
 edits); `read.defaultLimit` 150 +4 % tokens; grep context 0/1 +17 %; a longer lean wording −5 %
 tokens but +1 % cost; dropping never-used tools per session −20 % tokens but +25 % cost and
 one failure — a changed tool set loses the shared prompt-cache prefix (uncached input 13.5 k →
-31 k per run). Lesson: judge by cost; keep the request prefix stable.
+31 k per run). A shared provider `prompt_cache_key` (OMP keys by session id; the Brain can rewrite
+it in `before_provider_request`) changed nothing: the provider already serves the identical
+~18 k host prefix from cache across sessions once warm (+3 % cost, noise). Lesson: judge by cost;
+keep the request prefix stable; check the control before crediting a cache effect.
 
 ## 7. Owner decisions needed before P1
 

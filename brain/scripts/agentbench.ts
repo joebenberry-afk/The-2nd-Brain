@@ -225,9 +225,11 @@ function runOne(run: Run): Promise<Record<string, unknown>> {
       clearTimeout(timer);
       const s = score(sessions);
       const answer = s.answer || out.trim().split("\n").slice(-3).join(" ");
+      // A dead network or provider says nothing about the task: such runs are left out of scores.
+      const infra = code !== 0 && /ERR_TLS|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed|socket hang up|\b429\b|\b5\d\d\b|rate limit|quota/i.test(out.slice(-2000));
       const ok = code === 0 && TASKS[run.task]!.verify(ws, answer);
-      const row = { ...run, id, ok, exit: code, seconds: Math.round((Date.now() - started) / 1000), ...s, answer: answer.slice(0, 300) };
-      console.log(`${ok ? "PASS" : "FAIL"} ${id} ${row.seconds}s turns=${s.turns} tokens=${s.input + s.cacheRead + s.cacheWrite + s.output} $${s.cost.toFixed(3)}`);
+      const row = { ...run, id, ok, infra, exit: code, seconds: Math.round((Date.now() - started) / 1000), ...s, answer: answer.slice(0, 300) };
+      console.log(`${infra ? "INFRA" : ok ? "PASS" : "FAIL"} ${id} ${row.seconds}s turns=${s.turns} tokens=${s.input + s.cacheRead + s.cacheWrite + s.output} $${s.cost.toFixed(3)}`);
       done(row);
     });
   });
@@ -257,13 +259,16 @@ const taskSet = `v${FIXTURE_VERSION}:${taskNames.join(",")}`;
 mkdirSync(join(HOME, "state"), { recursive: true });
 for (const row of rows) appendFileSync(RESULTS, JSON.stringify({ at, label: values.label, model: values.model, taskSet, ...row }) + "\n");
 
-type Row = { at: string; condition: string; taskSet: string; model: string; ok: boolean; cost: number; turns: number; input: number; cacheRead: number; cacheWrite: number; output: number; toolResultTokens: number };
-const summarize = (rs: Row[]) => {
+type Row = { infra?: boolean; at: string; condition: string; taskSet: string; model: string; ok: boolean; cost: number; turns: number; input: number; cacheRead: number; cacheWrite: number; output: number; toolResultTokens: number };
+const summarize = (all: Row[]) => {
+  const rs = all.filter((r) => !r.infra);
   const n = rs.length || 1;
   const mean = (f: (r: Row) => number) => rs.reduce((s, r) => s + f(r), 0) / n;
   return { runs: rs.length, pass: rs.filter((r) => r.ok).length, cost: mean((r) => r.cost), turns: mean((r) => r.turns), tokens: mean((r) => r.input + r.cacheRead + r.cacheWrite + r.output), uncached: mean((r) => r.input), output: mean((r) => r.output), toolResult: mean((r) => r.toolResultTokens) };
 };
-const history: Row[] = readFileSync(RESULTS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const history: Row[] = readFileSync(RESULTS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r: Row) => !r.infra);
+const infraRuns = rows.filter((r) => (r as { infra?: boolean }).infra).length;
+if (infraRuns) console.log(`\n${infraRuns} run(s) hit network/provider errors and are left out of the scores; rerun for a full sample.`);
 console.log(`\nagentbench ${at} · ${values.model} · tasks ${taskSet} · ${reps} reps${values.label ? ` · ${values.label}` : ""}`);
 // Batches drift ±5-10% (time of day, provider load): the same-batch control is the fair baseline.
 const control = summarize(rows.filter((r) => r.condition === conditions[0]) as unknown as Row[]);
@@ -280,4 +285,9 @@ for (const condition of conditions) {
   console.log(`${condition.padEnd(20)} ${`${now.pass}/${now.runs}`.padStart(4)}  ${now.cost.toFixed(3).padStart(6)}  ${now.turns.toFixed(1).padStart(6)}  ${Math.round(now.tokens).toString().padStart(11)}  ${Math.round(now.uncached).toString().padStart(9)}  ${Math.round(now.output).toString().padStart(7)}  ${Math.round(now.toolResult).toString().padStart(12)}   ${rel.padEnd(22)}  ${vs}`);
 }
 console.log(`raw rows: ${RESULTS} · sessions: ${kept}`);
-rmSync(scratch, { recursive: true, force: true });
+// A lingering child process can hold a file on Windows: cleanup must never lose the report.
+try {
+  rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+} catch {
+  console.log(`left temp files in ${scratch}`);
+}

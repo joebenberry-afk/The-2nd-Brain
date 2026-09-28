@@ -237,6 +237,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     }
   };
 
+
   // Helper to get or create session state
   function getSession(key: string): SessionState {
     let state = sessions.get(key);

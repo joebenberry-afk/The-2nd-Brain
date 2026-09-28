@@ -833,6 +833,9 @@ describe("OMP extension under a hostile or limited host", () => {
     expect(active).toEqual(["read", "brain_recall"]);
   });
 
+
+
+
   it("fails open but records a swallowed handler error for brain stats", () => {
     const { handlers } = load();
     const bad = { get cwd(): string { throw new Error("host ctx broke"); }, sessionManager: { getSessionId: () => "s-err" } };
