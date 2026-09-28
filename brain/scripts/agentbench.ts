@@ -5,7 +5,8 @@
  *   node scripts/agentbench.ts [--conditions off,on] [--tasks rename,fix,find] [--reps 2]
  *                              [--concurrency 4] [--model openai-codex/gpt-6-astra] [--label text]
  *
- * A condition is `off`, `on`, or `on+<experiment>[+<experiment>]`. Each run gets a fresh copy of a
+ * A condition is `off`, `on`, or `on+<experiment>[+<experiment>]`; a `@<preset>` part adds an OMP
+ * settings overlay (PI_CONFIG_FILES) from SETTINGS below, with or without the Brain (`off+@x`). Each run gets a fresh copy of a
  * small fixture project; each condition gets its own copy of the Brain home (notes, kits,
  * projects, telemetry), so conditions never see each other's sessions. Results append to
  * state/agentbench.jsonl; the summary compares every condition with its best earlier run on the
@@ -19,6 +20,15 @@ import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
 
 const PACKAGE = resolve(import.meta.dirname, "..");
+/** Bump when the fixture or tasks change: results are only compared within one version. */
+const FIXTURE_VERSION = 2;
+
+/** Host settings overlays under test (keys and units: pi-coding-agent src/tools/settings.ts). */
+const SETTINGS: Record<string, string> = {
+  readlimit: "read:\n  defaultLimit: 150\n",
+  grepctx: "grep:\n  contextBefore: 0\n  contextAfter: 1\n",
+  spill: "tools:\n  artifactSpillThreshold: 10\n  artifactHeadBytes: 2\n  artifactTailBytes: 3\n  artifactTailLines: 100\n",
+};
 const HOME = resolve(PACKAGE, "..");
 const RESULTS = join(HOME, "state", "agentbench.jsonl");
 
@@ -45,8 +55,8 @@ const FIXTURE: Record<string, string> = {
   "src/math.ts": "/** Adds two amounts in cents. */\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function clamp(x: number, lo: number, hi: number): number {\n  return Math.min(hi, Math.max(lo, x));\n}\n",
   "src/cart.ts": 'import { add, clamp } from "./math.ts";\n\nexport interface Item {\n  cents: number;\n  qty: number;\n}\n\nexport function total(items: Item[]): number {\n  return items.reduce((sum, item) => add(sum, item.cents * item.qty), 0);\n}\n\n/** Percent discount, 0-100. */\nexport function applyDiscount(cents: number, percent: number): number {\n  const p = clamp(percent, 0, 100);\n  return Math.round(cents - (cents * p) / 10);\n}\n',
   "src/config.ts": "/** Network settings. */\nexport const RETRY_LIMIT = 4;\nexport const TIMEOUT_MS = 2500;\nexport const REGION = \"eu-west\";\n",
-  "src/report.ts": 'import { add } from "./math.ts";\n\nexport function grandTotal(a: number, b: number): number {\n  return add(a, b);\n}\n\n' + filler("report", 40),
-  "src/legacy.ts": "// Old settings kept for the migration script; not used by the app.\nexport const OLD_RETRY_LIMIT = 9;\n\n" + filler("legacy", 30),
+  "src/report.ts": 'import { add } from "./math.ts";\n\nexport function grandTotal(a: number, b: number): number {\n  return add(a, b);\n}\n\n' + filler("report", 120),
+  "src/legacy.ts": "// Old settings kept for the migration script; not used by the app.\nexport const OLD_RETRY_LIMIT = 9;\n\n" + filler("legacy", 90),
   "test/cart.test.ts": 'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { applyDiscount, total } from "../src/cart.ts";\n\ntest("total", () => {\n  assert.equal(total([{ cents: 250, qty: 2 }, { cents: 100, qty: 1 }]), 600);\n});\n\ntest("discount", () => {\n  assert.equal(applyDiscount(1000, 10), 900);\n  assert.equal(applyDiscount(1000, 150), 0);\n});\n',
 };
 
@@ -190,8 +200,15 @@ function runOne(run: Run): Promise<Record<string, unknown>> {
   }
   const sessions = join(scratch, "sessions", id);
   mkdirSync(sessions, { recursive: true });
-  const [mode, ...experiments] = run.condition.split("+");
+  const [mode, ...parts] = run.condition.split("+");
+  const experiments = parts.filter((part) => !part.startsWith("@"));
+  const presets = parts.filter((part) => part.startsWith("@")).map((part) => part.slice(1));
   const env: NodeJS.ProcessEnv = { ...process.env, BRAIN_PROJECT: "benchapp", BRAIN_EXPERIMENT: experiments.join(",") };
+  if (presets.length) {
+    const overlay = join(scratch, `settings-${id}.yml`);
+    writeFileSync(overlay, presets.map((name) => SETTINGS[name] ?? "").join(""));
+    env.PI_CONFIG_FILES = overlay;
+  }
   if (mode === "off") env.BRAIN = "off";
   else env.SECOND_BRAIN_HOME = homes.get(run.condition)!;
   const args = ["-p", "--model", values.model!, "--thinking", values.thinking!, "--cwd", ws, "--session-dir", sessions, TASKS[run.task]!.prompt];
@@ -234,7 +251,7 @@ const rows = await pool(runs, Number(values.concurrency), runOne);
 // ---------------------------------------------------------------- summary vs best earlier run
 
 const at = new Date().toISOString();
-const taskSet = taskNames.join(",");
+const taskSet = `v${FIXTURE_VERSION}:${taskNames.join(",")}`;
 mkdirSync(join(HOME, "state"), { recursive: true });
 for (const row of rows) appendFileSync(RESULTS, JSON.stringify({ at, label: values.label, model: values.model, taskSet, ...row }) + "\n");
 
