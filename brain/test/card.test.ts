@@ -290,19 +290,38 @@ describe("recurring known fix", () => {
     expect(two.match(/^- 3× /gm)).toHaveLength(2);
     expect(estimateTokens(two)).toBeLessThanOrEqual(400);
   });
+
+  it("keeps a recurring fix too long for its slot as an ordinary note", () => {
+    const home = tmp();
+    const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(116), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
+    const before = renderCard(home, loadNotes(home).notes, project, { tools: true, subagent: true, now: NOW });
+    expect(before).toContain(long.id);
+    for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: true, id: long.id }, NOW);
+    const after = renderCard(home, loadNotes(home).notes, project, { tools: true, subagent: true, now: NOW });
+    expect(after).not.toContain("Often hit lately");
+    expect(after).toContain(long.id);
+  });
 });
 
 describe("local usage telemetry", () => {
+  it("an old session appending after a new one never turns stats back to the old build", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state"), { recursive: true });
+    const row = (v: string, kind: string) => JSON.stringify({ at: NOW.toISOString(), project: "demo", tokens: 1, ms: 1, session: "s-" + v, v, kind });
+    writeFileSync(telemetryPath(home), [row("t00002", "recall"), row("t00001", "card")].join("\n") + "\n");
+    expect(stats(home, 7, NOW)).toMatchObject({ olderBuildRows: 1, recalls: { calls: 1 }, cards: { main: 0 } });
+  });
+
   it("reads the newest build by default and counts each fix once per session", () => {
     const home = tmp();
     mkdirSync(join(home, "state"), { recursive: true });
     const row = (v: string, extra: object) => JSON.stringify({ at: NOW.toISOString(), project: "demo", tokens: 1, ms: 1, v, ...extra });
     writeFileSync(telemetryPath(home), [
-      row("old", { kind: "card", session: "old-child" }),
-      row("new", { kind: "fix", session: "a", id: "n-edit" }),
-      row("new", { kind: "fix", session: "a", id: "n-edit" }),
-      row("new", { kind: "fix", session: "b", id: "n-edit" }),
-      row("new", { kind: "fix", session: "b", id: "n-read" }),
+      row("t00001", { kind: "card", session: "old-child" }),
+      row("t00002", { kind: "fix", session: "a", id: "n-edit" }),
+      row("t00002", { kind: "fix", session: "a", id: "n-edit" }),
+      row("t00002", { kind: "fix", session: "b", id: "n-edit" }),
+      row("t00002", { kind: "fix", session: "b", id: "n-read" }),
     ].join("\n") + "\n");
     const s = stats(home, 7, NOW);
     expect(s.olderBuildRows).toBe(1);

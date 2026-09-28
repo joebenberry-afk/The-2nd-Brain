@@ -110,7 +110,11 @@ if ($Copy) {
     Get-ChildItem $SrcDir -Filter *.ts | Where-Object { $_.Name -ne "cli.ts" } | ForEach-Object {
         Copy-Item $_.FullName (Join-Path $Target $_.Name)
     }
-    Write-Utf8NoBom (Join-Path $Target "index.ts") "// Second Brain V4 (copied from $SourceRoot; re-run install-v4.ps1 -Copy after updates).`nexport { default } from `"./omp.ts`";`n"
+    $IndexPath = Join-Path $Target "index.ts"
+    Write-Utf8NoBom $IndexPath "// Second Brain V4 (copied from $SourceRoot; re-run install-v4.ps1 -Copy after updates).`nexport { default } from `"./omp.ts`";`n"
+    # Telemetry names a build by its newest source mtime: the generated loader must not be newer
+    # than the checkout's sources (cli.ts included), or copy and CLI rows look like two builds.
+    (Get-Item $IndexPath).LastWriteTime = (Get-ChildItem $SrcDir -Filter *.ts | Measure-Object LastWriteTime -Maximum).Maximum
     $mode = "copy"
 } else {
     $importPath = $Entry.Replace("\", "/")

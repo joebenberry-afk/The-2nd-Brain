@@ -24,24 +24,20 @@ export interface Use {
   id?: string;
 }
 
-let build: string | undefined;
-
 /**
- * The code that wrote a row: newest mtime among the Brain's source files. A running session keeps
- * the code it loaded, so a week's rows can mix builds; stats reads the newest by default.
+ * The code that wrote a row: newest mtime among the Brain's source files, taken when this module
+ * loads, so a session keeps naming the code it runs even after the files change under it. A
+ * week's rows can mix builds; stats reads the newest by default.
  */
-export function buildStamp(): string {
-  if (build === undefined) {
-    try {
-      const dir = dirname(fileURLToPath(import.meta.url));
-      const newest = Math.max(...readdirSync(dir).filter((name) => name.endsWith(".ts")).map((name) => statSync(join(dir, name)).mtimeMs));
-      build = Number.isFinite(newest) ? Math.floor(newest / 1000).toString(36) : "";
-    } catch {
-      build = "";
-    }
+const BUILD = ((): string => {
+  try {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const newest = Math.max(...readdirSync(dir).filter((name) => name.endsWith(".ts")).map((name) => statSync(join(dir, name)).mtimeMs));
+    return Number.isFinite(newest) ? Math.floor(newest / 1000).toString(36) : "";
+  } catch {
+    return "";
   }
-  return build;
-}
+})();
 
 export function telemetryPath(home: string): string {
   return join(home, "state", "telemetry.jsonl");
@@ -53,7 +49,7 @@ export function logUse(home: string, use: Use, now: Date = new Date()): void {
   try {
     mkdirSync(join(home, "state"), { recursive: true });
     const path = telemetryPath(home);
-    const row = JSON.stringify({ at: nowIso(now), ...use, ms: Math.round(use.ms * 10) / 10, ...(buildStamp() ? { v: buildStamp() } : {}) }) + "\n";
+    const row = JSON.stringify({ at: nowIso(now), ...use, ms: Math.round(use.ms * 10) / 10, ...(BUILD ? { v: BUILD } : {}) }) + "\n";
     try {
       if (statSync(path).size + Buffer.byteLength(row) > MAX_BYTES) renameSync(path, join(home, "state", "telemetry.1.jsonl"));
     } catch {
@@ -143,8 +139,10 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
     if (!row || typeof row.at !== "string" || !Number.isFinite(Date.parse(row.at)) || Date.parse(row.at) < since || typeof row.kind !== "string") continue;
     rows.push(row);
   }
-  // Rows are appended in time order: the last stamped row names the newest build in the window.
-  const newest = opts.allBuilds ? undefined : rows.findLast((row) => typeof row.v === "string")?.v;
+  // Stamps are base-36 seconds: the largest is the newest build, whatever order old and new
+  // sessions appended their rows in.
+  const stamps = rows.map((row) => row.v).filter((v): v is string => typeof v === "string" && /^[0-9a-z]+$/.test(v));
+  const newest = opts.allBuilds || !stamps.length ? undefined : stamps.reduce((a, b) => (parseInt(b, 36) > parseInt(a, 36) ? b : a));
   const fired = new Map<string, Set<string>>();
   let olderBuildRows = 0;
   for (const row of rows) {

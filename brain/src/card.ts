@@ -142,7 +142,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     .filter((n) => !n.retired && n.tested && n.errors.length && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
-  const ranked = rankForCard(candidates.filter((n) => !recurring.includes(n)), project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
+  const ranked = rankForCard(candidates, project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
   const allKits = opts.subagent ? [] : loadKits(home);
   const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
   const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);
@@ -155,17 +155,19 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     const text = cutToTokens(resume, Math.floor(room() / 4));
     if (text.trim()) lines.push(text);
   }
-  let shown = 0;
+  // A recurring fix that does not fit its slot stays eligible as an ordinary note below.
+  const said = new Set<string>();
   for (const fix of recurring) {
-    const label = shown ? [] : ["Often hit lately (sessions this week):"];
+    const label = said.size ? [] : ["Often hit lately (sessions this week):"];
     const count = `${fires.get(fix.id)}× `;
     const line = noteLine(fix, room(label) - count.length);
     if (!line) continue;
     lines.push(...label, "- " + count + line.slice(2));
-    shown += 1;
+    said.add(fix.id);
   }
   let count = 0;
   for (const note of ranked) {
+    if (said.has(note.id)) continue;
     const label = count ? [] : ["Known here:"];
     const line = noteLine(note, room(label));
     if (!line) continue;

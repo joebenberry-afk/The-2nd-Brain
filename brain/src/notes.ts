@@ -307,7 +307,12 @@ export function noteDir(home: string, project: string, isPrivate: boolean): stri
 interface CachedNote {
   signature: string;
   note: Note;
+  /** When this entry was read, to spot a read in the same timestamp tick as the last change. */
+  readAtNs: bigint;
 }
+
+/** Longer than the coarsest timestamp tick in use (NTFS updates at ~16 ms). */
+const RACY_NS = 100_000_000n;
 
 const NOTE_CACHE = new Map<string, Map<string, CachedNote>>();
 /** Evidence files change without any note changing: a result is reused only briefly. */
@@ -329,13 +334,15 @@ function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Not
       const stat = statSync(path, { bigint: true });
       const signature = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}:${stat.ino}`;
       let cached = previous?.get(path);
-      // Racily clean (git's term): timestamps may tick at ~16 ms on NTFS, so a same-size edit just
-      // after a write can keep the signature. A file changed in the last 2 s is always re-read.
-      const recent = BigInt(Date.now()) * 1_000_000n - (stat.ctimeNs > stat.mtimeNs ? stat.ctimeNs : stat.mtimeNs) < 2_000_000_000n;
-      if (recent || cached?.signature !== signature) {
+      // Racily clean (git's term): an entry read within one timestamp tick of the file's last
+      // change could miss a same-size edit that keeps the stamp. Only such entries are re-read, so
+      // a fresh `git pull` costs one extra read per file, not a re-read on every load.
+      const changedNs = stat.ctimeNs > stat.mtimeNs ? stat.ctimeNs : stat.mtimeNs;
+      if (!cached || cached.signature !== signature || cached.readAtNs - changedNs < RACY_NS) {
+        const readAtNs = BigInt(Date.now()) * 1_000_000n;
         const note = parseNote(readFileSync(path, "utf8"), path, project, isPrivate);
         if (`${note.id}.md` !== name) throw new NoteError(`id ${note.id} does not match file name`);
-        cached = { signature, note };
+        cached = { signature, note, readAtNs };
       }
       current.set(path, cached);
       // Callers may edit returned notes before saving; those edits must not alter cached truth.
