@@ -4,13 +4,16 @@ import { join, resolve } from "node:path";
 import { pendingCount } from "./capture.ts";
 import { kitsFor, loadKits, type Kit } from "./kits.ts";
 import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
-import type { Project } from "./project.ts";
+import { visibleTo, type Project } from "./project.ts";
 import { recall, staleHere } from "./search.ts";
+import { fixFires } from "./telemetry.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
 import { planFit, readWork, resumeText } from "./work.ts";
 
 export const CARD_BUDGET = 400;
 export const CARD_NOTES = 5;
+/** Distinct sessions of the same role in 7 days before a fix is said up front (E1: 8/8 → 2/8). */
+const RECURRING_FIX_SESSIONS = 3;
 
 const KIND_WEIGHT: Record<string, number> = { gotcha: 3, decision: 3, procedure: 2, fact: 1, note: 1 };
 const DAY_MS = 86_400_000;
@@ -128,7 +131,15 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     ? planFit(work.text, work.text.length).text.split(/(?=^Done:)/m)[0]?.match(/^Watch out: [\s\S]*/m)?.[0] ?? "" : "";
   const resume = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : resumeText(work);
   const candidates = cardCandidates(notes, project);
-  const ranked = rankForCard(candidates, project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
+  // A fix that fired in several recent sessions of this role (child or not) is a mistake agents
+  // here keep making: say it before the first attempt, not after. It retires itself when the
+  // mistake stops, because then it stops firing.
+  const fires = fixFires(home, opts.subagent === true, 7, now);
+  // Any note that could fire as a fix here qualifies, untagged globals included.
+  const recurring = notes
+    .filter((n) => !n.retired && n.tested && n.errors.length && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project))
+    .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))[0];
+  const ranked = rankForCard(candidates.filter((n) => n !== recurring), project, opts.subagent ? resume : work?.text ?? "", now, home, opts.prompt);
   const allKits = opts.subagent ? [] : loadKits(home);
   const fresh = allKits.length > 0 && !resume && !notes.some((n) => n.project === project.id) && freshRoot(project.root);
   const kits = kitsLine(fresh ? allKits : kitsFor(allKits, project), opts.tools === true);
@@ -140,6 +151,11 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   if (resume) {
     const text = cutToTokens(resume, Math.floor(room() / 4));
     if (text.trim()) lines.push(text);
+  }
+  if (recurring) {
+    const label = [`Often hit lately (${fires.get(recurring.id)} sessions this week):`];
+    const line = noteLine(recurring, room(label));
+    if (line) lines.push(...label, line);
   }
   let count = 0;
   for (const note of ranked) {

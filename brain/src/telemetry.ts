@@ -82,6 +82,37 @@ export interface Stats {
 
 const TOOL_KINDS = new Set(["recall", "note", "state"]);
 
+/**
+ * Distinct sessions of one role (child or not) in which each fix fired lately. Cheap enough for
+ * a card: only fix rows are parsed, from at most two 1 MiB files.
+ */
+export function fixFires(home: string, sub: boolean, days = 7, now: Date = new Date()): Map<string, number> {
+  const since = now.getTime() - days * 86_400_000;
+  const sessions = new Map<string, Set<string>>();
+  for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
+    let text = "";
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (!line.includes('"kind":"fix"') || !line.includes('"id":')) continue;
+      try {
+        const row = JSON.parse(line) as { at?: unknown; id?: unknown; session?: unknown; sub?: unknown };
+        if (typeof row.id !== "string" || typeof row.session !== "string" || (row.sub === true) !== sub) continue;
+        if (typeof row.at !== "string" || !(Date.parse(row.at) >= since)) continue;
+        const seen = sessions.get(row.id) ?? new Set<string>();
+        seen.add(row.session);
+        sessions.set(row.id, seen);
+      } catch {
+        // a torn line is skipped
+      }
+    }
+  }
+  return new Map([...sessions].map(([id, seen]) => [id, seen.size]));
+}
+
 /** Usage over the last days; old recall rows without hit counts are unmeasured, not misses. */
 export function stats(home: string, days = 7, now: Date = new Date(), opts: { allBuilds?: boolean } = {}): Stats {
   const since = now.getTime() - days * 86_400_000;

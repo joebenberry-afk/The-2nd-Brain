@@ -261,6 +261,29 @@ describe("card completeness and scope", () => {
 
 });
 
+describe("recurring known fix", () => {
+  it("is said up front once it fired in 3 sessions of the same role this week", () => {
+    const home = tmp();
+    const fix = createNote(home, { text: "OMP edits start with [path#tag] then PUT rows", project: "global", kind: "gotcha", tested: true, errors: ["input must begin with"] });
+    const other = createNote(home, { text: "Unrelated tested fact", project: "demo", kind: "fact", tested: true });
+    const fire = (session: string, sub: boolean) => logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session, sub, id: fix.id }, NOW);
+    fire("a", true);
+    fire("a", true);
+    fire("b", true);
+    fire("m1", false);
+    const card = (subagent: boolean) => renderCard(home, loadNotes(home).notes, project, { tools: true, subagent, now: NOW });
+    expect(card(true)).not.toContain("Often hit lately");
+    fire("c", true);
+    const child = card(true);
+    expect(child).toContain("Often hit lately (3 sessions this week):");
+    expect(child.split(fix.id)).toHaveLength(2);
+    expect(child.indexOf(fix.id)).toBeLessThan(child.indexOf(other.id));
+    expect(estimateTokens(child)).toBeLessThanOrEqual(400);
+    // Main sessions never made this mistake: their card stays as it was.
+    expect(card(false)).not.toContain("Often hit lately");
+  });
+});
+
 describe("local usage telemetry", () => {
   it("reads the newest build by default and counts each fix once per session", () => {
     const home = tmp();
