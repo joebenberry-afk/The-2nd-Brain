@@ -18,10 +18,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
+import { createNote } from "../src/notes.ts";
 
 const PACKAGE = resolve(import.meta.dirname, "..");
 /** Bump when the fixture or tasks change: results are only compared within one version. */
-const FIXTURE_VERSION = 2;
+const FIXTURE_VERSION = 3;
 
 /** Host settings overlays under test (keys and units: pi-coding-agent src/tools/settings.ts). */
 const SETTINGS: Record<string, string> = {
@@ -57,6 +58,8 @@ const FIXTURE: Record<string, string> = {
   "src/config.ts": "/** Network settings. */\nexport const RETRY_LIMIT = 4;\nexport const TIMEOUT_MS = 2500;\nexport const REGION = \"eu-west\";\n",
   "src/report.ts": 'import { add } from "./math.ts";\n\nexport function grandTotal(a: number, b: number): number {\n  return add(a, b);\n}\n\n' + filler("report", 120),
   "src/legacy.ts": "// Old settings kept for the migration script; not used by the app.\nexport const OLD_RETRY_LIMIT = 9;\n\n" + filler("legacy", 90),
+  // Deploy targets are colours; which one is staging lives only in the Brain (the memory task).
+  "scripts/deploy.mjs": "import { writeFileSync } from \"node:fs\";\nconst i = process.argv.indexOf(\"--target\");\nconst target = process.argv[i + 1];\nif (i < 0 || ![\"blue\", \"green\", \"amber\"].includes(target)) {\n  console.error(\"usage: node scripts/deploy.mjs --target <blue|green|amber>\");\n  process.exit(2);\n}\nwriteFileSync(`.deployed-${target}`, new Date().toISOString());\nconsole.log(`deployed to ${target}`);\n",
   "test/cart.test.ts": 'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { applyDiscount, total } from "../src/cart.ts";\n\ntest("total", () => {\n  assert.equal(total([{ cents: 250, qty: 2 }, { cents: 100, qty: 1 }]), 600);\n});\n\ntest("discount", () => {\n  assert.equal(applyDiscount(1000, 10), 900);\n  assert.equal(applyDiscount(1000, 150), 0);\n});\n',
 };
 
@@ -90,6 +93,10 @@ const TASKS: Record<string, Task> = {
   find: {
     prompt: "What retry limit and timeout does this app use, and which file defines them? Answer in one line.",
     verify: (_dir, answer) => /\b4\b/.test(answer) && /2500|2\.5\s*s/.test(answer) && /config\.ts/.test(answer) && !/\b9\b/.test(answer),
+  },
+  deploy: {
+    prompt: "Deploy this app to staging.",
+    verify: (dir) => existsSync(join(dir, ".deployed-amber")) && !existsSync(join(dir, ".deployed-blue")) && !existsSync(join(dir, ".deployed-green")),
   },
   combo: {
     prompt: "Three things in this app: (1) rename the function `add` in src/math.ts to `sum` everywhere; (2) `npm test` fails, fix the bug in the source without changing the tests; (3) finally tell me in one line the retry limit and timeout and the file that defines them.",
@@ -190,6 +197,8 @@ for (const condition of conditions) {
   mkdirSync(join(home, "state"), { recursive: true });
   for (const path of ["notes", "kits", "projects.json"]) if (existsSync(join(HOME, path))) cpSync(join(HOME, path), join(home, path), { recursive: true });
   if (existsSync(join(HOME, "state", "telemetry.jsonl"))) cpSync(join(HOME, "state", "telemetry.jsonl"), join(home, "state", "telemetry.jsonl"));
+  // What only memory knows (the deploy task): the same note a previous session would have saved.
+  createNote(home, { project: "benchapp", kind: "fact", text: "benchapp deploy targets: staging is amber, production is blue (green is retired)\nRun: node scripts/deploy.mjs --target amber" });
   homes.set(condition, home);
 }
 
