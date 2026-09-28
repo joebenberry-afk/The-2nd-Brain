@@ -1,6 +1,6 @@
 ---
-at: 2026-09-28T14:05:57Z
+at: 2026-09-28T14:50:47Z
 ---
 
-Goal: V5. Done through b885e10 (P1–P4 per plan §8, review fixes). Next: capture verdict 2026-10-12; grow recall-real with new logged queries (held-out) toward ≤10% wrong; P0 sign-off + v2-archive push on owner's go. Watch out: gate timeouts under benchmark load; rerun.
-See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#8-status-2026-09-28
+Goal: V5; recall wrong answers ~0%. Done: ea9cb9e judged recall (0 wrong frozen 34 + held-out 20). Next: re-label new logged queries as a fresh held-out monthly; capture verdict 2026-10-12. Watch out: restart OMP to load judged recall; tests must never see TYPESAFE_API_KEY.
+See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#81-recall-precision-2026-09-28-owner-as-close-to-0-wrong-as-possible
