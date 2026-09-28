@@ -53,7 +53,8 @@ re-homes one note. A recall that finds nothing here but something elsewhere says
    A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
    the card up front (`Often hit lately …`), before the first attempt; it drops off by itself
    once the mistake stops. Measured on GPT subagents: the OMP edit-grammar mistake fell from
-   8/8 first edits to 2/8 with that line in the task.
+   8/8 first edits to 2/8 with that line in the task; live on OMP 18.4.0, children whose card
+   carried it (after 3 had hit the mistake) failed 0/5 first edits vs 3/3 before, for +39 tokens.
 2. **Working state.** Ask the agent to set the plan (`brain_state`). Then force a compaction
    (`/compact`) and ask "where are we?": the answer should give goal and next step without
    re-reading files. Compaction re-injects only the working state (≤ 150 tokens: Goal and Next
