@@ -8,6 +8,7 @@ errors:
 evidence:
   - state/events/01a0e505-94ef-75e3-bfbc-0febcbe69e65.jsonl:34-36
 tested: "true"
+host: omp
 ---
 
 Read omp://tools/edit.md for OMP edit documentation, including the .md suffix.

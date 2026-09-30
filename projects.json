@@ -40,8 +40,31 @@
       ]
     },
     "absolute-laya": {
+      "paths": [
+        "C:/Users/assas/Documents/Absolute Laya"
+      ],
       "docs": [
         "docs/LOOP.md"
+      ]
+    },
+    "basicupscaler": {
+      "paths": [
+        "C:/Users/assas/Documents/BasicUpscaler"
+      ],
+      "docs": [
+        "BasicUpscaler/PLAN.md",
+        "BasicUpscaler/DECISIONS.md"
+      ]
+    },
+    "the-basic-upscaler": {
+      "paths": [
+        "C:/Users/assas/Documents/BasicUpscaler/The Basic Upscaler"
+      ]
+    },
+    "dragon-ball-sz-modding": {
+      "aliases": [
+        "ultimate-ai",
+        "dbsz-ultimate-ai"
       ]
     }
   }

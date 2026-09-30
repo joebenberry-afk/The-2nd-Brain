@@ -6,6 +6,7 @@ source: agent
 errors:
   - yield used the last assistant turn as the result, but that turn contains no text
 tested: "true"
+host: omp
 ---
 
 Subagents: finish with visible text (or yield {"data": …}); a last turn with only thinking is rejected and retried, costing a turn.

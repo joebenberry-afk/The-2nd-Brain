@@ -8,6 +8,7 @@ errors:
 evidence:
   - state/events/01a0e505-94ef-75e3-bfbc-0febcbe69e65.jsonl:31-39
 tested: "true"
+host: omp
 ---
 
 OMP hashline edits use [path#tag] then PUT N.=M: with +content, not unified diffs.
