@@ -238,3 +238,13 @@ the lexical top-3 had not reached, so agents needed a second recall. **Next leve
 resumes:** judge a wider lexical shortlist (top 6-8) and show the three best by judge score;
 measure with `recallq` (needed note on the first recall) and the real-query eval (0 wrong must hold
 on every recorded run).
+
+### 8.4 Bare-name recall: phrase floor (2026-09-30)
+
+Live BasicUpscaler lookups by name ("Witcher 3", "Terraria") came back silent although notes held
+the name: Jev scores a bare name against a note about it at 0.57-0.91, often under 0.78. Notes
+using the word in another sense scored 0.12-0.48 (20 real short queries). A note holding the whole
+query as a phrase (case and accents folded, word-bounded) is now kept at Jev ≥ 0.55
+(`PHRASE_FLOOR`, brain/src/judge.ts); every other note still needs 0.78. Real-query eval: 0 wrong
+on every recorded run, right unchanged; V3 dev 12 → 13/15 (D28 "Migration?" recovered). Known
+miss: "Palworld" (0.37). The floor was set on 20 queries, so held-out rows must keep checking it.

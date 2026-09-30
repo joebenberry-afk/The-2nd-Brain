@@ -1,10 +1,16 @@
 /** Optional relevance check over the lexical answer; failures preserve that answer. */
 import { findNote, type Note } from "./notes.ts";
-import { answerWithHits, type AnswerOptions } from "./search.ts";
+import { answerWithHits, fold, type AnswerOptions } from "./search.ts";
 import { scrub } from "./scrub.ts";
 
 /** 0.75 gave 0-2 wrong answers across four runs of the same 54 real queries (Jev drifts about ±0.02); 0.78 gave 0 in all four. */
 export const JUDGE_THRESHOLD = 0.78;
+/**
+ * A note holding the whole query as a phrase needs only this. On 20 real short queries (30 Sep)
+ * Jev gave such notes 0.57-0.91 when about the name ("Terraria" 0.71, "Witcher 3" 0.67-0.75) and
+ * 0.12-0.48 when the word meant something else ("PLAN.md" in a GPU note, "probe" as a matmul probe).
+ */
+export const PHRASE_FLOOR = 0.55;
 /** Warm calls take ~300 ms; a spike waits here rather than letting an unchecked answer through. */
 export const JUDGE_TIMEOUT_MS = 5000;
 export type Judge = (query: string, candidates: { id: string; text: string }[]) => Promise<Map<string, number> | undefined>;
@@ -65,6 +71,12 @@ export function typesafeJudge(env: NodeJS.ProcessEnv): Judge | undefined {
   };
 }
 
+/** The whole query, word for word, in the text (case and accents folded; punctuation between words ignored). */
+export function holdsPhrase(text: string, query: string): boolean {
+  const words = fold(query).match(/[\p{L}\p{N}]+/gu);
+  return !!words && new RegExp(`(?<![\\p{L}\\p{N}])${words.join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`, "u").test(fold(text));
+}
+
 export async function judgedAnswer(notes: Note[], query: string, opts: AnswerOptions, judge?: Judge) {
   const lexical = { ...answerWithHits(notes, query, opts), judged: false, dropped: 0 };
   if (!judge || !lexical.hits || findNote(notes, query)) return lexical;
@@ -72,12 +84,13 @@ export async function judgedAnswer(notes: Note[], query: string, opts: AnswerOpt
     const note = notes.find(n => n.id === id);
     return note && !note.private ? [{ id, text: judgeText(note) }] : [];
   });
+  const phrased = new Set(candidates.filter(c => holdsPhrase(notes.find(n => n.id === c.id)!.body, query)).map(c => c.id));
   let result = lexical;
   try {
     if (candidates.length) {
       const scores = await judge(scrub(query).text, candidates);
       if (!scores || candidates.some(c => !probability(scores.get(c.id)))) return lexical;
-      const dropped = candidates.filter(c => scores.get(c.id)! < JUDGE_THRESHOLD).map(c => c.id);
+      const dropped = candidates.filter(c => scores.get(c.id)! < (phrased.has(c.id) ? PHRASE_FLOOR : JUDGE_THRESHOLD)).map(c => c.id);
       opts = { ...opts, exclude: new Set([...opts.exclude ?? [], ...dropped]) };
       result = { ...(dropped.length ? answerWithHits(notes, query, opts) : lexical), judged: true, dropped: dropped.length };
     }

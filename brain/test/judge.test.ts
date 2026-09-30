@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { judgedAnswer, judgeText, JUDGE_THRESHOLD, JUDGE_TIMEOUT_MS, typesafeJudge, type Judge } from "../src/judge.ts";
+import { holdsPhrase, judgedAnswer, judgeText, JUDGE_THRESHOLD, JUDGE_TIMEOUT_MS, PHRASE_FLOOR, typesafeJudge, type Judge } from "../src/judge.ts";
 import { answerWithHits } from "../src/search.ts";
 import type { Note } from "../src/notes.ts";
 
@@ -15,7 +15,8 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const root o
 const rejectAll: Judge = async (_query, candidates) => new Map(candidates.map(c => [c.id, 0.1]));
 
 it("drops probabilities below the threshold, keeps the boundary, and does not backfill unjudged notes", async () => {
-  const notes = [note("low"), note("boundary"), note("high"), note("unshown")];
+  const body = "Migration guidance for quartz"; // shares the words, not the phrase
+  const notes = [note("low", { body }), note("boundary", { body }), note("high", { body }), note("unshown", { body })];
   const lexical = answerWithHits(notes, "quartz migration", { project });
   expect(lexical.ids).toHaveLength(3);
   const judge: Judge = async (_query, candidates) => new Map(candidates.map((c, i) => [c.id, [JUDGE_THRESHOLD - 0.001, JUDGE_THRESHOLD, 1][i]!]));
@@ -23,6 +24,17 @@ it("drops probabilities below the threshold, keeps the boundary, and does not ba
   expect(JUDGE_THRESHOLD).toBe(0.78);
   expect(result.ids).toEqual(lexical.ids.slice(1));
   expect(result).toMatchObject({ judged: true, dropped: 1, hits: 2 });
+});
+
+it("a note holding the whole query as a phrase needs only the phrase floor", async () => {
+  const notes = [note("phrase", { body: "The Witcher 3 5.0 keeps its render" }), note("words", { body: "Witcher mods need patch 3" }), note("inside", { body: "Witcher 35 remaster" })];
+  const scoring = (p: number): Judge => async (_q, candidates) => new Map(candidates.map(c => [c.id, p]));
+  expect(PHRASE_FLOOR).toBe(0.55);
+  expect(await judgedAnswer(notes, "witcher 3", { project }, scoring(PHRASE_FLOOR))).toMatchObject({ ids: ["phrase"], dropped: 2 });
+  expect(await judgedAnswer(notes, "witcher 3", { project }, scoring(PHRASE_FLOOR - 0.001))).toMatchObject({ ids: [], dropped: 3 });
+  expect(holdsPhrase("See PLAN.md first", "plan.md")).toBe(true);
+  expect(holdsPhrase("BUNet readback", "BU")).toBe(false);
+  expect(holdsPhrase("Café migration", "cafe migration?")).toBe(true);
 });
 
 it("all dropped uses normal silence and cross-project hints", async () => {
