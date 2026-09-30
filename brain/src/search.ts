@@ -1,6 +1,6 @@
 /** Full-text search over notes with BM25 ranking (faithful port of V3 SQLite FTS5). */
 import { resolve } from "node:path";
-import { firstLine, GLOBAL, restOfBody, staleEvidence, type Note } from "./notes.ts";
+import { findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
@@ -185,9 +185,12 @@ export interface Scored {
 
 /** BM25 over the whole corpus (IDF is corpus-wide, like the V3 index): the expensive half of recall. */
 export function scoreQuery(notes: Note[], query: string): Scored {
-  const terms = tokens(query);
   // The match rule sees file names and versions whole: "LOOP.md" is not any note about a loop.
   const q = tokens(query, true);
+  // A query of only short dotted tokens ("18.3.5", "fs.rm") still searches: its parts find
+  // candidates, and the match rule still needs the whole dotted token.
+  const words = tokens(query);
+  const terms = words.length ? words : [...new Set(q.flatMap((t) => t.split(".")).filter(Boolean))];
   if (!terms.length) return { q, information: new Map(), candidates: [] };
 
   // Build FTS columns for every note
@@ -325,7 +328,7 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
 export function staleHere(note: Note, project: Project | null, home: string | undefined): boolean {
   const root = project?.root ?? undefined;
   if (note.project !== GLOBAL && (note.project !== project?.id || !root)) return false;
-  return staleEvidence(note, [root, home].filter((r): r is string => !!r));
+  return staleEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r));
 }
 
 function noteHome(note: Note, opts: RecallOptions): string | undefined {
@@ -395,14 +398,16 @@ export function answer(notes: Note[], query: string, opts: AnswerOptions): strin
 
 /** Hit count measures results actually shown, not cross-project suggestions. */
 export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions): { text: string; hits: number; ids: string[]; docExcerpt?: string } {
-  const id = query.trim();
-  const note = notes.find((n) => n.id === id);
+  const id = idQuery(query);
+  const note = findNote(notes, query);
   if (note) {
-    if (!opts.all && !visibleTo(note, opts.project)) return { text: NO_MATCH, hits: 0, ids: [] };
+    // "note it once you learn it" for a note that exists invites a duplicate: say where it is.
+    if (!opts.all && !visibleTo(note, opts.project)) return { text: `no match here; ${note.id} is in ${note.project} (${opts.tools === false ? "--all" : "all: true"})`, hits: 0, ids: [] };
     const retiredMeta = note.retired ? `retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""}` : "";
     const meta = [note.kind, note.tested ? "tested" : "", retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
     return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [note.id] };
   }
+  if (/^(?:n|mem)-[0-9a-f]{6,}$/i.test(id)) return { text: `no note ${id}`, hits: 0, ids: [] };
   // Search summaries stay within the three-line budget; explicit id reads above retain history.
   opts = { ...opts, limit: Math.max(1, Math.min(3, opts.limit ?? 3)) };
   const scored = scoreQuery(notes, query);

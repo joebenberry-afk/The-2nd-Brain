@@ -60,27 +60,34 @@ export function randomId(prefix: string): string {
 }
 
 /**
- * Write a file atomically (temp file + rename), creating parent directories. On Windows a rename
- * fails while antivirus or the indexer holds the target: retry briefly, and never leave the temp
- * file behind.
+ * Run a file operation, retrying briefly while it fails with EPERM, EACCES or EBUSY: on Windows
+ * antivirus, the indexer or a preview pane holds files for a moment. Any other error is rethrown.
+ */
+export function retrying<T>(fn: () => T): T {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 10 || !(code === "EPERM" || code === "EACCES" || code === "EBUSY")) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
+/**
+ * Write a file atomically (temp file + rename), creating parent directories. A held target is
+ * retried (see retrying), and the temp file is never left behind.
  */
 export function writeAtomic(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${randomBytes(3).toString("hex")}.tmp`;
   writeFileSync(tmp, text, "utf8");
-  for (let attempt = 0; ; attempt++) {
-    try {
-      renameSync(tmp, path);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (attempt < 10 && (code === "EPERM" || code === "EACCES" || code === "EBUSY")) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-        continue;
-      }
-      rmSync(tmp, { force: true });
-      throw error;
-    }
+  try {
+    retrying(() => renameSync(tmp, path));
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    throw error;
   }
 }
 
@@ -89,11 +96,17 @@ export const PACKAGE_HOME = resolve(dirname(fileURLToPath(import.meta.url)), "..
 
 /**
  * The Brain home: an explicit path, else SECOND_BRAIN_HOME, else the checkout this package lives
- * in when it holds a `notes/` directory. Null when none applies.
+ * in when it holds a `notes/` directory. Null when none applies, or when the given path does not
+ * exist (a typo would otherwise answer "no match" and write notes nothing reads).
  */
 export function findHome(explicit?: string, env: NodeJS.ProcessEnv = process.env): string | null {
-  if (explicit) return resolve(explicit);
-  const fromEnv = env.SECOND_BRAIN_HOME?.trim();
-  if (fromEnv) return resolve(fromEnv);
+  const given = explicit || env.SECOND_BRAIN_HOME?.trim();
+  if (given) return existsSync(resolve(given)) ? resolve(given) : null;
   return existsSync(join(PACKAGE_HOME, "notes")) ? PACKAGE_HOME : null;
+}
+
+/** Why findHome returned null, naming a given path that does not exist. */
+export function noHome(explicit?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const given = explicit || env.SECOND_BRAIN_HOME?.trim();
+  return given ? `Brain home ${resolve(given)} does not exist (check SECOND_BRAIN_HOME or --home)` : "no Brain home (set SECOND_BRAIN_HOME)";
 }

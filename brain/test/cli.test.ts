@@ -1,16 +1,16 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { main, type Io } from "../src/cli.ts";
-import { createNote, loadNotes } from "../src/notes.ts";
-import { appendEvent, renderFix, scanEvents } from "../src/capture.ts";
+import { createNote, loadNotes, saveNote } from "../src/notes.ts";
+import { appendEvent, findFix, renderFix, scanEvents } from "../src/capture.ts";
 import { estimateTokens } from "../src/util.ts";
 import { readWork } from "../src/work.ts";
-import { logUse } from "../src/telemetry.ts";
+import { fixFires, logUse } from "../src/telemetry.ts";
 
 const tmp = (p = "brain-cli-") => mkdtempSync(join(tmpdir(), p));
 
@@ -205,6 +205,21 @@ describe("brain cli", () => {
     expect((await run(["recall", "migration", "order", "--history"], io)).out).toContain("retired");
   });
 
+  it("accepts ids as pasted: brackets, trailing punctuation, upper case", async () => {
+    const { home, io } = setup();
+    const id = createNote(home, { project: "demo", text: "Pasted id one" }).id;
+    const id2 = createNote(home, { project: "demo", text: "Pasted id two" }).id;
+    const shown = await run(["show", `[${id.toUpperCase()}].`], io);
+    expect(shown.code).toBe(0);
+    expect(shown.out).toContain("Pasted id one");
+    expect((await run(["tested", id.toUpperCase()], io)).out).toBe(`tested ${id}`);
+    expect((await run(["retire", `(${id2})`, "--by", id.toUpperCase()], io)).out).toBe(`retired ${id2} (replaced by ${id})`);
+    const notes = loadNotes(home).notes;
+    expect(notes.find((n) => n.id === id2)?.replacedBy).toBe(id);
+    expect(notes.find((n) => n.id === id)?.replaces).toBe(id2);
+    expect((await run(["retire", id, "--by", `[${id}]`], io)).err).toContain("cannot replace itself");
+  });
+
   it("validates note options", async () => {
     const { io } = setup();
     expect((await run(["note"], io)).code).toBe(1);
@@ -267,6 +282,22 @@ describe("brain cli", () => {
     expect((await run(["share", id, "--tag", "Node"], io)).out).toBe(`shared ${id} with tag node; project demo now has tag node, so it still sees it`);
     expect(loadNotes(home).notes[0]).toMatchObject({ project: "global", tags: ["node"] });
     expect((await run(["recall", "use node"], io)).out).toContain(id);
+  });
+
+  it("never marks a global fix tested from an agent's note", async () => {
+    const { home, io } = setup();
+    const args = ["note", "Clear the widget cache after a schema bump", "--global", "--kind", "gotcha", "--error", "schema version mismatch in widget cache", "--tested"];
+    const saved = await run(args, io);
+    expect(saved.out).toMatch(/^saved n-[0-9a-f]{10} \(untested: the owner confirms a global fix with `brain tested <id>`\)$/);
+    expect(loadNotes(home).notes[0]).toMatchObject({ project: "global", tested: false });
+    expect((await run(args, io)).out).toMatch(/^already noted n-[0-9a-f]{10} \(untested: /);
+    expect(loadNotes(home).notes[0]?.tested).toBe(false);
+    expect((await run(["fix", "Error: schema version mismatch in widget cache (v3 != v4)"], { ...io, cwd: repo("other") })).out).toBe("");
+    // Once the owner confirmed it, noting it again (here or from a project) does not call it untested.
+    const id = saved.out.split(" ")[1] as string;
+    await run(["tested", id], io);
+    expect((await run(args, io)).out).toBe(`already noted ${id}`);
+    expect((await run(["note", "Clear the widget cache after a schema bump", "--kind", "gotcha", "--tested"], io)).out).toBe(`already noted ${id}`);
   });
 
   it("review lists captured proposals, accept makes a note, reject forgets", async () => {
@@ -357,6 +388,11 @@ describe("brain hook claude-code", () => {
     expect(readFileSync(join(home, "state", "events", "abc.jsonl"), "utf8")).toContain('"command":"python x.py"');
     const interrupted = await hook(JSON.stringify({ ...payload, is_interrupt: true }), { SECOND_BRAIN_HOME: home });
     expect(interrupted.json).toEqual({});
+    // An OMP-only fix can only match echoed text in Claude Code.
+    const omp = createNote(home, { text: "OMP hashline edits need a fresh tag", project: "global", kind: "gotcha", errors: ["is not from this session."], tested: true });
+    saveNote(home, { ...omp, host: "omp" });
+    const echoed = await hook(JSON.stringify({ ...payload, error: "Exit code 1\nValueError: token abc123 is not from this session." }), { SECOND_BRAIN_HOME: home });
+    expect(echoed.json).toEqual({});
   });
 
   it("fails open: garbage, other events and no home all give {} and exit 0", async () => {
@@ -400,7 +436,50 @@ describe("brain move", () => {
   });
 });
 
+describe("text that starts with a dash", () => {
+  // PowerShell drops a bare `--` before brain.ps1 sees it; such text must still arrive as text.
+  it("is text when it has a space before any '=', and still works after `--`", async () => {
+    const { home, io } = setup();
+    expect((await run(["note", "--force deletes the cache"], io)).code).toBe(0);
+    expect(loadNotes(home).notes[0]?.body.startsWith("--force deletes the cache")).toBe(true);
+    expect(await run(["fix", "-bash: foo: command not found"], io)).toMatchObject({ code: 0, err: "" });
+    expect((await run(["note", "Bash missing", "--error", "-bash: x: command not found", "--tested"], io)).code).toBe(0);
+    expect(loadNotes(home).notes.find((n) => n.body === "Bash missing")).toMatchObject({ errors: ["-bash: x: command not found"], tested: true });
+    expect((await run(["note", "--", "--dry-run first"], io)).code).toBe(0);
+    expect(loadNotes(home).notes.some((n) => n.body === "--dry-run first")).toBe(true);
+    expect((await run(["note", "x", "--nope"], io)).code).toBe(1);
+  });
+
+  it.skipIf(process.platform !== "win32")("maps an MSYS drive path given to --home or --from", async () => {
+    const home = tmp();
+    const msys = (p: string) => p.replace(/\\/g, "/").replace(/^([A-Za-z]):/, (_, d: string) => "/" + d.toLowerCase());
+    expect(await run(["--home", msys(home), "check"], { env: {}, cwd: home })).toMatchObject({ code: 0, err: "" });
+    const v3 = tmp();
+    mkdirSync(join(v3, "records"));
+    expect(await run(["--home", home, "convert", "--from", msys(v3), "--dry-run"], { env: {}, cwd: home })).toMatchObject({ code: 0, err: "" });
+  });
+});
+
 describe("brain check reports silent failures", () => {
+  it("flags notes filed under an id that is now an alias", async () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-check-"));
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { owner: { aliases: ["old"] } } }));
+    createNote(home, { project: "old", text: "Filed before the rename" });
+    const r = await run(["check"], { env: { SECOND_BRAIN_HOME: home }, cwd: home });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("alias of owner");
+  });
+
+  it("project docs list --project finds the docs of a declared folder from a subfolder", async () => {
+    const home = tmp();
+    const dir = tmp();
+    mkdirSync(join(dir, "docs"));
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "docs", "X.md"), "# X\n");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { p: { paths: [dir], docs: ["docs/X.md"] } } }));
+    expect(await run(["project", "docs", "list", "--project", "p"], { env: { SECOND_BRAIN_HOME: home }, cwd: join(dir, "sub") })).toMatchObject({ code: 0, out: "docs/X.md" });
+  });
+
   it("flags an unreadable projects.json", async () => {
     const home = mkdtempSync(join(tmpdir(), "brain-check-"));
     const io = { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: home };
@@ -409,6 +488,25 @@ describe("brain check reports silent failures", () => {
     const r = await run(["check"], io);
     expect(r.code).toBe(1);
     expect(r.err).toContain("projects.json");
+  });
+
+  it("reads host case-insensitively and flags a host that fires nowhere", async () => {
+    const home = mkdtempSync(join(tmpdir(), "brain-check-"));
+    const file = (id: string, host: string) => {
+      mkdirSync(join(home, "notes", "global"), { recursive: true });
+      writeFileSync(join(home, "notes", "global", `${id}.md`), `---\nid: ${id}\nkind: gotcha\nerrors:\n  - "hashline tag is stale"\ntested: true\nhost: ${host}\n---\n\nRe-read the file first\n`);
+    };
+    file("n-upper", "OMP");
+    const notes = loadNotes(home).notes;
+    expect(findFix(notes, "error: hashline tag is stale", null, undefined, "omp")?.id).toBe("n-upper");
+    expect(findFix(notes, "error: hashline tag is stale", null, undefined, "claude-code")).toBeNull();
+    const io = { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: home };
+    expect((await run(["check"], io)).code).toBe(0);
+    file("n-list", "[omp, claude-code]");
+    const r = await run(["check"], io);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(join(home, "notes", "global", "n-list.md"));
+    expect(r.err).not.toContain("n-upper");
   });
 });
 
@@ -511,16 +609,16 @@ describe("host-independent memory", () => {
 
   it("attributes CLI calls with session precedence and does not mislabel old rows", async () => {
     const { home, io } = setup();
-    await run(["note", "A durable decision"], { ...io, env: { ...io.env, BRAIN_SESSION: "parent", CLAUDE_SESSION_ID: "fallback" } });
+    await run(["note", "A durable decision"], { ...io, env: { ...io.env, BRAIN_SESSION: "parent", CLAUDE_CODE_SESSION_ID: "claude", CLAUDE_SESSION_ID: "fallback" } });
+    await run(["recall", "durable"], { ...io, env: { ...io.env, CLAUDE_CODE_SESSION_ID: "claude", CLAUDE_SESSION_ID: "fallback" } });
     await run(["recall", "durable"], { ...io, env: { ...io.env, CLAUDE_SESSION_ID: "fallback" } });
     logUse(home, { kind: "state", project: "demo", ms: 0, tokens: 1, via: "tool" });
-    logUse(home, { kind: "recall", project: "demo", ms: 0, tokens: 1, via: "hook" });
     logUse(home, { kind: "note", project: "demo", ms: 0, tokens: 1, via: "mcp" });
     logUse(home, { kind: "recall", project: "demo", ms: 0, tokens: 1 });
     logUse(home, { kind: "card", project: "demo", ms: 0, tokens: 1, via: "hook" });
     const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(rows.slice(0, 2).map((r) => [r.via, r.session])).toEqual([["cli", "parent"], ["cli", "fallback"]]);
-    expect((await run(["stats"], io)).out).toContain("tool use by surface: 1 tool · 2 cli · 1 hook · 1 mcp calls");
+    expect(rows.slice(0, 3).map((r) => [r.via, r.session])).toEqual([["cli", "parent"], ["cli", "claude"], ["cli", "fallback"]]);
+    expect((await run(["stats"], io)).out).toContain("tool use by surface: 1 tool · 3 cli · 1 mcp calls");
   });
 
   it("emits an agent block without needing an installed home", async () => {
@@ -570,6 +668,204 @@ describe("host-independent memory", () => {
     const before = readWork(home, "demo");
     await send({ hook_event_name: "PreCompact", agent_id: "child" });
     expect(readWork(home, "demo")).toEqual(before);
+  });
+});
+
+describe("claude-code hook lifecycle", () => {
+  const hookSetup = () => {
+    const { home, cwd, io } = setup();
+    const send = async (p: Record<string, unknown>) => {
+      const r = await run(["hook", "claude-code"], { ...io, stdin: () => JSON.stringify({ cwd, session_id: "s", ...p }) });
+      return { ...r, json: JSON.parse(r.out) };
+    };
+    const telemetry = () => readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    return { home, cwd, io, send, telemetry };
+  };
+  const failure = (command: string, error: string, extra = {}) => ({ hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, error, ...extra });
+
+  it("resolves an unregistered folder after `cd sub` the same in the hook as in the agent's CLI calls", async () => {
+    const { io } = hookSetup();
+    const root = join(tmp(), "plain");
+    const sub = join(root, "sub");
+    mkdirSync(sub, { recursive: true });
+    // The Bash tool's env has no CLAUDE_PROJECT_DIR; only the hook's does.
+    expect(await run(["note", "Pin the numpy wheel", "--kind", "gotcha", "--error", "numpy.core.multiarray failed to import", "--tested"], { ...io, cwd: sub })).toMatchObject({ code: 0 });
+    const r = await run(["hook", "claude-code"], { ...io, env: { ...io.env, CLAUDE_PROJECT_DIR: root }, stdin: () => JSON.stringify({ cwd: sub, session_id: "s", ...failure("python x.py", "ImportError: numpy.core.multiarray failed to import") }) });
+    expect(JSON.parse(r.out).hookSpecificOutput.additionalContext).toContain("Pin the numpy wheel");
+  });
+
+  it("clears the last failure once the same command succeeds, and ignores host noise", async () => {
+    const { home, cwd, send } = hookSetup();
+    await send(failure("npm test", "Error: dependency missing"));
+    await send({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: join(cwd, "a.ts") } });
+    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" } });
+    await send(failure("sleep 60", "Error: operation aborted"));
+    await send({ hook_event_name: "PreCompact" });
+    const auto = readWork(home, "demo")?.auto;
+    expect(auto).toContain("a.ts");
+    expect(auto).not.toContain("last failure");
+  });
+
+  it("keeps the last failure when only a command with another SHA succeeds", async () => {
+    const { home, send } = hookSetup();
+    await send(failure("git cherry-pick 0123456789abcdef0123456789abcdef01234567", "error: could not apply 0123456... conflict in src/x.ts"));
+    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "git cherry-pick fedcba9876543210fedcba9876543210fedcba98" } });
+    await send({ hook_event_name: "PreCompact" });
+    const auto = readWork(home, "demo")?.auto;
+    expect(auto).toContain("last failure");
+    expect(auto).toContain("last failure: git cherry-pick *** →");
+    expect(auto).not.toMatch(/\*\*\*[0-9a-f]{6}/);
+  });
+
+  it("takes the human ask, not harness rows, and falls back to the last-prompt row", async () => {
+    const { home, send } = hookSetup();
+    const transcript = join(home, "t.jsonl");
+    const rows = [
+      { type: "user", origin: { kind: "human" }, message: { content: "<system-reminder>\nnoise\n</system-reminder>\nPlease fix the upload retry" } },
+      { type: "user", origin: { kind: "task-notification" }, message: { content: "<task-notification>\n<task-id>a1</task-id>\n</task-notification>" } },
+      { type: "user", message: { content: "<command-message>ponytail:ponytail</command-message>\n<command-name>/ponytail:ponytail</command-name>\n<command-args>ultra</command-args>" } },
+      { type: "user", message: { content: "<local-command-stdout>Set model to x</local-command-stdout>" } },
+      { type: "user", message: { content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } },
+      { type: "user", origin: { kind: "human" }, message: { content: "<create-pr-command> ## Overview" } },
+      { type: "user", isCompactSummary: true, message: { content: "This session is being continued from a previous conversation" } },
+    ];
+    writeFileSync(transcript, rows.map((r) => JSON.stringify(r) + "\n").join(""));
+    await send({ hook_event_name: "SessionEnd", transcript_path: transcript });
+    expect(readWork(home, "demo")?.auto).toContain("- last ask: Please fix the upload retry");
+
+    // The prompt row is beyond the 256 KiB tail; Claude Code's own last-prompt rows are not.
+    const long = join(home, "long.jsonl");
+    const output = { type: "user", message: { content: [{ type: "tool_result", content: "x".repeat(10_000) }] } };
+    const tail = [{ type: "last-prompt", lastPrompt: "Ship the CSV export" }, { type: "last-prompt", lastPrompt: "/ponytail:ponytail ultra" }, { type: "last-prompt", leafUuid: "u" }];
+    writeFileSync(long, [rows[0], ...Array.from({ length: 30 }, () => output), ...tail].map((r) => JSON.stringify(r) + "\n").join(""));
+    for (const hook_event_name of ["PreCompact", "SessionEnd"]) {
+      await send({ hook_event_name, transcript_path: long });
+      expect(readWork(home, "demo")?.auto).toContain("- last ask: Ship the CSV export");
+    }
+
+    // A prompt that starts with a one-segment path or route is a real ask, not a slash command.
+    const route = join(home, "route.jsonl");
+    const ask = "/health returns 503 behind the proxy; find why";
+    writeFileSync(route, [rows[0], { type: "user", origin: { kind: "human" }, message: { content: ask } }, { type: "last-prompt", lastPrompt: ask }].map((r) => JSON.stringify(r) + "\n").join(""));
+    await send({ hook_event_name: "SessionEnd", transcript_path: route });
+    expect(readWork(home, "demo")?.auto).toContain("- last ask: /health returns 503");
+    // …also when its row is beyond the tail: only a <command-name> wrapper makes slash text a command.
+    const far = "/status page shows 500 after the deploy; find why";
+    writeFileSync(route, [rows[0], { type: "user", origin: { kind: "human" }, message: { content: far } }, ...Array.from({ length: 30 }, () => output), { type: "last-prompt", lastPrompt: far }].map((r) => JSON.stringify(r) + "\n").join(""));
+    await send({ hook_event_name: "SessionEnd", transcript_path: route });
+    expect(readWork(home, "demo")?.auto).toContain("- last ask: /status page shows 500");
+    // A typed command's prompt row is beyond the tail too, but its wrapper (or a plugin's ":") is not.
+    const bare = { type: "user", message: { content: "<command-name>/review</command-name>\n<command-args>high</command-args>" } };
+    for (const [wrapper, typed] of [[bare, "/review high"], [output, "/ponytail:ponytail ultra"]] as const) {
+      writeFileSync(route, [rows[0], ...Array.from({ length: 30 }, () => output), wrapper, { type: "last-prompt", lastPrompt: typed }].map((r) => JSON.stringify(r) + "\n").join(""));
+      await send({ hook_event_name: "SessionEnd", transcript_path: route });
+      expect(readWork(home, "demo")?.auto).toContain("- last ask: /status page shows 500");
+    }
+  });
+
+  it("does not log a backgrounded launch as a success", async () => {
+    const { home, send, telemetry } = hookSetup();
+    await send(failure("cargo build --release", "error: linker `link.exe` not found"));
+    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "vcvars64.bat && cargo build --release", run_in_background: true } });
+    expect(scanEvents(home, [])).toEqual([]);
+    const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    await send(failure("npm test", "runtime mismatch"));
+    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" }, tool_response: { backgroundTaskId: "b1" } });
+    expect(telemetry().filter((row) => row.kind === "fixout")).toEqual([]);
+    // The pending fix waits for the next foreground run.
+    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" } });
+    expect(telemetry().filter((row) => row.kind === "fixout").map((row) => [row.id, row.outcome])).toEqual([[note.id, "helped"]]);
+  });
+
+  it("keeps Claude Code's own files off the edited line", async () => {
+    const { home, cwd, send } = hookSetup();
+    const scratchpad = join(homedir(), "brain-test-scratchpad");
+    await send({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: join(cwd, "src.ts") } });
+    for (const file_path of [join(scratchpad, "x.py"), join(homedir(), ".claude", "projects", "p", "memory", "m.md"), join(homedir(), "AppData", "Local", "Temp", "t.py")]) {
+      await send({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path } });
+    }
+    await send({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: join(homedir(), "elsewhere", "kept.ts") } });
+    await send({ hook_event_name: "SessionEnd", scratchpad_dir: scratchpad });
+    expect(readWork(home, "demo")?.auto).toBe(`- edited: src.ts, ${join(homedir(), "elsewhere", "kept.ts").replace(/\\/g, "/")}`);
+  });
+
+  it("keeps Claude Code's scratchpad off the edited line when the project root contains it", async () => {
+    const { home, cwd, send } = hookSetup();
+    const scratchpad = join(cwd, "AppData", "Local", "Temp", "claude", "x", "scratchpad");
+    await send({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: join(cwd, "a.ts") } });
+    await send({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: join(scratchpad, "x.py") } });
+    await send({ hook_event_name: "SessionEnd", scratchpad_dir: scratchpad });
+    expect(readWork(home, "demo")?.auto).toBe("- edited: a.ts");
+  });
+
+  it("reads a hook payload that starts with a byte order mark", async () => {
+    const { home, cwd, io, telemetry } = hookSetup();
+    createNote(home, { project: "demo", text: "Demo decision", kind: "decision" });
+    const r = await run(["hook", "claude-code"], { ...io, stdin: () => "﻿" + JSON.stringify({ cwd, session_id: "s", hook_event_name: "SessionStart" }) });
+    expect(JSON.parse(r.out).hookSpecificOutput.additionalContext).toContain("Demo decision");
+    expect(telemetry().filter((row) => row.kind === "error")).toEqual([]);
+  });
+
+  it("clears a subagent's pending fixes with its parent session", async () => {
+    const { home, send } = hookSetup();
+    createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    await send(failure("npm test", "runtime mismatch", { agent_id: "a1" }));
+    await send({ hook_event_name: "SessionEnd" });
+    expect(readdirSync(join(home, "state", "pending-fixes"))).toEqual([]);
+  });
+
+  it("cards startup and clear, but not resume, compact or an unknown source", async () => {
+    const { home, send, telemetry } = hookSetup();
+    createNote(home, { project: "demo", text: "Demo decision", kind: "decision" });
+    for (const source of ["startup", "clear"]) expect((await send({ hook_event_name: "SessionStart", source })).json.hookSpecificOutput.additionalContext).toContain("Demo decision");
+    await send({ hook_event_name: "SessionEnd" });
+    for (const source of ["resume", "compact", "other"]) expect((await send({ hook_event_name: "SessionStart", source })).json).toEqual({});
+    expect(telemetry().filter((row) => row.kind === "card")).toHaveLength(2);
+  });
+
+  it("logs a swallowed hook error to telemetry", async () => {
+    const { home, cwd, send, telemetry } = hookSetup();
+    await send({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: join(cwd, "a.ts") } });
+    writeFileSync(join(home, "state", "work"), "not a directory");
+    expect(await send({ hook_event_name: "PreCompact" })).toMatchObject({ code: 0, json: {} });
+    const errors = telemetry().filter((row) => row.kind === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0].error).toMatch(/^claude-code PreCompact: /);
+  });
+
+  it("sends the full fix once per context, then a pointer", async () => {
+    const { home, send } = hookSetup();
+    const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const fix = async () => (await send(failure("npm test", "runtime mismatch"))).json.hookSpecificOutput.additionalContext;
+    expect(await fix()).toBe(renderFix(note));
+    expect(await fix()).toBe(`Brain: same fix as above [${note.id}]`);
+    await send({ hook_event_name: "PreCompact" });
+    expect(await fix()).toBe(renderFix(note));
+  });
+
+  it("counts only Claude Code hook fires on the hook card and on brain card", async () => {
+    const { home, io, send } = hookSetup();
+    const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const hit = (card: string) => card.includes("Often hit lately");
+    const card = async () => (await send({ hook_event_name: "SessionStart" })).json.hookSpecificOutput.additionalContext;
+    for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, id: note.id });
+    for (const s of ["d", "e", "f"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, via: "cli", id: note.id });
+    expect(hit(await card())).toBe(false);
+    expect(hit((await run(["card"], io)).out)).toBe(false);
+    for (const s of ["g", "h", "i"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, via: "hook", id: note.id });
+    expect(hit(await card())).toBe(true);
+    expect(hit((await run(["card"], io)).out)).toBe(true);
+  });
+
+  it("logs subagent fixes under their own session, and ties CLI calls to the Claude Code session", async () => {
+    const { home, io, send, telemetry } = hookSetup();
+    const note = createNote(home, { project: "demo", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    await send({ hook_event_name: "SessionStart" });
+    for (const agent_id of ["a1", "a2"]) expect((await send(failure("npm test", "runtime mismatch", { agent_id }))).json.hookSpecificOutput.additionalContext).toBe(renderFix(note));
+    expect(telemetry().filter((row) => row.kind === "fix").map((row) => [row.session, row.sub, row.via])).toEqual([["s:agent:a1", true, "hook"], ["s:agent:a2", true, "hook"]]);
+    expect(fixFires(home, true, 7, new Date(), "claude-code").get(note.id)).toBe(2);
+    await run(["recall", "runtime"], { ...io, env: { ...io.env, CLAUDE_CODE_SESSION_ID: "s" } });
+    expect((await run(["stats"], io)).out).toContain("brain tools used in: 1/1 main sessions · 0/0 sub");
   });
 });
 it.each(["constructor", "toString"])("rejects inherited command %s with a usage error", async (command) => {

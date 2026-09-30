@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { runMcp } from "../src/mcp.ts";
@@ -120,6 +120,27 @@ it("rejects malformed calls as protocol errors, failed execution as isError, wit
   expect(readWork(home, "demo")).toBeNull();
   expect(replies[3]!.error?.code).toBe(-32600);
   expect(replies[4]!.result).toEqual({});
+});
+
+it("rejects an unknown note kind instead of saving it as a plain note", async () => {
+  const { home, replies } = await exchange([{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "brain_note", arguments: { text: "probe kind", kind: "bug" } } }]);
+  expect(replies[0]!.result).toEqual({ content: [{ type: "text", text: "brain: unknown kind bug (note, fact, decision, gotcha, procedure)" }], isError: true });
+  expect(loadNotes(home).notes).toEqual([]);
+});
+
+it("names a SECOND_BRAIN_HOME that does not exist, and creates nothing there", async () => {
+  const missing = join(mkdtempSync(join(tmpdir(), "brain-mcp-")), "no-such-home");
+  homes.push(dirname(missing));
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = "";
+  output.setEncoding("utf8");
+  output.on("data", (chunk: string) => { text += chunk; });
+  const running = runMcp({ env: { SECOND_BRAIN_HOME: missing, BRAIN_PROJECT: "demo" }, input, output });
+  input.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "brain_note", arguments: { text: "lost note" } } }) + "\n");
+  expect(await running).toBe(0);
+  expect((JSON.parse(text) as Response).result).toEqual({ content: [{ type: "text", text: `brain: Brain home ${missing} does not exist (check SECOND_BRAIN_HOME or --home)` }], isError: true });
+  expect(existsSync(missing)).toBe(false);
 });
 
 it("logs scrubbed silent MCP queries without credential remnants", async () => {

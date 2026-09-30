@@ -1,10 +1,15 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createNote, differentBody, formatNote, headline, loadNotes, parseNote, retireNote, saveNote, staleEvidence, type Note } from "../src/notes.ts";
-import { addProjectTag, normalizePath, normalizeRemote, resolveProject, visibleTo } from "../src/project.ts";
-import { cutToTokens, estimateTokens, slug } from "../src/util.ts";
+import { addProjectDoc, addProjectTag, loadProjects, normalizePath, normalizeRemote, projectById, resolveProject, visibleTo } from "../src/project.ts";
+import { anchorSection, docAnswer, projectDocs } from "../src/docs.ts";
+import { staleHere } from "../src/search.ts";
+import { shareNote } from "../src/sync.ts";
+import { cutToTokens, estimateTokens, retrying, slug } from "../src/util.ts";
+import { workText } from "../src/work.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-"));
 
@@ -28,7 +33,7 @@ function sample(over: Partial<Note> = {}): Note {
 
 describe("notes", () => {
   it("round-trips every field, including values that need quoting", () => {
-    const note = sample({ errors: ["key: value # hash", "true", "  padded", "re:[a-z]+"], replaces: "n-1", retired: "2026-09-28T00:00:00Z", replacedBy: "n-2" });
+    const note = sample({ errors: ["key: value # hash", "true", "  padded", "re:[a-z]+"], host: "omp", replaces: "n-1", retired: "2026-09-28T00:00:00Z", replacedBy: "n-2" });
     const back = parseNote(formatNote(note), "/x", "demo", false);
     expect({ ...back, path: "" }).toEqual({ ...note, errors: ["key: value # hash", "true", "  padded", "re:[a-z]+"] });
   });
@@ -150,6 +155,10 @@ describe("file evidence", () => {
     expect(staleEvidence({ ...base, evidence: [join(home, "present.md")] }, [project])).toBe(false);
     expect(staleEvidence({ ...base, evidence: ["missing.ts", "events:missing.jsonl"] }, [home])).toBe(true);
     expect(staleEvidence({ ...base, evidence: ["present.md (checked locally)"] }, [home])).toBe(false);
+    for (const entry of ["present.md:1:4", "present.md#L3", "present.md#L3-L9", "present.md:sym", "present.md(1,4)", join(home, "present.md:2:1")]) {
+      expect(staleEvidence({ ...base, evidence: [entry] }, [home])).toBe(false);
+    }
+    expect(staleEvidence({ ...base, evidence: ["missing.md:1:4"] }, [home])).toBe(true);
   });
 
   it.each([[], ["events:missing.jsonl"], ["commit:abc1234"], ["https://example.test/missing.ts"], ["session:local/123"], ["owner confirmed this"], ["../outside.md"], ["src/../../outside.md"], ["..\\outside.md"]])("does not call non-file or escaping evidence stale: %j", (...evidence: string[]) => {
@@ -239,6 +248,240 @@ describe("project", () => {
     expect(resolveProject(home, plain, {}).id).toBe("some-folder");
   });
 
+  it("resolves a subfolder of a known plain folder to that folder, id and root", () => {
+    const home = tmp();
+    const plain = join(tmp(), "Absolute Laya");
+    mkdirSync(join(plain, "scripts", "deep"), { recursive: true });
+    expect(resolveProject(home, join(plain, "scripts"), {}).id).toBe("scripts");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { "absolute-laya": {} } }));
+    expect(resolveProject(home, join(plain, "scripts", "deep"), {})).toMatchObject({ id: "absolute-laya", root: plain });
+    expect(resolveProject(home, plain, {})).toMatchObject({ id: "absolute-laya", root: plain });
+  });
+
+  it("keeps a declared non-git folder as the root of a git repo inside it, so its docs resolve", () => {
+    const home = tmp();
+    const outer = join(tmp(), "Upscaler");
+    const inner = join(outer, "Upscaler");
+    mkdirSync(join(inner, ".git"), { recursive: true });
+    mkdirSync(join(inner, "tools"));
+    writeFileSync(join(inner, "PLAN.md"), "# Plan\n");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { up: { paths: [outer], docs: ["Upscaler/PLAN.md"] } } }));
+    const project = resolveProject(home, join(inner, "tools"), {});
+    expect(project).toMatchObject({ id: "up", root: inner, docRoot: outer });
+    expect(projectDocs(home, project)).toEqual([join(inner, "PLAN.md")]);
+  });
+
+  it("keeps a git repo inside a declared folder as the root for anchors, evidence and added docs", () => {
+    const home = tmp();
+    const outer = join(tmp(), "Up");
+    const inner = join(outer, "Upscaler");
+    mkdirSync(join(inner, ".git"), { recursive: true });
+    mkdirSync(join(inner, "docs"));
+    mkdirSync(join(inner, "src"));
+    writeFileSync(join(inner, "docs", "PLAN.md"), "# Plan\n\n## Phase two\n\nGovernor.\n");
+    writeFileSync(join(inner, "src", "g.rs"), "");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { up: { paths: [outer] } } }));
+    const project = resolveProject(home, inner, {});
+    expect(anchorSection(project.root!, "docs/PLAN.md#phase-two")).toBeDefined();
+    expect(staleHere(sample({ project: "up", evidence: ["src/g.rs"] }), project, home)).toBe(false);
+    expect(addProjectDoc(home, project, "docs/PLAN.md")).toBe(true);
+    expect(loadProjects(home).up?.docs).toEqual(["Upscaler/docs/PLAN.md"]);
+    for (const cwd of [inner, outer]) expect(projectDocs(home, resolveProject(home, cwd, {}))).toEqual([join(inner, "docs", "PLAN.md")]);
+  });
+
+  it("resolves anchors, evidence and doc answers against the declared folder from a repo inside it", () => {
+    const home = tmp();
+    const outer = join(tmp(), "Up");
+    const inner = join(outer, "Upscaler");
+    mkdirSync(join(inner, ".git"), { recursive: true });
+    mkdirSync(join(inner, "docs"));
+    writeFileSync(join(inner, "docs", "PLAN.md"), "# Plan\n\n## Phase two\n\nGovernor.\n");
+    writeFileSync(join(outer, "RESEARCH.md"), "# R\n\n## Findings\n\nTiles overlap.\n");
+    writeFileSync(join(outer, "notes.txt"), "x");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { up: { paths: [outer], docs: ["Upscaler/docs/PLAN.md", "RESEARCH.md"] } } }));
+    const project = resolveProject(home, inner, {});
+    const text = workText({ project: "up", at: new Date().toISOString(), autoAt: "", text: "Goal: g\nSee: Upscaler/docs/PLAN.md#phase-two\nSee: RESEARCH.md#findings", auto: "", path: "" }, project.root, project.docRoot);
+    expect(text).toContain("Governor.");
+    expect(text).toContain("Tiles overlap.");
+    expect(text).not.toContain("anchor missing");
+    expect(docAnswer(home, project, "findings tiles")?.text.startsWith("RESEARCH.md › Findings")).toBe(true);
+    // Spelled from the repo, so it opens from the agent's cwd; a doc outside the repo, against the folder.
+    const answer = docAnswer(home, project, "phase two governor");
+    expect(answer?.text.startsWith("docs/PLAN.md › Phase two")).toBe(true);
+    expect(existsSync(join(project.root!, answer!.path))).toBe(true);
+    expect(staleHere(sample({ project: "up", evidence: ["notes.txt"] }), project, home)).toBe(false);
+  });
+
+  it("resolves a registered doc against the declared folder before a same-named one in a repo inside it", () => {
+    const home = tmp();
+    const outer = tmp();
+    const app = join(outer, "app");
+    mkdirSync(join(app, ".git"), { recursive: true });
+    writeFileSync(join(outer, "PLAN.md"), "# Plan\n\n## Goals\n\nzebras\n");
+    writeFileSync(join(app, "PLAN.md"), "# App plan\n\n## Goals\n\ngiraffes\n");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { proj: { paths: [outer], docs: ["PLAN.md"] } } }));
+    const project = resolveProject(home, app, {});
+    expect(projectDocs(home, project)).toEqual([join(outer, "PLAN.md")]);
+    // A See: anchor names the doc recall pointed to, not the repo's same-named file.
+    const answer = docAnswer(home, project, "goals zebras");
+    expect(answer?.text).toBe("PLAN.md › Goals (line 3)");
+    const work = { project: "proj", at: new Date().toISOString(), autoAt: "", text: `Goal: g\nSee: ${answer!.path}#goals`, auto: "", path: "" };
+    expect(workText(work, project.root, project.docRoot, projectDocs(home, project))).toContain("zebras");
+    // An unregistered doc stays the repo's own.
+    expect(workText({ ...work, text: "Goal: g\nSee: PLAN.md#goals" }, project.root, project.docRoot, [])).toContain("giraffes");
+    expect(addProjectDoc(home, project, "PLAN.md")).toBe(true);
+    expect(loadProjects(home).proj?.docs).toEqual(["PLAN.md", "app/PLAN.md"]);
+    expect(addProjectDoc(home, project, "PLAN.md")).toBe(false);
+  });
+
+  it("stores a doc added in a linked worktree of a declared checkout as the checkout's own path", () => {
+    const home = tmp();
+    const main = join(tmp(), "mainrepo");
+    mkdirSync(main);
+    const git = (...args: string[]) => expect(spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=n", ...args], { cwd: main, encoding: "utf8" }).status).toBe(0);
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    git("worktree", "add", "-q", join(".claude", "worktrees", "feat-x"));
+    const worktree = join(main, ".claude", "worktrees", "feat-x");
+    mkdirSync(join(worktree, "docs"));
+    writeFileSync(join(worktree, "docs", "NEW.md"), "# New\n");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { mainrepo: { paths: [main] } } }));
+    const project = resolveProject(home, worktree, {});
+    expect(project).toMatchObject({ id: "mainrepo", root: worktree });
+    expect(project.docRoot).toBeUndefined();
+    expect(addProjectDoc(home, project, "docs/NEW.md")).toBe(true);
+    expect(loadProjects(home).mainrepo?.docs).toEqual(["docs/NEW.md"]);
+  });
+
+  it("stores a doc added in a worktree of a repo inside a declared folder against the declared folder", () => {
+    const home = tmp();
+    const outer = tmp();
+    const app = join(outer, "app");
+    mkdirSync(app);
+    const git = (...args: string[]) => expect(spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=n", ...args], { cwd: app, encoding: "utf8" }).status).toBe(0);
+    git("init", "-q");
+    mkdirSync(join(app, "docs"));
+    writeFileSync(join(app, "docs", "PLAN.md"), "# Plan\n\n## Status\n\nmain says: old status\n");
+    git("add", "docs/PLAN.md");
+    git("commit", "-q", "-m", "init");
+    git("worktree", "add", "-q", join(".claude", "worktrees", "x"));
+    const worktree = join(app, ".claude", "worktrees", "x");
+    writeFileSync(join(worktree, "docs", "PLAN.md"), "# Plan\n\n## Status\n\nworktree says: new status\n");
+    writeFileSync(join(worktree, "docs", "NEW.md"), "# New\n\n## Spec\n\nbrand new spec\n");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { proj: { paths: [outer], docs: ["app/docs/PLAN.md"] } } }));
+    const project = resolveProject(home, worktree, {});
+    expect(project).toMatchObject({ id: "proj", root: worktree, docRoot: outer });
+    expect(addProjectDoc(home, project, "docs/NEW.md")).toBe(true);
+    expect(loadProjects(home).proj?.docs).toEqual(["app/docs/PLAN.md", "app/docs/NEW.md"]);
+    expect(addProjectDoc(home, project, "docs/PLAN.md")).toBe(false);
+    // The worktree reads its own copies: the edited plan and the doc that exists only there.
+    expect(projectDocs(home, project)).toEqual([join(worktree, "docs", "PLAN.md"), join(worktree, "docs", "NEW.md")]);
+    const work = { project: "proj", at: new Date().toISOString(), autoAt: "", text: "Goal: g\nSee: app/docs/PLAN.md#status\nSee: app/docs/NEW.md#spec", auto: "", path: "" };
+    const shown = workText(work, project.root, project.docRoot, projectDocs(home, project));
+    expect(shown).toContain("worktree says");
+    expect(shown).toContain("brand new spec");
+    expect(shown).not.toContain("main says");
+    expect(shown).not.toContain("anchor missing");
+    expect(docAnswer(home, project, "spec brand new")?.path).toBe("docs/NEW.md");
+    // A heading the worktree's copy no longer has is missing, however the anchor is spelled: never main's.
+    writeFileSync(join(worktree, "docs", "PLAN.md"), "# Plan\n\n## State\n\nworktree says: new status\n");
+    for (const see of ["app/docs/PLAN.md#status", "docs/PLAN.md#status"]) {
+      const gone = workText({ ...work, text: `Goal: g\nSee: ${see}` }, project.root, project.docRoot, projectDocs(home, project));
+      expect(gone).not.toContain("main says");
+      expect(gone).toContain(`anchor missing: ${see}`);
+    }
+    // The main checkout keeps reading its own copy.
+    const main = resolveProject(home, app, {});
+    expect(projectDocs(home, main)).toEqual([join(app, "docs", "PLAN.md")]);
+    expect(workText(work, main.root, main.docRoot, projectDocs(home, main))).toContain("main says");
+  });
+
+  it("gives a project named explicitly its declared folder as root", () => {
+    const home = tmp();
+    const dir = tmp();
+    mkdirSync(join(dir, "docs"));
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "docs", "X.md"), "# X\n");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { p: { paths: [dir], docs: ["docs/X.md"] } } }));
+    const project = projectById(home, "p", join(dir, "sub"));
+    expect(project.root).toBe(dir);
+    expect(projectDocs(home, project)).toEqual([join(dir, "docs", "X.md")]);
+    expect(projectById(home, "other", join(dir, "sub")).root).toBeNull();
+  });
+
+  it("does not adopt an unregistered parent folder that merely has notes", () => {
+    const home = tmp();
+    const parent = join(tmp(), "parent");
+    mkdirSync(join(parent, "child"), { recursive: true });
+    mkdirSync(join(home, "notes", "parent"), { recursive: true });
+    expect(resolveProject(home, join(parent, "child"), {}).id).toBe("child");
+  });
+
+  it("never walks up to the home folder, even when it is registered", () => {
+    const home = tmp();
+    const owner = join(tmp(), "owner");
+    mkdirSync(join(owner, "AI-Knowledge"), { recursive: true });
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { owner: {} } }));
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = owner;
+    process.env.USERPROFILE = owner;
+    try {
+      expect(resolveProject(home, join(owner, "AI-Knowledge"), {}).id).toBe("ai-knowledge");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("names a linked worktree of a repo without a remote after the main checkout", () => {
+    const home = tmp();
+    const main = join(tmp(), "projA");
+    mkdirSync(main);
+    const git = (...args: string[]) => expect(spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=n", ...args], { cwd: main, encoding: "utf8" }).status).toBe(0);
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    git("worktree", "add", "-q", join(".claude", "worktrees", "feat-x"));
+    const worktree = join(main, ".claude", "worktrees", "feat-x");
+    mkdirSync(join(worktree, "src"));
+    expect(resolveProject(home, main, {}).id).toBe("proja");
+    for (const cwd of [worktree, join(worktree, "src")]) expect(resolveProject(home, cwd, {})).toMatchObject({ id: "proja", root: worktree });
+  });
+
+  it("never derives a Windows device name as a project id", () => {
+    const home = tmp();
+    expect(projectById(home, "aux", home).id).toBe("aux-project");
+    const repo = tmp();
+    mkdirSync(join(repo, ".git"));
+    writeFileSync(join(repo, ".git", "config"), '[remote "origin"]\n\turl = https://example.com/o/con.git\n');
+    expect(resolveProject(home, repo, {}).id).toBe("con-project");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { nul: {} } }));
+    expect(Object.keys(loadProjects(home))).toEqual(["nul-project"]);
+  });
+
+  it.skipIf(process.platform !== "win32" && process.platform !== "darwin")("stores an added doc as spelled on disk, once", () => {
+    const home = tmp();
+    const repo = tmp();
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(join(repo, "docs"));
+    writeFileSync(join(repo, "docs", "plan.md"), "# Plan\n");
+    const project = resolveProject(home, repo, {});
+    expect(addProjectDoc(home, project, "Docs/Plan.MD")).toBe(true);
+    expect(loadProjects(home)[project.id]?.docs).toEqual(["docs/plan.md"]);
+    expect(addProjectDoc(home, project, "docs/plan.md")).toBe(false);
+  });
+
+  it("tags the owner, not an alias, when a note under an old id is shared", () => {
+    const home = tmp();
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { owner: { aliases: ["old"] } } }));
+    const note = createNote(home, { project: "old", text: "Old id fact" });
+    shareNote(home, note.id, "t");
+    const projects = (JSON.parse(readFileSync(join(home, "projects.json"), "utf8")) as { projects: Record<string, { tags?: string[] }> }).projects;
+    expect(projects.owner?.tags).toEqual(["t"]);
+    expect(Object.keys(projects)).toEqual(["owner"]);
+  });
+
   it("scopes visibility by project and shared tags", () => {
     const project = { id: "demo", tags: ["python"], root: null };
     expect(visibleTo(sample(), project)).toBe(true);
@@ -259,6 +502,33 @@ describe("util", () => {
     expect(cut.endsWith("…")).toBe(true);
     expect(slug("  The 2nd Brain!! ")).toBe("the-2nd-brain");
     expect(slug("***")).toBe("default");
+  });
+
+  it("retries a held file briefly and rethrows any other error at once", () => {
+    const coded = (code: string) => Object.assign(new Error(code), { code });
+    let calls = 0;
+    expect(retrying(() => {
+      if (++calls < 3) throw coded("EPERM");
+      return 7;
+    })).toBe(7);
+    expect(calls).toBe(3);
+    calls = 0;
+    expect(() => retrying(() => {
+      calls++;
+      throw coded("ENOENT");
+    })).toThrow("ENOENT");
+    expect(calls).toBe(1);
+  });
+
+  it("keeps a moved note in one place when its old file cannot be removed", () => {
+    const home = tmp();
+    const note = createNote(home, { text: "Held while moving", project: "alpha" });
+    const held = join(tmp(), "held");
+    mkdirSync(held);
+    writeFileSync(join(held, "x"), "x");
+    expect(() => saveNote(home, { ...note, project: "beta", path: held })).toThrow(/not moved/);
+    expect(existsSync(join(home, "notes", "beta", `${note.id}.md`))).toBe(false);
+    expect(existsSync(note.path)).toBe(true);
   });
 });
 

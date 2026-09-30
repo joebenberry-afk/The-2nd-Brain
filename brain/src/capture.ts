@@ -15,7 +15,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
@@ -24,6 +24,7 @@ import { pausedFixes } from "./telemetry.ts";
 
 export { scrub };
 import {
+  EXIT_WRAPPER,
   GLOBAL,
   type Kind,
   createNote,
@@ -33,7 +34,7 @@ import {
   isActive,
   type Note,
 } from "./notes.ts";
-import { type Project, normalizePath, projectById, resolveProject, visibleTo } from "./project.ts";
+import { type Project, canonical, loadProjects, normalizePath, projectById, resolveProject, visibleTo } from "./project.ts";
 
 export const EVENT_CAP_BYTES = 5 * 1024 * 1024;
 export const EVENT_RETENTION_DAYS = 14;
@@ -270,7 +271,7 @@ const INLINE_FLAG: Record<string, RegExp> = {
  * A scratch location: an OS temp root anywhere, or a repo-relative path that starts in tmp/,
  * temp/, cache/ or .cache/. A deeper folder of that name (test/cache/x.test.ts) is real code.
  */
-function scratchPath(arg: string): boolean {
+export function scratchPath(arg: string): boolean {
   const path = arg.replace(/^--?[\w-]+=/, "").replace(/^['"]|['"]$/g, "").replace(/\\/g, "/");
   if (/^(?:\/tmp|\/var\/tmp|%TEMP%|%TMP%|\$\{?(?:TMPDIR|TEMP|TMP)\}?|\$env:TE?MP)(?:\/|$)/i.test(path)) return true;
   if (/(?:^|\/)AppData\/Local\/Temp(?:\/|$)/i.test(path)) return true;
@@ -327,30 +328,52 @@ function retriesCommand(failed: string, fixed: string): boolean {
   });
 }
 
+/** A command that rewrites files (sed/perl/ruby -i, a > or >> redirect): a later success may be the edit's. */
+function editsFiles(command: string): boolean {
+  return commandSegments(command).some(({ argv }) => {
+    const { program, argv: args } = commandIdentity(argv);
+    if (/^(?:sed|perl|ruby)$/.test(program) && args.slice(1).some((arg) => /^-[a-z\d]*i/.test(arg) || arg.startsWith("--in-place"))) return true;
+    // `>&2` and `2>&1` duplicate a stream; /dev/null and NUL keep nothing.
+    return argv.some((arg, k) => /^>>?/.test(arg) && !/^(?:\/dev\/null|nul|\$null|&?\d)$/i.test(arg.replace(/^>>?/, "") || argv[k + 1] || ""));
+  });
+}
+
 /** Tools that run code cells (python, ipython, a notebook, a JS REPL): their "command" is code, not a shell command. */
 const CODE_TOOL = /python|notebook|repl|jupyter|^js$|javascript|eval/i;
-
-/** A host's exit-status wrapper says that a command failed, never why. */
-const EXIT_WRAPPER = /^(?:command|process)? ?exited with (?:code|status) -?\d+\.?$|^exit (?:code|status):? -?\d+$/i;
 
 /** Host plumbing, not the project: an aborted wait or a cancelled job says nothing about the code. */
 export function hostNoise(tool: string, error: string): boolean {
   return /^(?:wait|await|cancel|job|jobs|yield|todo|ask)$/i.test(tool) || /\b(?:aborted|cancell?ed)\b/i.test(errorSignature(error));
 }
 
+/** The event log's per-value tags (***a1b2c3) stay out of anything shown. */
+export const untag = (s: string): string => s.replace(/\*\*\*[0-9a-f]{6}/g, "***");
+
+/** An echoed source line (optionally behind a code-frame gutter) or a stack frame, not a diagnostic. */
+const SOURCE_LINE = /^(?:\d+\s*[|:]\s*)?(?:import\b|from\s+\S+\s+import\b|(?:export\s+)?(?:const|let|var|function|class|interface|type)\b|(?:throw|raise|return)\b|(?:expect|assert)\s*\(|at\s+|Node\.js v\d|[{}^|])/;
+/** A line that is only a location (path:line[:col]). */
+const LOCATION_LINE = /^(?:(?:file:\/\/\/|(?:[A-Za-z]:)?[\/\\]|[\w.-]+[\/\\]).*:\d+(?::\d+)?|\S+:\d+(?::\d+)?\)?)$/;
+
 /** Error-like diagnostic, not an echoed source line; prefer whole words without losing specificity. */
 export function errorSignature(error: string, max = 120): string {
   const lines = error.replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).filter((l) => l.trim());
   const banner = /^(traceback \(most recent call last\):|during handling of the above exception|the above exception was the direct cause|[=_*#~-]{3,}.*[=_*#~-]{3,}$|[=_*#~-]{5,}$)/i;
-  const code = /^(?:\d+\s*[|:]\s*)?(?:import\b|from\s+\S+\s+import\b|(?:export\s+)?(?:const|let|var|function|class|interface|type)\b|(?:throw|raise|return)\b|(?:expect|assert)\s*\(|at\s+|Node\.js v\d|[{}^|])/;
-  const location = /^(?:(?:file:\/\/\/|(?:[A-Za-z]:)?[\/\\]|[\w.-]+[\/\\]).*:\d+(?::\d+)?|\S+:\d+(?::\d+)?\)?)$/;
   const trimmed = lines.map((l) => l.trim());
-  const useful = trimmed.filter((l) => /[\p{L}\p{N}]/u.test(l) && !/^Wall time:/i.test(l) && !banner.test(l) && !code.test(l) && !location.test(l) && !EXIT_WRAPPER.test(l));
+  // OMP's output notices ("[raw output: artifact://12]") carry a per-run number: never the error.
+  const useful = trimmed.filter((l) => /[\p{L}\p{N}]/u.test(l) && !/^Wall time:/i.test(l) &&
+    !/^\[(?:Some lines truncated|raw output:|Showing lines)[^\]]*artifact:\/\//i.test(l) &&
+    !banner.test(l) && !SOURCE_LINE.test(l) && !LOCATION_LINE.test(l) && !EXIT_WRAPPER.test(l));
   const exception = [...useful].reverse().find((l) => /^(E\s+)?[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b.*:/.test(l));
-  const keyword = /error|fail|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable/i;
-  const diagnostic = /error|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable/i;
-  // The wrapper is the last resort: "exited with code 1" still beats an empty failure line.
-  const hit = exception?.replace(/^E\s+/, "") ?? useful.find((l) => diagnostic.test(l)) ?? useful.find((l) => keyword.test(l)) ?? useful[0] ?? trimmed.find((l) => EXIT_WRAPPER.test(l)) ?? "";
+  // "not recognized": cmd.exe and PowerShell's missing-command error.
+  const keyword = /error|fail|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable|unexpected|not recognized/i;
+  const diagnostic = /error|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable|not recognized/i;
+  // The wrapper is the last resort: "exited with code 1" still beats an empty failure line. When it
+  // comes first (Claude Code: "Exit code N", then all output), the lines after it are stdout, unless
+  // one reads as a keyword-less diagnostic (git "fatal:", "Unknown option", "Could not", "not empty").
+  // Only this branch: the shared regexes above would reorder OMP's signatures.
+  const wrapper = trimmed.find((l) => EXIT_WRAPPER.test(l));
+  const hit = exception?.replace(/^E\s+/, "") ?? useful.find((l) => diagnostic.test(l)) ?? useful.find((l) => keyword.test(l)) ??
+    (wrapper === trimmed[0] ? useful.find((l) => /^fatal:|unknown option|could not|not empty/i.test(l)) ?? wrapper : useful[0] ?? wrapper) ?? "";
   // Test runners prefix diagnostics with arrows and bullets (vitest "→", "❯"): not the message.
   return signatureCut(hit.replace(/^[→❯›»•·*>\s-]+/u, "").replace(/\s+/g, " "), max);
 }
@@ -362,8 +385,22 @@ function signatureCut(text: string, max: number): string {
   return (/\s/.test(whole.trim()) ? whole : cut).trimEnd();
 }
 
-/** A private path in any event field must never become a public proposal. */
+/** The Brain's own CLI: `brain`, `brain.cmd`, `…/brain.mjs`, or an interpreter running …/brain or …/brain.mjs. */
+function runsBrain(command: string): boolean {
+  return commandSegments(command).some(({ argv }) => {
+    const { program, argv: args } = commandIdentity(argv);
+    const script = args.slice(1).find((arg) => !arg.startsWith("-")) ?? "";
+    return /^brain(?:\.mjs)?$/.test(program) || /^(?:node|bun|bash|sh)$/.test(program) && /(?:^|[\\/])brain(?:\.mjs)?$/i.test(script);
+  });
+}
+
+/**
+ * A private path in any event field must never become a public proposal, nor a private note
+ * written through the CLI (its text is in the command). The CLI is matched in the text, so a
+ * wrapper (bash -c '…', pwsh -Command "…") is covered too.
+ */
 function touchesPrivate(event: Pick<ToolEvent, "cwd" | "command" | "path" | "error">): boolean {
+  if (event.command !== undefined && /\s--priv/i.test(event.command) && /(?:^|[\s'"(\\/])brain(?:\.mjs|\.cmd|\.ps1)?(?=[\s'"]|$)/i.test(event.command)) return true;
   return [event.cwd, event.command, event.path, event.error].some((text) =>
     text !== undefined && /(?:^|[\\/\s"'=:(])notes[\\/][^\\/\s]+[\\/]private(?:[\\/]|$)/i.test(text),
   );
@@ -435,10 +472,11 @@ export function appendEvent(
     }
 
     // Scrub and truncate fields
-    // The log is local (state/): credentials are masked, long runs are kept so the signatures
-    // derived from it match future raw errors. Proposals made from it get the full scrub.
+    // The log is local (state/): commands get the full scrub, each long run tagged by its hash so
+    // commands differing only in a SHA or token never compare equal; errors keep long runs so the
+    // signatures derived from them match future raw errors. Proposals get the full scrub.
     // Bound expensive error scrubbing, preserving context before the small head/tail cut.
-    const command = fields.command ? cutToTokens(scrubCut(fields.command, 1000), 125) : undefined;
+    const command = fields.command ? cutToTokens(headAndTail(scrub(headAndTail(fields.command, 32_768), { tagRuns: true }).text, 1000), 125) : undefined;
     const error = fields.error ? scrubCut(fields.error, 300) : undefined;
     const path = fields.path ? scrub(fields.path, { longRuns: false }).text.slice(0, 300) : undefined;
 
@@ -473,11 +511,20 @@ function rejectKey(kind: "h" | "e", text: string): string {
   return createHash("sha256").update(`${kind}:${text.toLowerCase()}`).digest("hex").slice(0, 16);
 }
 
+/**
+ * A rejected error signature holds in its own project only: the owner declined a fix, not the error.
+ * Rejections written before that are unscoped (rejectKey("e", err)) and keep their reach.
+ */
+const errorKey = (project: string, err: string) => rejectKey("e", `${project}\n${err}`);
+
+/** rejected.json's content; a UTF-8 BOM (PowerShell 5.1's Out-File, older editors) is not JSON. */
+const parseRejected = (text: string): unknown => JSON.parse(text.replace(/^\uFEFF/, ""));
+
 /** The rejection hashes in one rejected.json text; plain `texts`/`signatures` of older files are hashed. */
 function rejectedKeys(text: string): string[] {
   let data: Record<string, unknown> = {};
   try {
-    data = asRecord(JSON.parse(text));
+    data = asRecord(parseRejected(text));
   } catch {
     return [];
   }
@@ -545,7 +592,7 @@ function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[], 
   const matches = (body: string, patterns: string[]) => identity(body) === head || patterns.some((error) => errors.has(error.toLowerCase()));
   if (seen.notes.some((note) => visibleTo(note, project) && matches(note.body, note.errors))) return false;
   if (seen.proposals.some((p) => (p.project === GLOBAL || p.project === proposal.project) && matches(p.text, p.errors))) return false;
-  if (seen.rejected.has(rejectKey("h", head)) || proposal.errors.some((e) => seen.rejected.has(rejectKey("e", e)))) return false;
+  if (seen.rejected.has(rejectKey("h", head)) || proposal.errors.some((e) => seen.rejected.has(errorKey(proposal.project, e)) || seen.rejected.has(rejectKey("e", e)))) return false;
   seen.proposals.push(proposal);
   saveProposal(home, proposal);
   out.push(proposal);
@@ -566,9 +613,14 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
   const cursor = readJson<Record<string, number>>(cursorFile, {});
   const seen = seenBefore(home, notes);
   const proposals: Proposal[] = [];
-  // Evidence survives a waiting cursor, so a later scan cannot reuse an earlier repair.
-  const consumed = new Set([...seen.proposals, ...notes].flatMap((item) => item.evidence)
-    .filter((ref) => /^events:.*#\d+-\d+$/.test(ref)).map((ref) => ref.replace(/#\d+-/, "#")));
+  // Evidence survives a waiting cursor, so a later scan cannot reuse an earlier repair, nor pair an
+  // already paired failure again (both ends are consumed; a failure and a success never share an offset).
+  const consumed = new Set([...seen.proposals, ...notes].flatMap((item) => item.evidence).flatMap((ref) => {
+    const m = /^(events:.*)#(\d+)-(\d+)$/.exec(ref);
+    return m ? [`${m[1]}#${m[2]}`, `${m[1]}#${m[3]}`] : [];
+  }));
+  // The Brain home's gitignored state/ holds the owner's one-off analysis scripts, not project code.
+  const homeState = normalizePath(resolve(home, "state")) + "/";
 
   for (const fileName of readdirSync(dir).filter((n) => n.endsWith(".jsonl")).sort()) {
     const filePath = join(dir, fileName);
@@ -602,22 +654,31 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
 
       for (let i = 0; i < events.length; i++) {
         const failed = events[i];
+        if (consumed.has(`events:${fileName}#${starts[i] ?? i}`)) continue;
         if (!failed || failed.ok !== false || !failed.command || !failed.error || touchesPrivate(failed) || ephemeralCommand(failed.command)) continue;
         // Two code cells are not a failed command and its fix, unless they are shell cells.
         if (CODE_TOOL.test(failed.tool) && !/^(%%(bash|sh|cmd|powershell|pwsh)\b|!)/.test(failed.command.trim())) continue;
         const identity = commandIdentity(failed.command);
         const prog = identity.program;
-        if (!prog || EXPLORATION.has(prog)) continue;
+        // The Brain's own CLI fails on usage, not on the project.
+        if (!prog || EXPLORATION.has(prog) || runsBrain(failed.command)) continue;
+        // Only the failure: keepsCommand requires the fix to keep its positionals.
+        if (failed.cwd && commandSegments(failed.command).some(({ argv }) => commandIdentity(argv).argv.slice(1).some((arg) =>
+          normalizePath(resolve(failed.cwd, arg.replace(/^['"]|['"]$/g, ""))).startsWith(homeState)))) continue;
         let paired = false;
         for (let j = i + 1; j < Math.min(i + 7, events.length); j++) {
           const fixed = events[j];
           if (fixed?.ok === true && /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i.test(fixed.tool)) break;
+          // A command cut in the log may hide `|| true`, a pipe or an edit past the cut: neither it
+          // nor a later success can be trusted as the fix.
+          if (fixed?.ok === true && fixed.command?.endsWith("…")) break;
+          if (fixed?.ok === true && fixed.command && !CODE_TOOL.test(fixed.tool) && editsFiles(fixed.command)) break;
           if (consumed.has(`events:${fileName}#${starts[j] ?? j}`) || !fixed || fixed.tool !== failed.tool || fixed.ok !== true || !fixed.command || touchesPrivate(fixed)) continue;
           if (normalizePath(fixed.cwd) !== normalizePath(failed.cwd) || ephemeralCommand(fixed.command)) continue;
           if (fixed.command === failed.command || !keepsCommand(failed.command, fixed.command)) continue;
           const retriesFailure = retriesCommand(failed.command, fixed.command);
-          const failedCmd = scrub(failed.command).text.replace(/\s+/g, " ").trim();
-          const fixedCmd = cutToTokens(scrub(fixed.command).text.replace(/\s+/g, " ").trim(), 125);
+          const failedCmd = untag(scrub(failed.command).text).replace(/\s+/g, " ").trim();
+          const fixedCmd = cutToTokens(untag(scrub(fixed.command).text).replace(/\s+/g, " ").trim(), 125);
           const error = scrub(failed.error).text;
           const short = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 60);
           // The signature is matched against future raw errors: only credentials are masked in it.
@@ -711,13 +772,15 @@ export function scanCommits(home: string, repoRoot: string, project: string, not
 }
 
 /**
- * List all proposals in the inbox, sorted by at, then id.
+ * List all proposals in the inbox, sorted by at, then id. A project id that has since become an
+ * alias is shown as its owner, so review, the card count and accept follow the rename.
  */
 export function listProposals(home: string): Proposal[] {
   const dir = join(home, "state", "inbox");
   const proposals: Proposal[] = [];
 
   if (!existsSync(dir)) return proposals;
+  const projects = loadProjects(home);
 
   for (const name of readdirSync(dir).sort()) {
     if (!name.endsWith(".json")) continue;
@@ -725,7 +788,7 @@ export function listProposals(home: string): Proposal[] {
       const prop = JSON.parse(
         readFileSync(join(dir, name), "utf8")
       ) as Proposal;
-      proposals.push(prop);
+      proposals.push({ ...prop, project: prop.project === GLOBAL ? GLOBAL : canonical(projects, prop.project) });
     } catch {
       // Skip malformed
     }
@@ -760,10 +823,10 @@ export function acceptProposal(home: string, id: string): Note {
     );
   }
 
-  // Create note
+  // Create note (under the owner when its project id has since become an alias)
   const note = createNote(home, {
     text: prop.text,
-    project: prop.project,
+    project: prop.project === GLOBAL ? GLOBAL : canonical(loadProjects(home), prop.project),
     kind: prop.kind,
     errors: prop.errors,
     evidence: prop.evidence,
@@ -802,10 +865,27 @@ export function rejectProposal(home: string, id: string): void {
     );
   }
 
+  // Rewriting an unreadable rejected.json from what could be read would drop every rejection in it.
+  const path = rejectedPath(home);
+  let current = "";
+  try {
+    current = readFileSync(path, "utf8");
+  } catch {
+    // none yet
+  }
+  if (current.trim()) {
+    try {
+      parseRejected(current);
+    } catch {
+      throw new CaptureError(`${path} is not valid JSON; fix or remove it before rejecting`);
+    }
+  }
   const rejected = readRejected(home);
   rejected.add(rejectKey("h", identity(prop.text)));
-  for (const err of prop.errors) rejected.add(rejectKey("e", err));
-  writeAtomic(rejectedPath(home), formatRejected(rejected));
+  // Listed under its owner once its project id became an alias (listProposals), so rejected there.
+  const project = prop.project === GLOBAL ? GLOBAL : canonical(loadProjects(home), prop.project);
+  for (const err of prop.errors) rejected.add(errorKey(project, err));
+  writeAtomic(path, formatRejected(rejected));
 
   // Delete inbox file
   try {
@@ -819,29 +899,7 @@ export function rejectProposal(home: string, id: string): void {
  * Count pending proposals, optionally filtered by project.
  */
 export function pendingCount(home: string, project?: string): number {
-  const dir = join(home, "state", "inbox");
-  if (!existsSync(dir)) return 0;
-
-  let count = 0;
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".json")) continue;
-    if (project) {
-      try {
-        const prop = JSON.parse(
-          readFileSync(join(dir, name), "utf8")
-        ) as Proposal;
-        if (prop.project === project || prop.project === GLOBAL) {
-          count += 1;
-        }
-      } catch {
-        // Skip malformed
-      }
-    } else {
-      count += 1;
-    }
-  }
-
-  return count;
+  return listProposals(home).filter((p) => !project || p.project === project || p.project === GLOBAL).length;
 }
 
 const regexCache = new Map<string, RegExp | null>();
@@ -856,7 +914,24 @@ function safeRegex(pattern: string): RegExp | null {
 }
 
 /**
- * Find an eligible fix for an error: active, tested, errors.length > 0, visibleTo project.
+ * A failure without the echoed data it may carry (Claude Code's error holds all of stdout): a
+ * printed note's frontmatter (it lists its own patterns), gutter code frames (`5| …`, ` | ^`),
+ * numbered source echoes (`12: const x = …`) and location-only lines quote a pattern without being
+ * the error. Everything else stays: JSON logs, `type 'Null' is…`, `at least one file…` and YAML
+ * between `---` separators are real diagnostics.
+ */
+function diagnosticText(text: string): string {
+  return text.replace(/\r\n/g, "\n")
+    .replace(/^---[ \t]*\n(?=(?:id|kind|at|source|tags|errors|tested):)[\s\S]*?\n---[ \t]*$/gm, "")
+    .split("\n").filter((line) => {
+      const plain = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
+      return !/^\*?\d*\s*\|/.test(plain) && !(/^\*?\d+\s*[|:]/.test(plain) && SOURCE_LINE.test(plain.replace(/^\*/, ""))) && !LOCATION_LINE.test(plain);
+    }).join("\n");
+}
+
+/**
+ * Find an eligible fix for an error: active, tested, errors.length > 0, visibleTo project, not
+ * scoped to another host, and not echoed by the output (its own id appears in it).
  * Match by longest pattern (regex: "re:" prefix, case-insensitive; else substring).
  * Ties: smallest id wins.
  */
@@ -865,14 +940,19 @@ export function findFix(
   errorText: string,
   project: Project | null,
   /** The Brain home whose telemetry judges fixes: given, a fix that stopped helping is skipped. */
-  home?: string
+  home?: string,
+  /** The host whose tool failed: given, a note scoped to another host is skipped. */
+  host?: "omp" | "claude-code"
 ): Note | null {
   if (!errorText.trim()) return null;
 
   // Patterns may come from scrubbed text (older logs, hand-written notes with ***) or from an
   // error signature (colour codes stripped, whitespace collapsed): match the raw error, its
   // scrubbed form and its normalized form.
-  errorText = headAndTail(errorText, 4000); // patterns run on every failed result: bounded input
+  const bounded = headAndTail(errorText, 4000); // patterns run on every failed result: bounded input
+  // A real diagnostic never names a Brain note: an id in the output is a printed note, card or recall.
+  const echoed = bounded.toLowerCase();
+  errorText = diagnosticText(bounded);
   const scrubbed = scrub(errorText).text;
   const flat = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\s+/g, " ");
   const haystack = `${errorText}\n${scrubbed}\n${flat(errorText)}\n${flat(scrubbed)}`.toLowerCase();
@@ -883,7 +963,8 @@ export function findFix(
 
   for (const note of notes) {
     if (!isActive(note) || !note.tested || !note.errors.length) continue;
-    if (!visibleTo(note, project)) continue;
+    if (!visibleTo(note, project) || (host && note.host && note.host !== host)) continue;
+    if (echoed.includes(note.id.toLowerCase())) continue;
     if (home) {
       demoted ??= pausedFixes(home, notes);
       if (demoted.has(note.id)) continue;

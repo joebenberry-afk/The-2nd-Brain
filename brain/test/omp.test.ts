@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, type HostLike } from "../src/omp.ts";
-import { createNote, loadNotes } from "../src/notes.ts";
+import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
 import { readWork, writeWork } from "../src/work.ts";
 import { stats } from "../src/telemetry.ts";
@@ -289,6 +289,19 @@ describe("OMP extension", () => {
     expect(fixText()).toBe(`\nBrain: same fix as above [${note.id}]`);
     handlers.get("context")!({ messages: [{}] }, c);
     expect(fixText()).toContain("Fix for SRE mismatch");
+  });
+
+  it("fires only fixes scoped to OMP or to no host", () => {
+    const workDir = join(root, "work");
+    mkdirSync(workDir, { recursive: true });
+    const { handlers } = load();
+    const cc = createNote(home, { text: "Claude Code only fix", project: "global", kind: "gotcha", errors: ["String to replace not found"], tested: true });
+    saveNote(home, { ...cc, host: "claude-code" });
+    const omp = createNote(home, { text: "OMP only fix", project: "global", kind: "gotcha", errors: ["is not from this session."], tested: true });
+    saveNote(home, { ...omp, host: "omp" });
+    const result = (text: string) => (handlers.get("tool_result")!({ toolName: "edit", input: { path: "a.ts" }, isError: true, content: [{ type: "text", text }] }, ctx("s-host", workDir)) as any)?.content;
+    expect(result("String to replace not found in file.")).toBeUndefined();
+    expect(result("Hash abc is not from this session.")?.[1]?.text).toContain("OMP only fix");
   });
 
   it("untested note → no fix appended", () => {
@@ -586,6 +599,16 @@ describe("OMP extension", () => {
     const identical = (await noteTool.execute("same", { text: "Plugin setup\n\nUse the project plugin", tested: true }, ctx("parent")));
     expect(identical.content[0].text).toBe("updated " + existing.id);
     expect(loadNotes(home).notes[0]?.tested).toBe(true);
+  });
+
+  it("brain_note: null optional fields mean unset; an unknown kind is refused", async () => {
+    const { tools } = load({ SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" }, true);
+    const noteTool = tools.find((t: any) => t.name === "brain_note") as any;
+    const refused = (await noteTool.execute("bug", { text: "Kind probe", kind: "bug" }, ctx("parent"))).content[0].text;
+    expect(refused).toBe("brain: unknown kind bug (note, fact, decision, gotcha, procedure)");
+    const saved = (await noteTool.execute("nulls", { text: "Kind probe", kind: null, error: null, tested: null, global: null }, ctx("parent"))).content[0].text;
+    expect(saved).toMatch(/^saved n-/);
+    expect(loadNotes(home).notes.map((note) => note.kind)).toEqual(["note"]);
   });
 
   it("subagent notes cannot claim verification or upgrade an existing note to tested", async () => {

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,7 +7,7 @@ import { CARD_BUDGET, cardCandidates, rankForCard, renderCard } from "../src/car
 import { createNote, loadNotes, saveNote, type Note } from "../src/notes.ts";
 import type { Project } from "../src/project.ts";
 import { cutToTokens, estimateTokens } from "../src/util.ts";
-import { logUse, stats, telemetryPath } from "../src/telemetry.ts";
+import { logUse, rotateTelemetry, stats, telemetryPath } from "../src/telemetry.ts";
 import { writeAuto, writeWork } from "../src/work.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-card-"));
@@ -239,6 +239,27 @@ describe("recurring known fix", () => {
     expect(estimateTokens(two)).toBeLessThanOrEqual(400);
   });
 
+  it("counts only fires from the same host, so an OMP-only mistake stays off Claude Code cards", () => {
+    const home = tmp();
+    const fix = createNote(home, { text: "OMP edit anchors come from displayed lines", project: "global", kind: "gotcha", tested: true, errors: ["never displayed"] });
+    const card = (host?: "omp" | "claude-code") => renderCard(home, loadNotes(home).notes, project, { host, now: NOW });
+    // `brain fix` rows (via "cli") belong to neither host.
+    for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: false, via: "cli", id: fix.id }, NOW);
+    expect(card("omp")).not.toContain("Often hit lately");
+    expect(card("claude-code")).not.toContain("Often hit lately");
+    for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: false, id: fix.id }, NOW);
+    expect(card("omp")).toContain("Often hit lately");
+    expect(card()).toContain("Often hit lately");
+    expect(card("claude-code")).not.toContain("Often hit lately");
+    for (const s of ["x", "y", "z"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: false, via: "hook", id: fix.id }, NOW);
+    expect(card("claude-code")).toContain(`3× [gotcha, tested]`);
+    expect(card("omp")).toContain(`3× [gotcha, tested]`);
+    // A note scoped to one host is never said up front on the other host's card.
+    saveNote(home, { ...fix, host: "omp" });
+    expect(card("claude-code")).not.toContain("Often hit lately");
+    expect(card("omp")).toContain(`3× [gotcha, tested]`);
+  });
+
   it("keeps a recurring fix too long for its slot as an ordinary note", () => {
     const home = tmp();
     const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(105), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
@@ -343,3 +364,91 @@ describe("local usage telemetry", () => {
   });
 });
 
+
+describe("telemetry session roles and rotation", () => {
+  const raw = (home: string, rows: object[]) => {
+    mkdirSync(join(home, "state"), { recursive: true });
+    writeFileSync(telemetryPath(home), rows.map((r) => JSON.stringify({ at: NOW.toISOString(), project: "demo", tokens: 1, ms: 1, ...r })).join("\n") + "\n");
+  };
+
+  it("takes a session's role from rows of every build, but counts only newest-build use", () => {
+    const home = tmp();
+    raw(home, [
+      { session: "S", via: "hook", sub: false, kind: "card", v: "t00001" },
+      { session: "S", via: "cli", kind: "recall", v: "t00002" },
+    ]);
+    expect(stats(home, 7, NOW).toolUse.main).toEqual({ sessions: 1, using: 1 });
+  });
+
+  it("keeps a session with a main card main when an older build logged its child's fixes under it", () => {
+    const home = tmp();
+    raw(home, [
+      { session: "S", via: "hook", sub: true, kind: "fix", id: "n-a", v: "t00001" },
+      { session: "S", via: "hook", sub: false, kind: "card", v: "t00002" },
+      { session: "S", via: "cli", kind: "recall", v: "t00002" },
+    ]);
+    expect(stats(home, 7, NOW).toolUse).toEqual({ main: { sessions: 1, using: 1 }, sub: { sessions: 0, using: 0 } });
+  });
+
+  it("does not count a `brain card` preview as a delivered card or a known session", () => {
+    const home = tmp();
+    const base = { project: "demo", tokens: 1, ms: 1 };
+    logUse(home, { ...base, kind: "card", session: "main" }, NOW);
+    logUse(home, { ...base, kind: "card", session: "preview", via: "cli" }, NOW);
+    const s = stats(home, 7, NOW);
+    expect(s.cards.main).toBe(1);
+    expect(s.toolUse.main.sessions).toBe(1);
+    expect(s.byKind.card).toEqual({ count: 2, tokens: 2 });
+  });
+
+  it("leaves Claude Code children, seen only through hook rows, out of the sub rate", () => {
+    const home = tmp();
+    raw(home, [
+      { session: "omp-child", sub: true, kind: "card" },
+      { session: "omp-child", sub: true, via: "tool", kind: "recall" },
+      { session: "P:agent:x", sub: true, via: "hook", kind: "fix", id: "n-a" },
+      { session: "P:agent:x", sub: true, via: "hook", kind: "fix", id: "n-b" },
+    ]);
+    expect(stats(home, 7, NOW).toolUse.sub).toEqual({ sessions: 1, using: 1 });
+  });
+
+  it("a rotation that lost the race hands the fresh file back instead of replacing the full one", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state"), { recursive: true });
+    const rotated = join(home, "state", "telemetry.1.jsonl");
+    writeFileSync(rotated, "x".repeat(1_100_000) + "\n");
+    const row = JSON.stringify({ at: NOW.toISOString(), kind: "note", project: "demo", tokens: 1, ms: 1 }) + "\n";
+    writeFileSync(telemetryPath(home), row);
+    rotateTelemetry(home, 1_048_576);
+    expect(statSync(rotated).size).toBeGreaterThanOrEqual(1_048_576);
+    expect(readFileSync(telemetryPath(home), "utf8")).toBe(row);
+    expect(readdirSync(join(home, "state")).filter((name) => name.endsWith(".rot"))).toEqual([]);
+  });
+
+  it("rotates a full file to telemetry.1.jsonl", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state"), { recursive: true });
+    const full = "y".repeat(1_100_000) + "\n";
+    writeFileSync(telemetryPath(home), full);
+    rotateTelemetry(home, 100);
+    expect(readFileSync(join(home, "state", "telemetry.1.jsonl"), "utf8")).toBe(full);
+    expect(existsSync(telemetryPath(home)) ? readFileSync(telemetryPath(home), "utf8") : "").toBe("");
+    expect(readdirSync(join(home, "state")).filter((name) => name.endsWith(".rot"))).toEqual([]);
+  });
+
+  it("keeps the rows readable when telemetry.1.jsonl cannot be replaced", () => {
+    const home = tmp();
+    // Renaming a file over a directory fails everywhere: EPERM on Windows, EISDIR on Linux.
+    mkdirSync(join(home, "state", "telemetry.1.jsonl"), { recursive: true });
+    const full = "y".repeat(1_100_000) + "\n";
+    writeFileSync(telemetryPath(home), full);
+    rotateTelemetry(home, 100);
+    expect(readFileSync(telemetryPath(home), "utf8")).toBe(full);
+    expect(readdirSync(join(home, "state")).filter((name) => name.endsWith(".rot"))).toEqual([]);
+    // Each row tries once: a rotated file that stays held must not stall every card, fix and call.
+    const started = performance.now();
+    for (let i = 0; i < 3; i++) logUse(home, { kind: "card", project: "demo", tokens: 1, ms: 1 });
+    expect(performance.now() - started).toBeLessThan(300);
+    expect(readFileSync(telemetryPath(home), "utf8").startsWith(full)).toBe(true);
+  });
+});

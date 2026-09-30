@@ -2,9 +2,12 @@
  * One local line per Brain moment, so "is this used?" is answered by data (plan rule 1).
  * `<home>/state/telemetry.jsonl`: local usage, including subagent and recall-hit data. Past 1 MiB
  * it is renamed to `telemetry.1.jsonl` (replacing the previous one): a rename, never a rewrite, so a
- * concurrent session's append lands in one file or the other and is never lost. Never throws.
+ * concurrent session's append lands in one file or the other and is never lost. Only a full file
+ * can replace the rotated one; a held rotated file hands the rows back to telemetry.jsonl (the next
+ * row retries); only a crash between the two renames, or a failed hand-back, can leave a `*.rot`
+ * file, which no reader sees. Never throws.
  */
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./util.ts";
@@ -36,8 +39,9 @@ export interface Use {
 
 /**
  * The code that wrote a row: newest mtime among the Brain's source files, taken when this module
- * loads, so a session keeps naming the code it runs even after the files change under it. A
- * week's rows can mix builds; stats reads the newest by default.
+ * loads. OMP and MCP processes keep the build they started with; hooks and CLI calls stamp the
+ * build current at each call. A week's rows can mix builds; stats counts the newest by default,
+ * and takes a session's role from all its rows in the window.
  */
 const BUILD = ((): string => {
   try {
@@ -60,14 +64,38 @@ export function logUse(home: string, use: Use, now: Date = new Date()): void {
     mkdirSync(join(home, "state"), { recursive: true });
     const path = telemetryPath(home);
     const row = JSON.stringify({ at: nowIso(now), ...use, ...(use.query === undefined ? {} : { query: scrub(use.query).text.slice(0, 200) }), ms: Math.round(use.ms * 10) / 10, ...(BUILD ? { v: BUILD } : {}) }) + "\n";
-    try {
-      if (statSync(path).size + Buffer.byteLength(row) > MAX_BYTES) renameSync(path, join(home, "state", "telemetry.1.jsonl"));
-    } catch {
-      // no file yet, or another session rotated it first
-    }
+    rotateTelemetry(home, Buffer.byteLength(row));
     appendFileSync(path, row);
   } catch {
     // telemetry must never affect the caller
+  }
+}
+
+/**
+ * Rotate a full telemetry file. The file is claimed by a rename first, so a session that lost the
+ * race to rotate hands back the fresh file it took instead of putting it over the rotated one.
+ */
+export function rotateTelemetry(home: string, rowBytes: number): void {
+  const path = telemetryPath(home);
+  try {
+    if (statSync(path).size + rowBytes <= MAX_BYTES) return;
+    const claim = `${path}.${process.pid}.rot`;
+    renameSync(path, claim);
+    // Another session rotated between our stat and rename: we took its fresh file, so hand it back.
+    // A held rotated file (Windows: antivirus, an open reader) hands the rows back too; the next row
+    // retries, so one try each: a file held for good must not stall every row.
+    if (statSync(claim).size > MAX_BYTES / 2) {
+      try {
+        renameSync(claim, join(home, "state", "telemetry.1.jsonl"));
+        return;
+      } catch {
+        // fall through: put the rows back where readers look
+      }
+    }
+    appendFileSync(path, readFileSync(claim));
+    unlinkSync(claim);
+  } catch {
+    // no file yet, or another session rotated it first
   }
 }
 
@@ -81,7 +109,7 @@ export interface Stats {
   fixOutcomes: { id: string; firings: number; helped: number; missed: number }[];
   /** Sessions that called brain_recall, brain_note or brain_state, of all sessions in that role. */
   toolUse: { main: { sessions: number; using: number }; sub: { sessions: number; using: number } };
-  toolCalls: Record<"tool" | "cli" | "hook" | "mcp", number>;
+  toolCalls: Record<"tool" | "cli" | "mcp", number>;
   /** Rows from older builds left out (0 with allBuilds, or when no row carries a build). */
   olderBuildRows: number;
   /** Fixes by the number of distinct sessions they fired in, most first. */
@@ -94,9 +122,11 @@ const TOOL_KINDS = new Set(["recall", "note", "state"]);
 
 /**
  * Distinct sessions of one role (child or not) in which each fix fired lately. Cheap enough for
- * a card: only fix rows are parsed, from at most two 1 MiB files.
+ * a card: only fix rows are parsed, from at most two 1 MiB files. `host` limits fires to that
+ * host's sessions: Claude Code hook rows carry via "hook", OMP rows no via; `brain fix` (via
+ * "cli") counts for neither.
  */
-export function fixFires(home: string, sub: boolean, days = 7, now: Date = new Date()): Map<string, number> {
+export function fixFires(home: string, sub: boolean, days = 7, now: Date = new Date(), host?: "omp" | "claude-code"): Map<string, number> {
   const since = now.getTime() - days * 86_400_000;
   const sessions = new Map<string, Set<string>>();
   for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
@@ -109,8 +139,9 @@ export function fixFires(home: string, sub: boolean, days = 7, now: Date = new D
     for (const line of text.split("\n")) {
       if (!line.includes('"kind":"fix"') || !line.includes('"id":')) continue;
       try {
-        const row = JSON.parse(line) as { at?: unknown; id?: unknown; session?: unknown; sub?: unknown };
+        const row = JSON.parse(line) as { at?: unknown; id?: unknown; session?: unknown; sub?: unknown; via?: unknown };
         if (typeof row.id !== "string" || typeof row.session !== "string" || (row.sub === true) !== sub) continue;
+        if (host && (host === "claude-code" ? row.via !== "hook" : row.via !== undefined)) continue;
         if (typeof row.at !== "string" || !(Date.parse(row.at) >= since)) continue;
         const seen = sessions.get(row.id) ?? new Set<string>();
         seen.add(row.session);
@@ -131,9 +162,12 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const recalls = { calls: 0, measured: 0, matched: 0 };
   const recallQueries = { logged: 0, silent: 0 };
   const outcomes = new Map<string, Stats["fixOutcomes"][number]>();
-  const toolCalls = { tool: 0, cli: 0, hook: 0, mcp: 0 };
+  const toolCalls = { tool: 0, cli: 0, mcp: 0 };
   const sessions = new Set<string>();
-  const roles = new Map<string, { sub: boolean; known: boolean; using: boolean }>();
+  // present: a row in the counted builds; hookOnly: only Claude Code hook rows, which cannot see a
+  // child's own Brain use (its CLI and MCP calls carry the parent's session); card: the role a
+  // delivered card gave the session.
+  const roles = new Map<string, { sub: boolean; known: boolean; using: boolean; present: boolean; hookOnly: boolean; card?: boolean }>();
   let text = "";
   for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
     try {
@@ -159,6 +193,23 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   // sessions appended their rows in.
   const stamps = rows.map((row) => row.v).filter((v): v is string => typeof v === "string" && /^[0-9a-z]+$/.test(v));
   const newest = opts.allBuilds || !stamps.length ? undefined : stamps.reduce((a, b) => (parseInt(b, 36) > parseInt(a, 36) ? b : a));
+  // A session's role comes from all its rows, whatever build wrote them: a Claude Code session's
+  // hook card can predate a source change that its later CLI calls already carry.
+  for (const row of rows) {
+    if (typeof row.session !== "string" || !row.session) continue;
+    const role = roles.get(row.session) ?? { sub: false, known: false, using: false, present: false, hookOnly: true };
+    if (row.sub === true) role.sub = true;
+    // A CLI or hook row names a session but not whether it is a child: role stays unknown until an
+    // OMP/MCP row (or a legacy OMP row, which never had `via`) or a delivered card says so. A
+    // `brain card` preview (via cli) is not a delivery.
+    if (typeof row.sub === "boolean" || (row.kind === "card" && row.via !== "cli") || row.via === undefined) role.known = true;
+    if (row.via !== "hook") role.hookOnly = false;
+    if (row.kind === "card" && row.via !== "cli") role.card = role.card === true || row.sub === true;
+    roles.set(row.session, role);
+  }
+  // A delivered card names the role: older hook builds logged a child's fixes under the parent's
+  // plain session id with sub:true.
+  for (const role of roles.values()) if (role.card !== undefined) role.sub = role.card;
   const fired = new Map<string, Set<string>>();
   const errors: Stats["errors"] = [];
   let olderBuildRows = 0;
@@ -183,8 +234,8 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
     const slot = (byKind[row.kind] ??= { count: 0, tokens: 0 });
     slot.count += 1;
     slot.tokens += typeof row.tokens === "number" ? row.tokens : 0;
-    if (row.kind === "card") cards[row.sub === true ? "sub" : "main"] += 1;
-    if (TOOL_KINDS.has(row.kind) && (row.via === "tool" || row.via === "cli" || row.via === "hook" || row.via === "mcp")) toolCalls[row.via] += 1;
+    if (row.kind === "card" && row.via !== "cli") cards[row.sub === true ? "sub" : "main"] += 1;
+    if (TOOL_KINDS.has(row.kind) && (row.via === "tool" || row.via === "cli" || row.via === "mcp")) toolCalls[row.via] += 1;
     if (row.kind === "recall") {
       recalls.calls += 1;
       if (typeof row.query === "string" && Array.isArray(row.ids) && row.ids.every(id => typeof id === "string")) {
@@ -198,18 +249,15 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
     }
     if (typeof row.session === "string" && row.session) {
       sessions.add(row.session);
-      const role = roles.get(row.session) ?? { sub: false, known: false, using: false };
-      if (row.sub === true) role.sub = true;
-      // A CLI or hook row names a session but not whether it is a child: role stays unknown
-      // until an OMP/MCP row (or a legacy OMP row, which never had `via`) says so.
-      if (typeof row.sub === "boolean" || row.kind === "card" || row.via === undefined) role.known = true;
+      const role = roles.get(row.session)!;
+      role.present = true;
       if (TOOL_KINDS.has(row.kind)) role.using = true;
-      roles.set(row.session, role);
     }
   }
   const toolUse = { main: { sessions: 0, using: 0 }, sub: { sessions: 0, using: 0 } };
   for (const role of roles.values()) {
-    if (!role.known) continue;
+    // A Claude Code child is seen only through hook rows, so its own tool use can never count.
+    if (!role.known || !role.present || (role.sub && role.hookOnly)) continue;
     const slot = toolUse[role.sub ? "sub" : "main"];
     slot.sessions += 1;
     if (role.using) slot.using += 1;

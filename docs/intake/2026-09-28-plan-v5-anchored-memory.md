@@ -134,7 +134,7 @@ verified end to end once the owner's Claude login is renewed (the hook already d
 
 No embeddings, no database, no code indexing, no new resident tools (still three), no per-prompt
 injection, no second harness adapter beyond the Claude Code hook and MCP. The card stays ≤ 400
-tokens and appears once per session and once after each compaction.
+tokens and appears once per session (nothing after compaction: §8 P4).
 
 ## 5. Phases
 

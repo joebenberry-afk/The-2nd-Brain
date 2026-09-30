@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { brainTools, jsonSchema } from "./tools.ts";
 import { logUse } from "./telemetry.ts";
-import { estimateTokens, findHome } from "./util.ts";
+import { estimateTokens, findHome, noHome } from "./util.ts";
 
 // 2025-03-26 is left out: it requires JSON-RPC batches, which this server does not accept.
 const PROTOCOLS = ["2024-11-05", "2025-06-18"];
@@ -34,7 +34,7 @@ export async function runMcp(opts: {
   };
   try {
     const home = findHome(opts.home, env);
-    const session = env.BRAIN_SESSION ?? env.CLAUDE_SESSION_ID;
+    const session = env.BRAIN_SESSION ?? env.CLAUDE_CODE_SESSION_ID ?? env.CLAUDE_SESSION_ID;
     const cwd = process.cwd();
     for await (const line of lines) {
       if (failed) break;
@@ -93,7 +93,7 @@ export async function runMcp(opts: {
               continue;
             }
             try {
-              if (!home) throw new Error("Brain home not found; set SECOND_BRAIN_HOME");
+              if (!home) throw new Error(noHome(opts.home, env));
               const started = performance.now();
               // MCP has no child identity: the host must withhold brain_state from its children.
               const used = await tool.run(args, { home, cwd, env, sub: false, session });

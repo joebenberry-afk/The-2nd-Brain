@@ -11,7 +11,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, win32 } from "node:path";
 import { scrub } from "./scrub.ts";
-import { nowIso, randomId, slug, tagList, writeAtomic } from "./util.ts";
+import { nowIso, randomId, retrying, slug, tagList, writeAtomic } from "./util.ts";
 
 export const GLOBAL = "global";
 export const KINDS = ["note", "fact", "decision", "gotcha", "procedure"] as const;
@@ -33,6 +33,8 @@ export interface Note {
   evidence: string[];
   /** Verified to work; only tested notes are pushed when a tool fails. */
   tested: boolean;
+  /** The one host whose tools produce this note's errors ("omp" | "claude-code"); unset, every host. */
+  host?: string;
   replaces?: string;
   replacedBy?: string;
   /** ISO time the note stopped being current. */
@@ -46,7 +48,7 @@ export interface Note {
 export class NoteError extends Error {}
 
 const LIST_KEYS = new Set(["tags", "errors", "evidence"]);
-const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "tested", "replaces", "replaced_by", "retired"];
+const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "tested", "host", "replaces", "replaced_by", "retired"];
 
 /** The full first non-empty body line, without leading "#". */
 export function firstLine(note: Pick<Note, "body">): string {
@@ -256,6 +258,8 @@ export function parseNote(text: string, path: string, project: string, isPrivate
     errors: asList(fields.get("errors")),
     evidence: asList(fields.get("evidence")),
     tested: asScalar(fields.get("tested")) === "true",
+    // Hand-written: "OMP" still means omp. `brain check` reports a value that is no host.
+    host: asScalar(fields.get("host"))?.trim().toLowerCase() || undefined,
     replaces: asScalar(fields.get("replaces")),
     replacedBy: asScalar(fields.get("replaced_by")),
     retired: asScalar(fields.get("retired")),
@@ -275,6 +279,7 @@ export function formatNote(note: Note): string {
     errors: note.errors,
     evidence: note.evidence,
     tested: note.tested ? "true" : undefined,
+    host: note.host,
     replaces: note.replaces,
     replaced_by: note.replacedBy,
     retired: note.retired,
@@ -393,8 +398,13 @@ export function loadNotes(home: string): { notes: Note[]; errors: string[] } {
   return { notes: unique, errors };
 }
 
+/** A note id as pasted: brackets, quotes and trailing punctuation removed. */
+export const idQuery = (query: string) => query.trim().replace(/^[[(<"'`]+|[\])>"'`.,;:?!]+$/g, "");
+
+/** A note by id as pasted: exact first, then ignoring case ("[N-D610AE4031]."). */
 export function findNote(notes: Note[], id: string): Note | undefined {
-  return notes.find((n) => n.id === id);
+  const q = idQuery(id);
+  return notes.find((n) => n.id === q) ?? notes.find((n) => n.id.toLowerCase() === q.toLowerCase());
 }
 
 function sameFile(a: string, b: string): boolean {
@@ -418,7 +428,15 @@ export function saveNote(home: string, note: Note): Note {
   writeAtomic(path, formatNote(note));
   // On a case-insensitive filesystem (Windows, macOS) notes/MyProj and notes/myproj are one
   // folder: the "old" file is the one just written, so it must not be removed.
-  if (note.path && note.path !== path && existsSync(note.path) && !sameFile(note.path, path)) rmSync(note.path);
+  // A held old file would leave the note in two folders (a duplicate id): the new copy is rolled back.
+  if (note.path && note.path !== path && existsSync(note.path) && !sameFile(note.path, path)) {
+    try {
+      retrying(() => rmSync(note.path, { force: true })); // force: an old file already gone is fine
+    } catch {
+      rmSync(path, { force: true });
+      throw new NoteError(`${note.path} is held open by another program; ${note.id} was not moved — close it and try again`);
+    }
+  }
   return { ...note, path };
 }
 
@@ -435,14 +453,32 @@ export interface NewNote {
   replaces?: string;
 }
 
+/** A host's exit-status wrapper says that a command failed, never why. */
+export const EXIT_WRAPPER = /^(?:command|process)? ?exited with (?:code|status) -?\d+\.?$|^exit (?:code|status):? -?\d+$/i;
+
 /**
  * Why an error pattern cannot be used, or null. A known fix is appended to every failure it
  * matches, in every project that sees it, so a pattern must be specific: a literal of at least 5
- * characters, or a `re:` regex that compiles, does not match trivial text, and has no quantified
- * group holding a quantifier or an alternation (`(\w+\s?)+`), which can backtrack for minutes.
+ * characters that names more than an exit status, an exception class or a catch-all word
+ * ("Error:", "Traceback", "fatal:", "npm ERR!") or banner, or a `re:` regex that
+ * compiles, does not match trivial text, and cannot backtrack for seconds: no quantified group
+ * holding a quantifier or an alternation (`(\w+\s?)+`), at most two open-ended repeats, and at
+ * most one of `.`, `\s`, `\w`…
  */
 export function errorPatternProblem(pattern: string): string | null {
-  if (!pattern.startsWith("re:")) return pattern.trim().length >= 5 ? null : `error pattern too short to be specific: ${JSON.stringify(pattern)}`;
+  if (!pattern.startsWith("re:")) {
+    const t = pattern.trim();
+    if (t.length < 5) return `error pattern too short to be specific: ${JSON.stringify(pattern)}`;
+    // "Exit code 1" also matches exit 101 and 127, and every host prints one on each failure.
+    if (EXIT_WRAPPER.test(t) || /^\(no output\)$/i.test(t) || /^(?:error\s+)?(?:command failed with|returned non-zero|process completed with) exit (?:code|status):? -?\d+\.?$/i.test(t)) return `error pattern names only an exit status, not the error: ${JSON.stringify(pattern)}`;
+    // A bare "AssertionError" (or "Error:") ends every failed assertion: it names no particular error.
+    if (/^(?:E\s+)?(?:[A-Za-z_][\w.]*)?(?:Error|Exception|Warning)\s*:?$/.test(t)) return `error pattern names only an exception class, not the error: ${JSON.stringify(pattern)}`;
+    // Catch-all words, npm's prefix (npm 11: "npm error"), Python's banners and separator rules: the
+    // whole pattern, so a pasted traceback that goes on to the error stays specific.
+    if (/^(?:error|exception|warning|failed|failure|fatal|npm (?:err!?|error|warn)(?: code \d+)?|traceback(?: \(most recent call last\))?|during handling of the above exception, another exception occurred|the above exception was the direct cause of the following exception)\s*[:!]?$/i.test(t) ||
+      /^[=_*#~-]{3,}(?:.*[=_*#~-]{3,})?$/.test(t)) return `error pattern names no particular error: ${JSON.stringify(pattern)}`;
+    return null;
+  }
   const source = pattern.slice(3).trim();
   let regex: RegExp;
   try {
@@ -450,18 +486,30 @@ export function errorPatternProblem(pattern: string): string | null {
   } catch (error) {
     return `invalid error pattern ${JSON.stringify(pattern)}: ${error instanceof Error ? error.message : String(error)}`;
   }
-  if (nestedQuantifier(source)) return `error pattern can backtrack for minutes (a repeated group that repeats inside): ${JSON.stringify(pattern)}`;
+  const scan = repeats(source);
+  if (scan.nested) return `error pattern can backtrack for minutes (a repeated group that repeats inside): ${JSON.stringify(pattern)}`;
+  if (scan.open > 2 || scan.broad > 1) return `error pattern can backtrack for seconds (open-ended repeats in a row): ${JSON.stringify(pattern)}`;
   if (["", " ", "x", "0", "a b", "error"].some((probe) => regex.test(probe))) return `error pattern matches almost anything: ${JSON.stringify(pattern)}`;
   return null;
 }
 
-/** A group followed by *, + or {n,} / {n,m>1} that itself holds a quantifier or an alternation. */
-function nestedQuantifier(source: string): boolean {
+const BROAD = new Set([".", "\\s", "\\S", "\\w", "[^"]);
+
+/**
+ * Repeats outside character classes: `nested`, a group followed by *, + or {n,} / {n,m>1} that
+ * itself holds a quantifier or an alternation; `open`, the open-ended *, + and {n,}; `broad`, those
+ * of them repeating `.`, `\s`, `\S`, `\w` or a negated class.
+ */
+function repeats(source: string): { nested: boolean; open: number; broad: number } {
   const groups: boolean[] = []; // per open group: does it hold a quantifier or "|"?
   let inClass = false;
+  let atom = ""; // what a quantifier here repeats
+  let open = 0;
+  let broad = 0;
   for (let i = 0; i < source.length; i++) {
-    const c = source[i];
+    const c = source[i] as string;
     if (c === "\\") {
+      if (!inClass) atom = source.slice(i, i + 2);
       i++;
       continue;
     }
@@ -469,19 +517,26 @@ function nestedQuantifier(source: string): boolean {
       if (c === "]") inClass = false;
       continue;
     }
-    if (c === "[") inClass = true;
-    else if (c === "(") groups.push(false);
+    if (c === "[") {
+      inClass = true;
+      atom = source[i + 1] === "^" ? "[^" : "[";
+    } else if (c === "(") groups.push(false);
     else if (c === "|" || c === "*" || c === "+" || (c === "{" && /^\{\d+,\d*\}/.test(source.slice(i)))) {
       if (groups.length) groups[groups.length - 1] = true;
+      if (c === "*" || c === "+" || /^\{\d+,\}/.test(source.slice(i))) {
+        open++;
+        if (BROAD.has(atom)) broad++;
+      }
     } else if (c === ")") {
+      atom = c;
       const risky = groups.pop() ?? false;
       const next = source.slice(i + 1);
       const repeated = /^[*+]/.test(next) || /^\{\d+,(\d*)\}/.test(next) && !/^\{(\d+),\1\}/.test(next) && !/^\{\d+,1\}/.test(next);
-      if (risky && repeated) return true;
+      if (risky && repeated) return { nested: true, open, broad };
       if (risky && groups.length) groups[groups.length - 1] = true;
-    }
+    } else atom = c;
   }
-  return false;
+  return { nested: false, open, broad };
 }
 
 function checkErrors(errors: string[]): void {
@@ -538,14 +593,15 @@ export function retireNote(home: string, id: string, by?: string): Note {
   const { notes } = loadNotes(home);
   const note = findNote(notes, id);
   if (!note) throw new NoteError(`no note ${id}`);
-  if (note.retired) throw new NoteError(`${id} is already retired`);
+  if (note.retired) throw new NoteError(`${note.id} is already retired`);
+  let next: Note | undefined;
   if (by !== undefined) {
-    const next = findNote(notes, by);
+    next = findNote(notes, by);
     if (!next) throw new NoteError(`no note ${by}`);
-    if (by === id) throw new NoteError("a note cannot replace itself");
-    saveNote(home, { ...next, replaces: id });
+    if (next.id === note.id) throw new NoteError("a note cannot replace itself");
+    saveNote(home, { ...next, replaces: note.id });
   }
-  return saveNote(home, { ...note, retired: nowIso(), replacedBy: by });
+  return saveNote(home, { ...note, retired: nowIso(), replacedBy: next?.id });
 }
 
 /**
@@ -582,9 +638,11 @@ export function staleEvidence(note: Note, roots: string[]): boolean {
   if (cached && now - cached.at < EVIDENCE_TTL_MS) return cached.stale;
   const paths: string[] = [];
   for (const entry of note.evidence) {
-    // Old evidence often carries a line number, test selector or commit annotation. None is
-    // part of its filename. Other schemes (events:, commit:, URLs) are not filesystem evidence.
-    const path = entry.trim().replace(/\s+\(.*\)$/, "").replace(/@[a-f\d]{7,40}$/i, "").replace(/::.*$|:\d+(?:-\d+)?$/, "");
+    // Old evidence often carries a line number (`:N:C`, `#LN`, `(N,C)`), a symbol or test selector,
+    // or a commit annotation. None is part of its filename; a symbol counts only after a `.ext`,
+    // so `commit:abc` stays a scheme. Other schemes (events:, commit:, URLs) are not file evidence.
+    const path = entry.trim().replace(/\s+\(.*\)$/, "").replace(/@[a-f\d]{7,40}$/i, "")
+      .replace(/::.*$|(?::\d+){1,2}(?:-\d+)?$|#L\d+(?:-L?\d+)?$|(?<=\.[a-z\d]{1,16})(?:\(\d+(?:,\d+)?\)|:[A-Za-z_$][\w$.]*)$/i, "");
     if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) continue;
     // A parent escape or a glob names no single file: unknown, never missing.
     if (path.split(/[\\/]/).includes("..") || /[*?[\]{}]/.test(path)) continue;

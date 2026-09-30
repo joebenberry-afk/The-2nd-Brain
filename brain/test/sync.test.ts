@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { sync, shareNote, SyncError } from "../src/sync.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
+import { addProjectTag } from "../src/project.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-sync-"));
 
@@ -200,6 +201,7 @@ describe("sync", () => {
 
     // B tries to sync - should encounter conflict
     expect(() => sync(b)).toThrow(SyncError);
+    expect(() => sync(b)).toThrow(/notes\/demo\/.+\.md.*brain sync/s);
 
     // Check that rebase was aborted (working tree clean)
     const status = gitCmd(b, "status", "--short");
@@ -251,6 +253,13 @@ describe("sync", () => {
 
     expect(() => shareNote(home, "nonexistent", "tag")).toThrow(SyncError);
     expect(() => shareNote(home, "nonexistent", "tag")).toThrowError(/unknown/);
+  });
+
+  it("shareNote names the owner it tagged when the note is filed under an alias", () => {
+    const home = tmp();
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { alpha: { aliases: ["old"] } } }));
+    const note = createNote(home, { text: "tip", project: "old" });
+    expect(shareNote(home, note.id, "uploads").taggedProject).toBe("alpha");
   });
 
   it("shareNote deduplicates tags", () => {
@@ -343,5 +352,25 @@ describe("sync: the newer plan beats a newer auto refresh (review regression)", 
     writeFileSync(join(b, "work", "demo.md"), work("2026-09-27T09:00:00Z", "2026-09-27T10:05:00Z", "old plan"));
     sync(b);
     expect(readFileSync(join(b, "work", "demo.md"), "utf8")).toContain("new plan from A");
+  });
+});
+
+describe("sync stopped by a conflict outside work/ (review regression)", () => {
+  it("names the file and says the same thing on every retry", () => {
+    const { a, b } = pairRepos();
+    addProjectTag(a, "alpha", "web");
+    sync(a);
+    addProjectTag(b, "beta", "cli");
+    let first = "";
+    try {
+      sync(b);
+    } catch (error) {
+      first = error instanceof SyncError ? error.message : "";
+    }
+    expect(first).toMatch(/^sync stopped: projects\.json changed on both machines/);
+    expect(first).not.toContain("git rebase --continue\"");
+    expect(first).toContain("git pull --rebase --autostash");
+    expect(() => sync(b)).toThrow(first);
+    expect(gitCmd(b, "status", "--short")).toBe("");
   });
 });

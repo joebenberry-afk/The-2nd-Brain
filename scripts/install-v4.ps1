@@ -4,9 +4,11 @@
 
 .DESCRIPTION
   - Finds a runtime: Node >= 22.18 (runs TypeScript directly) or Bun.
-  - Writes brain\bin\brain.cmd next to the committed sh shim brain\bin\brain (Git Bash, where
-    Claude Code runs hooks) and adds brain\bin to the user PATH (once; -NoPath skips). The PATH is
-    edited as stored, so entries like %USERPROFILE%\... keep expanding.
+  - Writes brain\bin\brain.cmd (cmd.exe) and brain\bin\brain.ps1 (PowerShell; not under a
+    Restricted or AllSigned execution policy, which would refuse it) next to the committed
+    sh shim brain\bin\brain (Git Bash, where Claude Code runs hooks) and adds brain\bin to the user
+    PATH (once; -NoPath skips). The PATH is edited as stored, so entries like %USERPROFILE%\... keep
+    expanding.
   - Sets the user variable SECOND_BRAIN_HOME to <SourceRoot> when it is unset (-NoEnv skips).
   - Parks older Brain extensions (second-brain, second-brain-v3) in ..\extensions-disabled\ so
     memory is not pushed twice (undo: uninstall-v4.ps1 -Restore).
@@ -62,9 +64,42 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 if (-not $Runtime -and (Get-Command bun -ErrorAction SilentlyContinue)) { $Runtime = "bun" }
 if (-not $Runtime) { throw "Need Node >= 22.18 or Bun on PATH." }
 
-# 2. brain.cmd + PATH (brain\bin also holds the sh shim `brain` for Git Bash)
+# 2. brain.cmd, brain.ps1 + PATH (brain\bin also holds the sh shim `brain` for Git Bash)
 $BinDir = Join-Path (Join-Path $SourceRoot "brain") "bin"
 Write-Utf8NoBom (Join-Path $BinDir "brain.cmd") "@$Runtime `"%~dp0brain.mjs`" %*`r`n"
+# PowerShell prefers brain.ps1 to brain.cmd, whose cmd.exe expands %VAR% even inside quoted note text.
+# Under a Restricted or AllSigned policy it refuses brain.ps1 without falling back to brain.cmd, so
+# then only brain.cmd is kept. The Process scope is skipped: -ExecutionPolicy Bypass on this run says
+# nothing about later shells, and Windows PowerShell with nothing set is Restricted.
+$Policy = @("MachinePolicy", "UserPolicy", "CurrentUser", "LocalMachine") | ForEach-Object { "$(Get-ExecutionPolicy -Scope $_)" } | Where-Object { $_ -ne "Undefined" } | Select-Object -First 1
+if (-not $Policy -and $PSVersionTable.PSEdition -ne "Core") { $Policy = "Restricted" }
+# PowerShell 7 reads its own policy; Windows PowerShell also finds brain.ps1 and applies its own
+# (Restricted by default). Ask it, without the -ExecutionPolicy this run may have inherited.
+if ($PSVersionTable.PSEdition -eq "Core" -and (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+    $saved = $env:PSExecutionPolicyPreference; $env:PSExecutionPolicyPreference = $null
+    try { $WinPs = "$(& powershell.exe -NoProfile -NonInteractive -Command Get-ExecutionPolicy)".Trim() } finally { $env:PSExecutionPolicyPreference = $saved }
+    if ($WinPs -in @("Restricted", "AllSigned")) { $Policy = "$WinPs (Windows PowerShell)" }
+}
+$Ps1Shim = Join-Path $BinDir "brain.ps1"
+if ($Policy -match '^(Restricted|AllSigned)') {
+    if (Test-Path $Ps1Shim) { Remove-Item -Force $Ps1Shim }
+    Write-Warning "Execution policy $Policy would block brain.ps1, so PowerShell runs brain.cmd: cmd.exe expands %VAR% in note text, and from Windows PowerShell double quotes inside arguments are dropped. For brain.ps1: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned, then re-run this installer."
+} else {
+    # argv travels as JSON in BRAIN_ARGV: Windows PowerShell 5.1 passes native arguments without
+    # escaping the quotes inside them. The finally keeps it out of the caller's session.
+    # [string] keeps a token as typed: interpolation reformats numbers PowerShell parsed
+    # (3.10 -> 3.1, 0x80070005 -> -2147024891). "/" works for node on Windows and under Linux pwsh.
+    # $OutputEncoding (script scope) keeps piped hook JSON UTF-8 without a BOM.
+    $ps1 = @'
+$env:BRAIN_ARGV = ConvertTo-Json -Compress -InputObject @($args | ForEach-Object { [string]$_ })
+try {
+    if ($MyInvocation.ExpectingInput) { $OutputEncoding = [Text.UTF8Encoding]::new($false); $input | & RUNTIME "$PSScriptRoot/brain.mjs" }
+    else { & RUNTIME "$PSScriptRoot/brain.mjs" }
+} finally { Remove-Item Env:BRAIN_ARGV -ErrorAction SilentlyContinue }
+exit $LASTEXITCODE
+'@
+    Write-Utf8NoBom $Ps1Shim ($ps1.Replace("RUNTIME", $Runtime) + "`r`n")
+}
 $oldShim = Join-Path $SourceRoot "brain.cmd"   # written by earlier versions of this script
 if (Test-Path $oldShim) { Remove-Item -Force $oldShim }
 if (-not $NoPath) {

@@ -8,9 +8,14 @@ git status                                # commit or stash local changes first
 ```
 
 The installer (every step reversible):
-- picks the runtime — Node ≥ 22.18, else Bun — and writes `brain\bin\brain.cmd` next to the
-  committed `brain\bin\brain` shim (Git Bash, where Claude Code runs hooks, needs that one), then
-  adds `brain\bin` to your user PATH, keeping `%VAR%` entries intact (`-NoPath` skips that);
+- picks the runtime — Node ≥ 22.18, else Bun — and writes `brain\bin\brain.cmd` (cmd.exe) and
+  `brain\bin\brain.ps1` (PowerShell prefers it; through `brain.cmd`, cmd.exe would expand `%VAR%`
+  inside note text — it needs an execution policy such as RemoteSigned: under Restricted or
+  AllSigned, which refuse it without falling back, the installer keeps `brain.cmd` alone and says
+  so) next to the committed `brain\bin\brain` shim (Git Bash, where Claude Code runs
+  hooks, needs that one), then adds `brain\bin` to your user PATH, keeping `%VAR%` entries intact
+  (`-NoPath` skips that). In PowerShell a bare `--` is dropped: text that starts with `-` and
+  contains a space needs none; otherwise quote it (`'--'`);
 - sets `SECOND_BRAIN_HOME` to the checkout when it is unset;
 - parks the V2 (`second-brain`) and V3 (`second-brain-v3`) OMP extensions in
   `~/.omp/agent/extensions-disabled/` so memory is not pushed twice;
@@ -31,16 +36,20 @@ Open a **new terminal** (it picks up PATH and `SECOND_BRAIN_HOME`), then:
 
 ```powershell
 brain check     # notes: N (A active) · projects: P — exit 0
-brain card      # what a session in this checkout will see
+brain card      # the start card a Claude Code session in this checkout will see
 ```
 
 Restart OMP from that new terminal.
 
-**Other projects' notes.** A project's id comes from its git remote or folder name. If a repo on
+**Other projects' notes.** A project's id comes from its git remote or folder name (a linked
+worktree takes its main checkout's name); a folder without git belongs to the nearest folder
+above it that `projects.json` names (an id or alias), never your home folder or anything above
+it, so `cd scripts` stays in the project. A git repo inside a declared `paths` folder stays the root; the declared folder's
+registered docs also resolve from it. If a repo on
 this machine resolves to a different id than its notes use (`brain card` in it shows nothing you
 expected), add its `remote` or the id as an alias in `projects.json` — e.g. the SZ-tool notes
 live under `sztool`, which lists the SZ-Agent-Toolkit remote. `brain move <id> --to <project>`
-re-homes one note. A recall that finds nothing here but something elsewhere says so:
+re-homes one note; `brain check` lists notes still filed under an alias. A recall that finds nothing here but something elsewhere says so:
 `no match here; N related in other projects (--all)`. Recall answers with silence rather than a
 weak match: two words of a longer query must match, the project's own name ("Absolute Laya …")
 does not count inside that project, and file names and versions (`LOOP.md`, `18.4.1`) match
@@ -54,8 +63,8 @@ instead: `docs/LOOP.md › Goals (line 12)`.
 Jev (`jev-latest`) to check the notes the lexical search would show. Notes scoring below **0.78**
 are dropped (0.75 let 1-2 wrong answers through on reruns of the same 54 queries: Jev drifts about
 ±0.02 between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual doc-heading or no-match fallback
-still applies. Only the scrubbed query and note body text (whitespace collapsed, cut to 450
-characters, then scrubbed) are sent. Private notes are never sent and remain lexical, unjudged.
+still applies. Only the scrubbed query and note body text (whitespace collapsed, scrubbed, then
+cut to 450 characters, so a secret at the cut is masked whole) are sent. Private notes are never sent and remain lexical, unjudged.
 A plan-doc heading answer (its heading and first paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.
 Set `BRAIN_JUDGE=off` to opt out; without a key, or on timeout, HTTP or parse errors, recall
 **fails open** to its unchanged lexical answer. Calls take about 300 ms, with a 5-second
@@ -63,7 +72,8 @@ timeout. A small per-process cache avoids repeated calls for the same query, not
 The endpoint defaults to `https://api.typesafe.ai` (`TYPESAFE_BASE_URL` overrides it).
 Recall telemetry retains query/ids and adds `judged` (a successful check) and `dropped` (count).
 
-**Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`)
+**Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`,
+which marks an entry that does not resolve here `(missing under <root>)`)
 lets the Brain read a project's own plan files: only headings and the text under one heading
 (YAML front matter is skipped),
 never code. A working state line `See: docs/LOOP.md#checkpoint` is shown as that section's current
@@ -76,7 +86,8 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
    (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt);
    later prompts add nothing, and a session resumed in a new OMP process (restart,
    `/resume`) keeps the card it already holds until a compaction. Subagents inherit only the parent plan’s Watch out field
-   (≤40 tokens), never Goal/Next/Done or auto observations, and cannot overwrite state.
+   (≤40 tokens), never Goal/Next/Done or auto observations, and cannot overwrite state through
+   the Brain tools (the CLI can: see below).
    Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
    A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
    the card up front (`Often hit lately …`, at most two), before the first attempt; it drops off by itself
@@ -97,15 +108,16 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
    without a `[path#tag]` header (`notes/global/` holds fixes taken from logged OMP failures): the
    failed result ends with `Brain: … [id]` on its own line. The same fix again in the same context
    is a one-line pointer (`Brain: same fix as above [id]`) until a compaction drops the original.
-4. **Learning.** After a few sessions, `brain review` lists, with their full bodies, failed
+4. **Learning.** After a few sessions, `brain review` lists (this project's and global ones;
+   `--all` for every project), with their full bodies, failed
    commands that later succeeded as retries (same program and arguments, flags or a preparatory
    step added — `npm test` → `npm ci && npm test`), plus `Brain-Decision:` / `Brain-Gotcha:`
    commit trailers; `brain accept <id>` makes a note. A pair is `tested` only when the failed
-   command itself succeeded afterwards. Exploration (grep, ls, cat …), `--help` probes, inline
-   scripts and heredocs (`python -c`, `node -e`, `<<EOF` before the script) and scripts under OS
-   temp roots (including Git Bash `$TEMP`/`$TMP`) or a top-level `tmp/`, `temp/`, `cache/`,
-   `.cache/` are never proposed; nor is a success after an edit (the code was repaired, not the
-   command).
+   command itself succeeded afterwards. Exploration (grep, ls, cat …), the Brain's own CLI,
+   `--help` probes, inline scripts and heredocs (`python -c`, `node -e`, `<<EOF` before the
+   script) and scripts under OS temp roots (including Git Bash `$TEMP`/`$TMP`) or a top-level
+   `tmp/`, `temp/`, `cache/`, `.cache/` are never proposed; nor is a success after an edit,
+   `sed -i` or a `>` redirect included (the code was repaired, not the command).
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
    hit rate, which fixes fired in how many sessions, errors the Brain swallowed to keep the host
    running (latest three), and frequent errors without a fix. Each recall row keeps its query
@@ -116,17 +128,24 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
    card's `Often hit lately` lines) and listed under `Fixes to review` in stats and
    `brain review`. The note file is never changed; editing it gives the fix a new trial. A
    plan-doc answer counts as answered (`doc:<path>`), not silent.
-   `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI, hooks and
-   MCP; old rows lacking attribution are excluded from this split, not guessed to be OMP. Every
-   row carries the build that wrote it (newest source mtime); stats read only the newest build
-   unless `--all-builds`, because a running session keeps the code it started with. Anything
+   `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI and MCP (a
+   Claude Code agent's calls count as CLI); old rows lacking attribution are excluded from this
+   split, not guessed to be OMP. `brain tools used in: X/Y main sessions · x/y sub` counts, per
+   role, sessions that called recall/note/state; sub counts only children whose tool use is
+   observable (OMP), since a Claude Code subagent's calls carry its parent's session. `cards:`
+   counts delivered cards; a `brain card` preview is not one. Every row carries the build that
+   wrote it (newest source mtime); stats count only the newest build unless `--all-builds`: OMP
+   and MCP processes keep the build they started with, while hooks and CLI calls stamp the build
+   current at each call, so a session's role comes from all its rows in the window. Anything
    never used for a week gets removed (plan rule 1).
 
 Tool descriptions and card footers say when to act: recall before exploring, choosing or retrying;
 notes for repo-invisible learning; state when goal/next changes. OMP subagents keep only
 `brain_recall` (their card says so): the Brain deactivates `brain_note` and `brain_state` in each
-child session at `session_start`, saving ~250 schema tokens per child request. A child note
-written another way (CLI) stays untested until a parent confirms it or runs `brain tested <id>`.
+child session at `session_start`, saving ~250 schema tokens per child request. The CLI cannot
+tell a child from its parent: a child's project-scoped `brain note --tested` is tested at once
+(a global one stays untested until the owner runs `brain tested <id>`), and its `brain state`
+replaces the parent's plan. That reaches OMP children through bash and Claude Code subagents, whose instructions carry the managed block (`brain state` when the goal changes).
 
 ## 3. Other harnesses
 
@@ -135,20 +154,33 @@ written another way (CLI) stays untested until a parent confirms it or runs `bra
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
-    "PostToolUse": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
-    "PostToolUseFailure": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
-    "PreCompact": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "brain hook claude-code" }] }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "PostToolUse": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "timeout": 30, "async": true, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "PostToolUseFailure": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "PreCompact": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }]
   }
 }
 ```
 
-The hook fails open (`{}`, exit 0). Successful and failed tools share the capture log, so a
-failed command followed by its successful repair can become a proposal. PreCompact and
-SessionEnd save edited files, the last failure, and the last user ask available in the last
-256 KiB of the transcript to local auto state; the agent-written plan is never replaced.
-After compaction, SessionStart source `compact` adds no context; saved state feeds the next session's card.
+The `[ -f … ]` guard leaves a Brain checkout to its own `.claude/settings.json`, which registers
+these hooks with another command: Claude Code de-duplicates only identical handlers, so both would
+run (two cards, every fix twice). The handler fails open (`{}`, exit 0; the swallowed error
+becomes a `brain stats` row), and `2>/dev/null || echo "{}"` covers a missing `brain` or runtime.
+The 30-second timeout also lifts SessionEnd's shared 1.5-second budget. PostToolUse never returns
+output, so it runs `async` instead of holding every tool result about 300 ms; the others stay
+synchronous (the card, the fix, the saved state). A PreCompact or SessionEnd right after the last
+tool call can miss that call's event, and `claude -p` stops a PostToolUse still running at exit.
+
+Successful and failed tools share the capture log (a backgrounded Bash launch is not logged), so
+a failed command followed by its successful repair can become a proposal. A failure whose error a
+tested note names gets the fix (`Brain: … [id]`) once per context; a repeat gets the one-line
+pointer. PreCompact and SessionEnd save edited files (outside the project, not those under
+`~/.claude`, the session scratchpad or a temp root), the last failure (cleared once the same
+command succeeds), and the last user ask available in the last 256 KiB of the transcript
+(else Claude Code's `last-prompt` row; task notifications and slash commands are not asks) to
+local auto state; the agent-written plan is never replaced.
+SessionStart source `compact` or `resume` adds no context; saved state feeds the next session's card.
 Hooks with `agent_id`, SubagentStart and SubagentStop never write working state; child tool
 logs are separate from their parent’s. `agent_type` alone is also used by main sessions
 started with `--agent` and does not imply a child. Tool hooks do not spawn git.
@@ -161,7 +193,8 @@ to use the CLI: recall before exploring unfamiliar ground, choosing tools/stacks
 note what the repo cannot tell you; state when goal or next changes; fix after unexplained
 failures. `brain fix "<error>"` returns the same tested, scoped known fix as OMP (≤80 tokens),
 or prints nothing and exits 0 when none matches. Set `SECOND_BRAIN_HOME`; optional
-`BRAIN_SESSION` (preferred) or `CLAUDE_SESSION_ID` attributes CLI usage to the session.
+`BRAIN_SESSION` (preferred), Claude Code’s `CLAUDE_CODE_SESSION_ID` or `CLAUDE_SESSION_ID`
+attributes CLI usage to the session.
 
 **MCP clients.** Launch `brain mcp` as a stdio server to expose the same three tool definitions
 as OMP: `brain_recall`, `brain_note` and `brain_state`. Launch in the workspace directory
@@ -174,7 +207,8 @@ must withhold `brain_state` from child agents to protect the parent’s working 
 .\scripts\uninstall-v4.ps1 -Restore      # removes the V4 extension, restores the parked one
 ```
 
-Restart OMP. `-RemovePath` also takes `brain\bin` off your PATH. Notes and working state
+Restart OMP. `-RemovePath` also takes `brain\bin` off your PATH and deletes the generated
+`brain.cmd` and `brain.ps1`. Notes and working state
 stay as files. The parked V2/V3 extensions expect the pre-V4 tree (tag `v2-archive`), which
 this checkout no longer contains.
 
@@ -199,6 +233,7 @@ errors:                    # error text this note fixes; "re:<regex>" for a patt
 evidence:
   - scripts/bootstrap.ps1
 tested: true               # only tested notes are appended to failed tool results
+host: omp                  # optional: fires only on this host (omp | claude-code), lower case; brain check reports any other value
 ---
 
 Clear PYTHONHOME before running python        ← the first line is the headline

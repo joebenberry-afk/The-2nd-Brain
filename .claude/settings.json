@@ -24,7 +24,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" hook claude-code 2>/dev/null || echo \"{}\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" hook claude-code 2>/dev/null || echo \"{}\"",
+            "async": true
           }
         ]
       }

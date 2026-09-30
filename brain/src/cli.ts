@@ -4,19 +4,21 @@
  */
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { acceptProposal, appendEvent, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, toolEventFrom, unmatchedErrors } from "./capture.ts";
+import { acceptProposal, appendEvent, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, hostNoise, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, scratchPath, scrubCut, toolEventFrom, unmatchedErrors, untag } from "./capture.ts";
 import { renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
+import { projectDocs } from "./docs.ts";
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
-import { addProjectDoc, gitRoot, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
+import { addProjectDoc, docFile, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { runMcp } from "./mcp.ts";
 import { judgedAnswer, typesafeJudge } from "./judge.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
 import { pausedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
-import { estimateTokens, findHome, slug, tagKey, writeAtomic } from "./util.ts";
+import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 
 export interface Io {
@@ -32,12 +34,12 @@ class UsageError extends Error {}
 const USAGE = `brain — agent memory that survives compaction (V4)
 
   brain card                                   start card for this directory's project
-  brain recall <query…|note id> [--all] [--history] [-n N]
+  brain recall <query…|note id> [--all] [--history] [-n 1-3]
   brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--global|--private]
   brain fix <error text…>                      tested known fix, or silence
   brain state [<text…>]                        show or replace the working state
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
-  brain review · accept <pid>… · reject <pid>…
+  brain review [--all] · accept <pid>… · reject <pid>…
   brain project docs add <path> · project docs list
   brain sync [--no-push] [-m <message>]
   brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
@@ -107,7 +109,7 @@ function positiveInt(value: string | undefined, fallback: number): number {
 }
 
 function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[], judged?: boolean, dropped?: number): void {
-  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_SESSION_ID ?? undefined, hits, id, query, ids, judged, dropped });
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID, hits, id, query, ids, judged, dropped });
 }
 
 /** Fixes that stopped helping (see demotedFixes): no longer fired until their note is edited. */
@@ -128,12 +130,14 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       c.io.out(added ? `added ${path}` : `already listed: ${path}`);
     } else {
       const docs = loadProjects(c.home)[c.project.id]?.docs;
-      c.io.out(Array.isArray(docs) && docs.length ? docs.filter(d => typeof d === "string").join("\n") : "no project docs");
+      const shown = (d: string) => docFile(c.project, d) ? d : `${d} (missing under ${c.project.docRoot ?? c.project.root ?? "no root"})`;
+      c.io.out(Array.isArray(docs) && docs.length ? docs.filter(d => typeof d === "string").map(shown).join("\n") : "no project docs");
     }
     return 0;
   },
   card(c) {
-    const card = renderCard(c.home, loadNotes(c.home).notes, c.project, { tools: false });
+    // A preview of the Claude Code card (no tools, Claude Code's fix fires); OMP renders its own.
+    const card = renderCard(c.home, loadNotes(c.home).notes, c.project, { tools: false, host: "claude-code" });
     if (card) {
       c.io.out(card);
       use(c, "card", card);
@@ -175,15 +179,19 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       c.io.out(`not saved: ${same.id} has this headline with a different body; use a new headline, or \`brain retire ${same.id}\` first`);
       return 0;
     }
+    // As brain_note: a tested global fix fires in every project on both hosts, so the owner confirms it.
+    const wantsTested = c.opts.tested === true;
+    const tested = wantsTested && (same?.project ?? scope) !== GLOBAL;
+    const untested = wantsTested && !tested && !same?.tested ? " (untested: the owner confirms a global fix with `brain tested <id>`)" : "";
     if (same) {
       const changed = upgradeNote(c.home, same, {
         kind: c.opts.kind ? (kind as Kind) : undefined,
         tags: c.opts.tag,
         errors: c.opts.error,
         evidence: c.opts.evidence,
-        tested: c.opts.tested === true,
+        tested,
       });
-      c.io.out(`${changed ? "updated" : "already noted"} ${same.id}`);
+      c.io.out(`${changed ? "updated" : "already noted"} ${same.id}${untested}`);
       use(c, "note", text);
       return 0;
     }
@@ -194,18 +202,18 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       tags: c.opts.tag ?? [],
       errors: c.opts.error ?? [],
       evidence: c.opts.evidence ?? [],
-      tested: c.opts.tested === true,
+      tested,
       private: c.opts.private === true,
       source: "agent",
     });
-    c.io.out(`saved ${note.id}`);
+    c.io.out(`saved ${note.id}${untested}`);
     use(c, "note", text);
     return 0;
   },
 
   state(c) {
     if (!c.args.length) {
-      c.io.out(workText(readWork(c.home, c.project.id), c.project.root) || "no working state");
+      c.io.out(workText(readWork(c.home, c.project.id), c.project.root, c.project.docRoot, c.project.docRoot ? projectDocs(c.home, c.project) : []) || "no working state");
       return 0;
     }
     const work = writeWork(c.home, c.project.id, c.args.join(" "));
@@ -224,8 +232,8 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
 
   retire(c) {
     const id = need(c.args[0], "a note id");
-    retireNote(c.home, id, c.opts.by);
-    c.io.out(`retired ${id}${c.opts.by ? ` (replaced by ${c.opts.by})` : ""}`);
+    const retired = retireNote(c.home, id, c.opts.by);
+    c.io.out(`retired ${retired.id}${retired.replacedBy ? ` (replaced by ${retired.replacedBy})` : ""}`);
     return 0;
   },
 
@@ -234,7 +242,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const note = findNote(loadNotes(c.home).notes, id);
     if (!note) throw new Error(`no note ${id}`);
     saveNote(c.home, { ...note, tested: true });
-    c.io.out(`tested ${id}`);
+    c.io.out(`tested ${note.id}`);
     return 0;
   },
 
@@ -245,7 +253,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const note = findNote(loadNotes(c.home).notes, id);
     if (!note) throw new Error(`no note ${id}`);
     saveNote(c.home, { ...note, project: to });
-    c.io.out(`moved ${id} to ${to}`);
+    c.io.out(`moved ${note.id} to ${to}`);
     return 0;
   },
 
@@ -253,7 +261,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const id = need(c.args[0], "a note id");
     const tag = need(c.opts.tag?.[0], "--tag");
     const note = shareNote(c.home, id, tag);
-    c.io.out(`shared ${id} with tag ${note.tags.join(", ")}${note.taggedProject ? `; project ${note.taggedProject} now has tag ${tagKey(tag)}, so it still sees it` : ""}`);
+    c.io.out(`shared ${note.id} with tag ${note.tags.join(", ")}${note.taggedProject ? `; project ${note.taggedProject} now has tag ${tagKey(tag)}, so it still sees it` : ""}`);
     return 0;
   },
 
@@ -262,14 +270,19 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     scanEvents(c.home, notes);
     const root = gitRoot(c.io.cwd);
     if (root) scanCommits(c.home, root, c.project.id, notes);
-    const pending = listProposals(c.home);
+    // This project's and global proposals, as the card counts them; --all lists every project's.
+    const all = listProposals(c.home);
+    const pending = c.opts.all === true ? all : all.filter((p) => p.project === c.project.id || p.project === GLOBAL);
+    const more = all.length > pending.length ? `+${all.length - pending.length} in other projects (brain review --all)` : "";
     const reviewFixes = fixesToReview(c);
     if (!pending.length) {
-      if (!reviewFixes) c.io.out("nothing to review");
+      if (!reviewFixes) c.io.out(more ? `nothing to review here; ${more}` : "nothing to review");
+      else if (more) c.io.out(more);
       return 0;
     }
     for (const p of pending) c.io.out(`${p.id} [${p.kind}${p.tested ? ", tested" : ""}] (${p.project})\n${scrub(p.text).text.slice(0, 800)}`);
     c.io.out("accept: brain accept <pid>… · reject: brain reject <pid>…");
+    if (more) c.io.out(more);
     return 0;
   },
 
@@ -302,7 +315,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
     c.io.out(`recall: ${s.recallQueries.logged} queries logged, ${s.recallQueries.silent} silent`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
-    c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.hook} hook · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
+    c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
     for (const f of s.fixOutcomes.slice(0, 5)) c.io.out(`fix outcomes: ${f.id} helped ${f.helped}/missed ${f.missed}`);
     fixesToReview(c);
@@ -321,6 +334,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   check(c) {
     const { notes, errors: noteErrors } = loadNotes(c.home);
     const errors = [...noteErrors, ...configErrors(c.home)];
+    for (const n of notes) if (n.host && n.host !== "omp" && n.host !== "claude-code") errors.push(`${n.path}: host ${JSON.stringify(n.host)} is not omp or claude-code; the fix fires on no host`);
     const active = notes.filter((n) => !n.retired).length;
     c.io.out(`notes: ${notes.length} (${active} active) · projects: ${Object.keys(loadProjects(c.home)).length}`);
     for (const e of errors) c.io.err(e);
@@ -357,6 +371,12 @@ function configErrors(home: string): string[] {
       return [];
     }
   };
+  // An id that became an alias resolves to its owner, so notes/<alias>/ and work/<alias>.md are never read.
+  const projects = loadProjects(home);
+  const owner = new Map<string, string>();
+  for (const [id, e] of Object.entries(projects)) {
+    for (const alias of Array.isArray(e.aliases) ? e.aliases : []) if (!projects[alias] && !owner.has(alias)) owner.set(alias, id);
+  }
   const notesDir = join(home, "notes");
   if (existsSync(notesDir) && !isDir(notesDir)) errors.push(`${notesDir}: not a directory`);
   for (const entry of list(notesDir)) {
@@ -366,6 +386,9 @@ function configErrors(home: string): string[] {
       continue;
     }
     if (entry.name !== slug(entry.name)) errors.push(`${path}: folder is not a project id (use ${slug(entry.name)}), never read`);
+    if (entry.name === slug(entry.name) && entry.name !== GLOBAL && idFor(entry.name) !== entry.name) errors.push(`${path}: reserved device name, never read (brain move <id> --to ${idFor(entry.name)})`);
+    const to = owner.get(entry.name);
+    if (to) errors.push(`${path}: ${entry.name} is an alias of ${to}; its notes are visible to no project (brain move <id> --to ${to})`);
     for (const [dir, inner] of [[path, true], [join(path, "private"), false]] as const) {
       for (const file of list(dir)) {
         if (file.isDirectory() ? !(inner && file.name === "private") : !file.name.endsWith(".md")) {
@@ -378,8 +401,13 @@ function configErrors(home: string): string[] {
     const path = join(home, "work", entry.name);
     if (!entry.name.endsWith(".md") || entry.name.slice(0, -3) !== slug(entry.name.slice(0, -3))) {
       errors.push(`${path}: never read (working states are work/<project id>.md)`);
+    } else if (entry.name !== `${GLOBAL}.md` && idFor(entry.name.slice(0, -3)) !== entry.name.slice(0, -3)) {
+      errors.push(`${path}: reserved device name, never read (rename it to work/${idFor(entry.name.slice(0, -3))}.md)`);
     } else if (/^(<{7}|>{7}|={7})( |$)/m.test(readFileSync(path, "utf8"))) {
       errors.push(`${path}: holds merge conflict markers`);
+    } else if (owner.has(entry.name.slice(0, -3))) {
+      const to = owner.get(entry.name.slice(0, -3));
+      errors.push(`${path}: ${entry.name.slice(0, -3)} is an alias of ${to}; never read (merge it into work/${to}.md)`);
     }
   }
   const projectsFile = join(home, "projects.json");
@@ -423,37 +451,82 @@ function hookTail(path: string, limit: number): string[] {
   }
 }
 
+/**
+ * Rows Claude Code writes as user rows although nobody typed them: task notifications, slash-command
+ * wrappers and their output, interrupt markers, and skill expansions (`<create-pr-command>`).
+ */
+const HARNESS_ASK = /^\s*(?:<(?:task-notification|command-(?:name|message|args)|local-command-[a-z]+|bash-(?:input|stdout|stderr))>|<[a-z][\w-]*-command>|\[Request interrupted)/;
+/** A last-prompt row records a typed slash command bare; its user row is a <command-name> wrapper. */
+const SLASH_COMMAND = /^\s*\/[\w:-]+(?:\s|$)/;
+
+/** Inside `dir`, by path; `relative` compares Windows paths case-insensitively. */
+function within(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return !!rel && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
 /** Reuse the append-only capture log: concurrent tool hooks cannot overwrite each other's edits. */
-function saveHookAuto(home: string, project: Project, session: string, transcript: unknown): void {
+function saveHookAuto(home: string, project: Project, session: string, transcript: unknown, scratchpad: unknown): void {
   const fields: AutoFields = {};
+  // Claude Code's own files (the session scratchpad, ~/.claude memory, temp roots) are not project edits.
+  const own = [join(homedir(), ".claude"), ...(typeof scratchpad === "string" && scratchpad ? [resolve(scratchpad)] : [])];
   try {
+    let failureKey: string | undefined;
     for (const line of hookTail(join(eventsDir(home), safeSession(session) + ".jsonl"), EVENT_CAP_BYTES + 8192)) {
       const event = parseEvent(line);
       if (!event || event.session !== session) continue;
       if (event.ok && /^(Edit|Write|MultiEdit)$/.test(event.tool) && event.path) {
         const absolute = resolve(event.cwd, event.path);
-        const rel = relative(project.root ?? event.cwd, absolute);
-        const path = (rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : absolute).replace(/\\/g, "/");
-        fields.edited = [...(fields.edited ?? []).filter((p) => p !== path), path].slice(-20);
+        const root = project.root ?? event.cwd;
+        const inside = within(root, absolute);
+        // A root at or above them (a session started in ~) contains Claude Code's own directories;
+        // a project rooted inside one keeps its files. scratchPath applies outside the root only:
+        // test roots live under Temp.
+        const ownFile = own.some((dir) => within(dir, absolute) && within(root, dir));
+        if (!ownFile && (inside || !(scratchPath(absolute) || own.some((dir) => within(dir, absolute))))) {
+          const path = (inside ? relative(root, absolute) : absolute).replace(/\\/g, "/");
+          fields.edited = [...(fields.edited ?? []).filter((p) => p !== path), path].slice(-20);
+        }
       }
-      if (!event.ok && event.error) fields.failure = `${event.command ?? event.tool} → ${errorSignature(event.error)}`;
+      // The last failure stays until the same command (or tool) succeeds; host plumbing (an aborted
+      // or cancelled task) says nothing about the project. As OMP does.
+      const key = event.command || event.tool;
+      if (event.ok && key === failureKey) fields.failure = failureKey = undefined;
+      if (!event.ok && event.error && !hostNoise(event.tool, event.error)) {
+        fields.failure = `${untag(key)} → ${errorSignature(event.error)}`;
+        failureKey = key;
+      }
     }
   } catch {
     // A session may contain only conversation, with no captured tool events.
   }
   if (typeof transcript === "string" && transcript) {
     try {
+      let lastPrompt: string | undefined, slashPrompt: string | undefined;
+      const commands = new Set<string>();
       for (const line of hookTail(transcript, 262_144).reverse()) {
-        let row: { type?: unknown; isSidechain?: unknown; isMeta?: unknown; message?: { content?: unknown } } | null;
+        let row: { type?: unknown; isSidechain?: unknown; isMeta?: unknown; isCompactSummary?: unknown; origin?: unknown; lastPrompt?: unknown; message?: { content?: unknown } } | null;
         try { row = JSON.parse(line); } catch { continue; }
-        if (row?.type !== "user" || row.isSidechain === true || row.isMeta === true) continue;
+        // Claude Code's own record of the prompt: the prompt row itself may lie beyond the tail
+        // (a long tool turn), or be one row larger than the tail (pasted images).
+        if (row?.type === "last-prompt" && typeof row.lastPrompt === "string" && row.lastPrompt.trim() && !HARNESS_ASK.test(row.lastPrompt)) {
+          if (!SLASH_COMMAND.test(row.lastPrompt)) lastPrompt ??= row.lastPrompt;
+          else slashPrompt ??= row.lastPrompt;
+        }
+        const wrapper = typeof row?.message?.content === "string" ? /<command-name>(\/[^<\s]+)<\/command-name>/.exec(row.message.content) : null;
+        if (wrapper) commands.add(wrapper[1]!);
+        if (row?.type !== "user" || row.isSidechain === true || row.isMeta === true || row.isCompactSummary === true) continue;
+        if (row.origin && typeof row.origin === "object" && (row.origin as { kind?: unknown }).kind !== "human") continue;
         const content = row.message?.content;
-        const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((block: unknown) => {
+        const text = (typeof content === "string" ? content : Array.isArray(content) ? content.map((block: unknown) => {
           const b = block as { type?: unknown; text?: unknown } | null;
           return b?.type === "text" && typeof b.text === "string" ? b.text : "";
-        }).filter(Boolean).join("\n") : "";
-        if (text.trim()) { fields.ask = text; break; }
+        }).filter(Boolean).join("\n") : "").replace(/^(?:\s*<system-reminder>[\s\S]*?<\/system-reminder>)+/, "");
+        if (text.trim() && !HARNESS_ASK.test(text)) { fields.ask = text; break; }
       }
+      // Slash text is a typed command only when a wrapper names it (or it names a plugin's, a:b).
+      const typed = slashPrompt?.trim().split(/\s/)[0] ?? "";
+      fields.ask ??= lastPrompt ?? (commands.has(typed) || typed.includes(":") ? undefined : slashPrompt);
     } catch {
       // The host writes transcripts asynchronously; unavailable ask never loses the edits.
     }
@@ -461,45 +534,68 @@ function saveHookAuto(home: string, project: Project, session: string, transcrip
   writeAuto(home, project.id, fields);
 }
 
-/** Hooks run in separate processes; hash keys so commands and session names never persist. */
-function hookFixDir(home: string, session: string): string {
-  return join(home, "state", "pending-fixes", createHash("sha256").update(session).digest("hex"));
+const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
+
+/**
+ * Hooks run in separate processes; hash keys so commands and session names never persist. A
+ * child's directory sits inside its parent's, so the parent's cleanup also removes it.
+ */
+function hookFixDir(home: string, session: string | undefined, agent?: string): string {
+  return join(home, "state", "pending-fixes", sha(session ?? "claude-code"), ...(agent ? [sha(agent)] : []));
 }
 
 /** Claude Code hook input/output: https://code.claude.com/docs/en/hooks */
 function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
   let output: object = {};
+  let home: string | null = null;
+  let event: unknown;
+  /**
+   * Fail open, but never silently: a swallowed error becomes a local telemetry row, so "the card
+   * never came" shows up in `brain stats`. As OMP does.
+   */
+  const failed = (error: unknown): void => {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    if (home) logUse(home, { kind: "error", project: "", tokens: 0, ms: 0, via: "hook", error: `claude-code ${String(event)}: ${scrubCut(message, 200)}` });
+  };
   try {
-    const home = findHome(explicitHome, io.env);
-    const payload: unknown = JSON.parse(io.stdin() || "{}");
+    home = findHome(explicitHome, io.env);
+    // A replay through Windows PowerShell with $OutputEncoding = UTF8 starts with a BOM.
+    const payload: unknown = JSON.parse(io.stdin().replace(/^﻿/, "") || "{}");
     if (home && payload && typeof payload === "object" && !Array.isArray(payload)) {
       const p = payload as Record<string, unknown>;
       const cwd = typeof p.cwd === "string" && p.cwd ? p.cwd : io.cwd;
-      const event = p.hook_event_name;
+      event = p.hook_event_name;
       const session = typeof p.session_id === "string" && p.session_id ? p.session_id : undefined;
       // agent_type alone also occurs for a main session started with --agent.
       const sub = (typeof p.agent_id === "string" && !!p.agent_id) || event === "SubagentStart" || event === "SubagentStop";
-      const key = sub ? `${session ?? "claude-code"}:agent:${String(p.agent_id ?? "unknown")}` : session ?? "claude-code";
+      const agent = sub ? String(p.agent_id ?? "unknown") : undefined;
+      const key = agent ? `${session ?? "claude-code"}:agent:${agent}` : session ?? "claude-code";
+      // A child's telemetry rows name the child, so it never turns its parent into a "sub" session.
+      const logSession = sub ? key : session;
+      const fixDir = hookFixDir(home, session, agent);
       const project = resolveProject(home, cwd, io.env);
+      // A backgrounded Bash launch "succeeds" at once: that says nothing about the command.
+      const background = (p.tool_input as { run_in_background?: unknown } | null | undefined)?.run_in_background === true
+        || typeof (p.tool_response as { backgroundTaskId?: unknown } | null | undefined)?.backgroundTaskId === "string";
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
-        try { rmSync(hookFixDir(home, key), { recursive: true, force: true }); }
+        try { rmSync(fixDir, { recursive: true, force: true }); }
         catch { /* pending telemetry cleanup must not suppress the card */ }
-        if (p.source !== "compact") {
+        // After compaction the card is absent by design; a resumed transcript already holds one.
+        if (p.source !== "compact" && p.source !== "resume") {
           const { notes } = loadNotes(home);
           if (!sub) {
-            try { scanEvents(home, notes); } catch { /* the card matters more than capture */ }
+            try { scanEvents(home, notes); } catch (error) { failed(error); /* the card matters more than capture */ }
           }
-          const card = renderCard(home, notes, project, { tools: false, subagent: sub });
+          const card = renderCard(home, notes, project, { tools: false, subagent: sub, host: "claude-code" });
           if (card) {
             output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
-            logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session, via: "hook", sub });
+            logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub });
           }
         }
-      } else if (event === "PostToolUse" || (event === "PostToolUseFailure" && p.is_interrupt !== true)) {
+      } else if ((event === "PostToolUse" && !background) || (event === "PostToolUseFailure" && p.is_interrupt !== true)) {
         const fields = toolEventFrom(p.tool_name, p.tool_input, event === "PostToolUseFailure", p.error);
         appendEvent(home, key, cwd, fields);
-        const pendingDir = hookFixDir(home, key);
-        const pendingPath = join(pendingDir, createHash("sha256").update(fields.command || fields.tool).digest("hex") + ".json");
+        const pendingPath = join(fixDir, sha(fields.command || fields.tool) + ".json");
         if (session) {
           const claimed = `${pendingPath}.${process.pid}.claimed`;
           try {
@@ -507,7 +603,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
             renameSync(pendingPath, claimed);
             const pending: unknown = JSON.parse(readFileSync(claimed, "utf8"));
             if (pending && typeof pending === "object" && "id" in pending && typeof pending.id === "string" && "project" in pending && typeof pending.project === "string") {
-              logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session, via: "hook", sub });
+              logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: logSession, via: "hook", sub });
             }
           } catch { /* missing or torn local pending state is unmeasured */ }
           finally {
@@ -516,24 +612,30 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           }
         }
         if (!fields.ok && fields.error) {
-          const fix = findFix(loadNotes(home).notes, fields.error, project, home);
+          const fix = findFix(loadNotes(home).notes, fields.error, project, home, "claude-code");
           if (fix) {
-            const text = renderFix(fix);
+            // The full fix once per context (the directory is cleared with the context): a repeat
+            // of the same error costs a pointer. As OMP does.
+            const shown = join(fixDir, sha(fix.id) + ".shown");
+            const text = existsSync(shown) ? `Brain: same fix as above [${fix.id}]` : renderFix(fix);
             output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: text } };
-            logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session, via: "hook", sub, id: fix.id });
+            logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session: logSession, via: "hook", sub, id: fix.id });
             if (session) {
-              try { writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id })); }
-              catch { /* telemetry state must not suppress the fix */ }
+              try {
+                writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id }));
+                writeAtomic(shown, "");
+              } catch { /* telemetry state must not suppress the fix */ }
             }
           }
         }
       } else if (session && (event === "SessionEnd" || event === "PreCompact" || event === "SubagentStop")) {
-        try { rmSync(hookFixDir(home, key), { recursive: true, force: true }); }
+        try { rmSync(fixDir, { recursive: true, force: true }); }
         catch { /* pending telemetry cleanup must not suppress auto-save */ }
-        if (!sub) saveHookAuto(home, project, session, p.transcript_path);
+        if (!sub) saveHookAuto(home, project, session, p.transcript_path, p.scratchpad_dir);
       }
     }
-  } catch {
+  } catch (error) {
+    failed(error);
     output = {}; // fail open: never break the host session
   }
   io.out(JSON.stringify(output));
@@ -544,8 +646,22 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
   const io: Io = { ...defaultIo(), ...ioOverrides };
   const started = performance.now();
   let parsed: { values: Values; positionals: string[] };
+  // PowerShell drops a bare `--` before brain.ps1 sees it. No option has a space before any "=", so
+  // such an argument ("-bash: x: command not found") is text: it is held out of parseArgs and put
+  // back after. Strict parsing stays: otherwise that text would set -h, -n or -m.
+  const end = argv.indexOf("--");
+  const held: string[] = [];
+  const masked = argv.map((arg, i) => ((end < 0 || i < end) && /^-[^=]*\s/.test(arg) ? `\u0000${held.push(arg) - 1}` : arg));
+  const back = (s: string) => (s.startsWith("\u0000") ? held[Number(s.slice(1))] ?? s : s);
+  // The sh shim turns Git Bash's path conversion off, so a path option may arrive as /c/….
+  const drive = (p: string) => (process.platform === "win32" ? p.replace(/^\/([A-Za-z])(\/|$)/, "$1:/") : p);
   try {
-    parsed = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true });
+    const raw = parseArgs({ args: masked, options: OPTIONS, allowPositionals: true, strict: true });
+    const values = Object.fromEntries(Object.entries(raw.values).map(([k, v]) => [k, typeof v === "string" ? back(v) : Array.isArray(v) ? v.map(back) : v])) as Values;
+    if (values.home) values.home = drive(values.home);
+    if (values.from) values.from = drive(values.from);
+    if (values.evidence) values.evidence = values.evidence.map(drive);
+    parsed = { values, positionals: raw.positionals.map(back) };
   } catch (error) {
     io.err(`brain: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
@@ -576,7 +692,7 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
   }
   const home = findHome(opts.home, io.env);
   if (!home) {
-    io.err("brain: no Brain home (set SECOND_BRAIN_HOME)");
+    io.err(`brain: ${noHome(opts.home, io.env)}`);
     return 2;
   }
   const project: Project = opts.project ? projectById(home, opts.project, io.cwd) : resolveProject(home, io.cwd, io.env);

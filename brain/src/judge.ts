@@ -1,5 +1,5 @@
 /** Optional relevance check over the lexical answer; failures preserve that answer. */
-import type { Note } from "./notes.ts";
+import { findNote, type Note } from "./notes.ts";
 import { answerWithHits, type AnswerOptions } from "./search.ts";
 import { scrub } from "./scrub.ts";
 
@@ -9,8 +9,9 @@ export const JUDGE_THRESHOLD = 0.78;
 export const JUDGE_TIMEOUT_MS = 5000;
 export type Judge = (query: string, candidates: { id: string; text: string }[]) => Promise<Map<string, number> | undefined>;
 
+/** Scrubbed before the cut: a secret straddling character 450 would fall below its pattern's length. */
 export function judgeText(note: Note): string {
-  return scrub(note.body.replace(/\s+/g, " ").slice(0, 450)).text;
+  return scrub(note.body.replace(/\s+/g, " ")).text.slice(0, 450);
 }
 
 const cache = new Map<string, number>();
@@ -66,7 +67,7 @@ export function typesafeJudge(env: NodeJS.ProcessEnv): Judge | undefined {
 
 export async function judgedAnswer(notes: Note[], query: string, opts: AnswerOptions, judge?: Judge) {
   const lexical = { ...answerWithHits(notes, query, opts), judged: false, dropped: 0 };
-  if (!judge || !lexical.hits || notes.some(n => n.id === query.trim())) return lexical;
+  if (!judge || !lexical.hits || findNote(notes, query)) return lexical;
   const candidates = lexical.ids.flatMap(id => {
     const note = notes.find(n => n.id === id);
     return note && !note.private ? [{ id, text: judgeText(note) }] : [];
@@ -84,7 +85,7 @@ export async function judgedAnswer(notes: Note[], query: string, opts: AnswerOpt
     // query names by file (its outline) is what was asked for and is not judged.
     if (result.docExcerpt) {
       const id = result.ids[0]!;
-      const scores = await judge(scrub(query).text, [{ id, text: scrub(result.docExcerpt).text }]);
+      const scores = await judge(scrub(query).text, [{ id, text: scrub(result.docExcerpt).text.slice(0, 450) }]);
       if (!scores || !probability(scores.get(id))) return result;
       const keep = scores.get(id)! >= JUDGE_THRESHOLD;
       result = { ...(keep ? result : answerWithHits(notes, query, { ...opts, noDoc: true })), judged: true, dropped: result.dropped + (keep ? 0 : 1) };

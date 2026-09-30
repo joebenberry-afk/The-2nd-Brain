@@ -9,6 +9,7 @@ state/
 # Per-machine CLI shims; private notes never leave the machine
 /brain.cmd
 /brain/bin/brain.cmd
+/brain/bin/brain.ps1
 notes/*/private/
 
 # OS noise

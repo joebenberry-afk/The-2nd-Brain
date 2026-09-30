@@ -9,10 +9,11 @@ set -euo pipefail
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
 home="$PWD"
 
-# brain/ has no runtime dependencies; node_modules is only for its tests.
+# brain/ has no runtime dependencies; node_modules is only for its tests. SessionStart stdout
+# becomes Claude's context, so npm's summary line goes nowhere; errors still reach stderr.
 if [ ! -f brain/node_modules/.package-lock.json ] ||
     [ brain/package-lock.json -nt brain/node_modules/.package-lock.json ]; then
-    (cd brain && npm ci --no-audit --no-fund --loglevel=error)
+    (cd brain && npm ci --no-audit --no-fund --loglevel=error >/dev/null)
 fi
 mkdir -p state/bin
 printf '#!/usr/bin/env bash\nexec node "%s/brain/bin/brain.mjs" "$@"\n' "$home" >state/bin/brain

@@ -1,7 +1,10 @@
 /** Secret scrubbing for everything the Brain writes: notes, working state, captured events. */
+import { createHash } from "node:crypto";
 
 const CREDENTIAL_WORDS = new Set(["password", "passwd", "passphrase", "secret", "credential", "credentials", "apikey"]);
 const SUFFIX_WORDS = ["password", "passwd", "passphrase", "secret", "credentials"];
+// Short names count as the last part only: DB_PASS, PGPASS, MYSQL_PWD — not passWithNoTests or BYPASS.
+const SHORT_WORDS = new Set(["pass", "pgpass", "pwd"]);
 const KEY_OWNERS = new Set(["api", "private", "access", "secret", "client", "auth", "signing", "encryption", "master"]);
 
 /**
@@ -19,6 +22,7 @@ function isCredential(name: string, value: string): boolean {
     .filter(Boolean);
   // A part that is, or ends in, a credential word: PASSWORD, PGPASSWORD, mysecret.
   if (parts.some((p) => CREDENTIAL_WORDS.has(p) || SUFFIX_WORDS.some((w) => p.endsWith(w)))) return true;
+  if (SHORT_WORDS.has(parts.at(-1) ?? "") && !/^(?:true|false|null)$/i.test(value) && !/^(?:=|[[{]\s*(?:["'{[\]}]|$))/.test(value)) return true; // not memory.pass=true, s.pass === x, "firstPass":{"…"}, pass = []
   if (parts.some((p, i) => p === "key" && i > 0 && KEY_OWNERS.has(parts[i - 1] as string))) return true;
   // STRIPE_KEY, MAILGUN_KEY: a key named after anything, when the value looks generated
   if (parts.at(-1) === "key" && tokenLike(value)) return true;
@@ -30,9 +34,15 @@ function tokenLike(value: string): boolean {
   return (value.match(/[A-Za-z0-9_-]{16,}/g) ?? []).some((run) => /\d/.test(run) && /[A-Za-z]/.test(run));
 }
 
-/** Colon prose is not an assignment; passwords remain protected even in sentences. */
-function credentialAssignment(name: string, value: string, sep: string, offset: number, text: string): boolean {
+/**
+ * Colon prose is not an assignment; passwords remain protected even in sentences. A quoted value
+ * (`pass: 'hunter2'`, `"pass": "…"`) is an assignment, not prose.
+ */
+function credentialAssignment(name: string, value: string, sep: string, offset: number, text: string, quoted = false): boolean {
   if (sep.includes(":")) {
+    // "pwd: C:/repo", docker -v "$PWD":/app — the working directory, quoted or not; "First pass: …",
+    // "--- PASS: TestX". Pwd=… (connection strings), pass=…, pass: '…', DB_PASS: … stay masked.
+    if (/^pwd$/i.test(name) || (!quoted && /^pass$/i.test(name))) return false;
     if (/(?:^|[_.-])token$/i.test(name) && !tokenLike(value)) return false;
     if (name === "secret" && /\w[^\S\r\n]+$/.test(text.slice(0, offset)) && !tokenLike(value)) return false;
   }
@@ -41,14 +51,16 @@ function credentialAssignment(name: string, value: string, sep: string, offset: 
 
 /**
  * Replace secret-looking values with ***, return (text, scrubbed).
- * Cover: known token formats (GitHub, sk-, Slack, AWS, Google, Stripe, GitLab, npm, SendGrid),
+ * Cover: known token formats (GitHub, sk-, Slack, AWS, Google, Stripe, GitLab, npm, SendGrid, JWT),
  * private key blocks, Authorization headers, URL and
  * curl credentials, any key=value / key: value whose key names a credential (quoted values are
  * masked whole) and, unless `longRuns` is false, runs of ≥ 40 hex or base64 characters. Notes and
  * working state pass `longRuns: false` so the commit SHAs they cite survive; captured tool output
- * keeps it on. Paths and ordinary words are left alone.
+ * keeps it on. `tagRuns` (the event log's commands) masks each long run as *** plus 6 hex of its
+ * hash, so commands that differ only in a SHA or token stay different. Paths and ordinary words are
+ * left alone.
  */
-export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: string; scrubbed: boolean } {
+export function scrub(text: string, opts: { longRuns?: boolean; tagRuns?: boolean } = {}): { text: string; scrubbed: boolean } {
   const original = text;
   let result = text;
 
@@ -63,6 +75,7 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   result = result.replace(/\bglpat-[A-Za-z0-9_-]{20,}/g, "***"); // GitLab
   result = result.replace(/\bnpm_[A-Za-z0-9]{36}\b/g, "***"); // npm
   result = result.replace(/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, "***"); // SendGrid
+  result = result.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "***"); // JWT
 
   // Private key blocks (PEM, OpenSSH), also when the output was cut before the END line
   // A retained tail can contain an END marker without its BEGIN: discard the orphaned span.
@@ -72,11 +85,13 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   result = result.replace(/(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g, "$1 *** -----END PRIVATE KEY-----");
 
   // Authorization headers and schemes: Bearer ***, Basic ***, Authorization: Token ***. A bare
-  // scheme word before an ordinary word is prose ("Basic Upscaler", "Visual Basic Scripting"):
-  // outside an Authorization header only a token-shaped value (digit, symbol, inner capital, or 20+
-  // letters) is masked.
+  // scheme word before an ordinary word is prose ("Basic Upscaler", "Visual Basic Scripting"), and
+  // a word followed by path segments is a path ("The Basic Upscaler/tools/bench.ps1"): outside an
+  // Authorization header only a token-shaped value (digit, symbol, inner capital, or 20+ letters) is
+  // masked. A path has no "+" or "=", no 20-letter run and no generated-looking one, so base64 with a
+  // "/" is masked.
   result = result.replace(/\b(Bearer|Basic|Digest)\s+([A-Za-z0-9._~+/-]{6,}=*)/g, (match, scheme: string, value: string) =>
-    /^[A-Za-z][a-z]{0,18}$/.test(value) ? match : `${scheme} ***`);
+    /^[A-Za-z][a-z]{0,18}$/.test(value) || (/^[A-Za-z][a-z]{0,18}(?:\/[\w.-]+)+\/?$/.test(value) && !/[A-Za-z]{20,}/.test(value) && !tokenLike(value) && !randomLooking(value)) ? match : `${scheme} ***`);
   result = result.replace(/\b(authorization)(["']?\s*[=:]\s*["']?)(?!(?:Bearer|Basic|Digest) \*\*\*)(?:(\w+)\s+)?([^\s"',;]+)/gi, (_m, name: string, sep: string, scheme: string | undefined) =>
     `${name}${sep}${scheme ? `${scheme} ` : ""}***`,
   );
@@ -91,6 +106,14 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
   });
   // Explicit long credential flags only: -p commonly names a port.
   result = result.replace(/((?:^|\s)--(?:[a-z0-9]+-)*(?:password|passwd|token|api-key|apikey|secret|auth|credentials?)(?:\s+|=))(?:(['"])(?:\\.|(?!\2)[^\\\n])*\2|[^\s]+)/gi, "$1***");
+  // …except mysql/mariadb -p<password>, attached, to the end of that command (across a trailing \ or
+  // PowerShell ` line continuation). mysql must be the word run: bare, or by a path or quoted in command
+  // position (line start, or after ; & | ( ` including PowerShell's &) — not a path argument
+  // (find /etc/mysql, -I/usr/include/mysql), an image (mysql:8), a name (mysql-db) or a flag's value
+  // (--name mysql, --name "mysql"). The command-position match starts at the separator itself, so a
+  // long blank run is scanned once from there, not retried at every blank.
+  result = result.replace(/(?:(^|[\n;&|(`])[ \t]*(?:(["'])(?:(?:(?!\2)[^\n])*[\\/])?|[^\s;&|()=`-][^\s;&|()=`]*[\\/])|(?<![\w/\\.:=-]))(?:mysql\w*|mariadb(?:-\w+)?)(?:\.exe)?\2(?=\s)(?:[^\n;|&)`]|`(?=\r?\n)|(?<=[\\`]\r?)\n)*/g, (command, start: string | undefined, _quote, offset: number, text: string) =>
+    start === undefined && /\s--\w[\w-]*\s+$/.test(text.slice(Math.max(0, offset - 64), offset)) ? command : command.replace(/(\s-p)(?:(['"])(?:\\.|(?!\2)[^\\\n])*\2|\S+)/g, "$1***"));
 
   // Windows: setx NAME value, [Environment]::SetEnvironmentVariable("NAME", "value", …)
   result = result.replace(/\b(setx\s+)(\S+)(\s+)("[^"]*"|\S+)/gi, (match, cmd: string, name: string, space: string, value: string) =>
@@ -102,20 +125,28 @@ export function scrub(text: string, opts: { longRuns?: boolean } = {}): { text: 
 
   // key = "quoted value": masked whole — spaces, the other quote and escaped quotes included
   result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)(["'])((?:\\.|(?!\3)[^\\\n])*)\3/g, (match, name: string, sep: string, quote: string, value: string, offset: number, text: string) =>
-    value !== "***" && credentialAssignment(name, value, sep, offset, text) ? name + sep + quote + "***" + quote : match,
+    value !== "***" && credentialAssignment(name, value, sep, offset, text, true) ? name + sep + quote + "***" + quote : match,
   );
-  // key = value: up to whitespace, a comma, a semicolon or a closing brace (quotes inside included)
-  result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;}]+)/g, (match, name: string, sep: string, value: string, offset: number, text: string) =>
-    !/^["']?\*\*\*["']?$/.test(value) && !value.startsWith("//") && credentialAssignment(name, value, sep, offset, text) ? name + sep + "***" : match,
-  );
+  // key = value: up to whitespace, a comma, a semicolon or a closing brace (quotes inside included).
+  // The value of any other pair is searched once more, split at "&" and at a "?" that starts a pair:
+  // https://h/?api_key=…, http://localhost:8080/v1?password=…, url: https://h/p?api_key=…,
+  // --from-literal=password=…, -var=db_password=….
+  const pair = (inner: boolean) => (match: string, name: string, sep: string, value: string, offset: number, text: string): string => {
+    if (/^["']?\*\*\*["']?$/.test(value)) return match;
+    if (!value.startsWith("//") && credentialAssignment(name, value, sep, offset, text)) return name + sep + "***";
+    return inner ? match : name + sep + value.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)((?:[^\s,;}&?]|\?(?![A-Za-z0-9_.-]+["']?\s*[=:]))+)/g, pair(true));
+  };
+  result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;}]+)/g, pair(false));
 
   if (opts.longRuns === false) return { text: result, scrubbed: result !== original };
 
   // Long hex runs (hashes, keys) and base64 runs. A run containing "/" is a path unless it is padded
   // or reads like random base64 (digits present and at least a quarter of its letters upper-case).
-  result = result.replace(/\b[A-Fa-f0-9]{40,}\b/g, "***");
-  result = result.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+]{40,}={0,2}/g, "***");
-  result = result.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}/g, (run) => (run.endsWith("=") || randomLooking(run) ? "***" : run));
+  // The 6-hex tag is below every threshold here, so a later scrub leaves it alone.
+  const mask = (run: string) => (opts.tagRuns ? "***" + createHash("sha256").update(run).digest("hex").slice(0, 6) : "***");
+  result = result.replace(/\b[A-Fa-f0-9]{40,}\b/g, mask);
+  result = result.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+]{40,}={0,2}/g, mask);
+  result = result.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}/g, (run) => (run.endsWith("=") || randomLooking(run) ? mask(run) : run));
 
   return { text: result, scrubbed: result !== original };
 }

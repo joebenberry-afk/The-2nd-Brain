@@ -309,6 +309,20 @@ describe("recall and note boundaries", () => {
     expect(ids("swarm loop")).toEqual(["n-loop"]);
   });
 
+  it("searches a query of only short dotted tokens, still matching them whole", () => {
+    const notes = [
+      note("n-omp", { body: "OMP 18.3.5: detect subagents by the parent session" }),
+      note("n-omp1", { body: "OMP 18.1.15: session files move" }),
+      note("n-fs", { body: "fs.rm with force swallows ENOENT" }),
+      note("n-unrel", { body: "unrelated 3 5 18 words" }),
+    ];
+    const ids = (q: string) => recall(notes, q, { project }).map((h) => h.note.id);
+    expect(ids("18.3.5")).toEqual(["n-omp"]);
+    expect(ids("fs.rm")).toEqual(["n-fs"]);
+    expect(ids("18.4.1")).toEqual([]);
+    expect(ids("v1.2")).toEqual([]);
+  });
+
   it("does not count the project's own name as a match inside that project", () => {
     const laya = { id: "absolute-laya", tags: [], root: null };
     const notes = [note("n-git", { project: "absolute-laya", body: "Absolute Laya is not a git checkout" })];
@@ -361,8 +375,19 @@ describe("recall and note boundaries", () => {
   it("recalls custom stored ids exactly while preserving visibility", () => {
     const stored = note("note-1", { kind: "fact", body: "Restart the service" });
     expect(answer([stored], " note-1 ", { project })).toContain("Restart the service");
-    expect(answer([stored], "note-1", { project: { ...project, id: "other" } })).not.toContain("Restart the service");
+    expect(answer([stored], "note-1", { project: { ...project, id: "other" } })).toBe("no match here; note-1 is in test (all: true)");
+    expect(answer([stored], "note-1", { project: { ...project, id: "other" }, tools: false })).toBe("no match here; note-1 is in test (--all)");
     expect(answer([stored], "note-1", { project: { ...project, id: "other" }, all: true })).toContain("Restart the service");
+    expect(answer([stored, note("n-0123456789", { body: "n-0123456780 is its twin" })], "n-0123456780", { project })).toBe("no note n-0123456780");
+  });
+
+  it("recalls a note id pasted in another case or with brackets, quotes or trailing punctuation", () => {
+    const stored = note("n-0123456789", { body: "Restart the service" });
+    for (const query of ["N-0123456789", "(n-0123456789)", "[n-0123456789].", "`n-0123456789`"]) {
+      expect(answerWithHits([stored], query, { project })).toMatchObject({ ids: ["n-0123456789"], hits: 1 });
+    }
+    expect(answer([stored], "(n-deadbeef00)", { project })).toBe("no note n-deadbeef00");
+    expect(answer([stored], "[N-0123456789]", { project: { ...project, id: "other" } })).toBe("no match here; n-0123456789 is in test (all: true)");
   });
 
   it("suggests all only when an otherwise empty scoped recall has related notes", () => {

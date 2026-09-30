@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { convertV3 } from "../src/convert.ts";
 import { loadNotes } from "../src/notes.ts";
+import { visibleTo } from "../src/project.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-convert-"));
 
@@ -446,5 +447,45 @@ git_remote = "https://github.com/owner/new"
     const { notes } = loadNotes(to);
     expect(notes[0]?.replaces).toBe("mem-0");
     expect(notes[0]?.replacedBy).toBe("mem-2");
+  });
+});
+
+describe("convert: a V3 project named Global (review regression)", () => {
+  it("keeps its notes in their own project, keeps projects.json keys, and drops unusable error patterns", () => {
+    const from = tmp();
+    const to = tmp();
+    mkdirSync(join(from, "records", "private"), { recursive: true });
+    mkdirSync(join(from, "projects", "other"), { recursive: true });
+    writeFileSync(join(from, "records", "mem-g.md"), createV3Record("mem-g", { scope: "project", project: "Global", trigger_errors: ["Exit code 1", "re:(a+)+b", "specific failure text"] }));
+    writeFileSync(join(from, "records", "private", "mem-gp.md"), createV3Record("mem-gp", { scope: "project", project: "Global" }));
+    writeFileSync(join(from, "projects", "other", "project.toml"), `id = "other"\n`);
+    writeFileSync(join(to, "projects.json"), JSON.stringify({ version: 2, projects: { keep: {} } }));
+
+    const report = convertV3(from, to);
+    const { notes } = loadNotes(to);
+    expect(notes.map((n) => [n.id, n.project]).sort()).toEqual([["mem-g", "global-project"], ["mem-gp", "global-project"]]);
+    const other = { id: "other", tags: [], root: null };
+    expect(notes.some((n) => visibleTo(n, other))).toBe(false);
+    expect(JSON.parse(readFileSync(join(to, "projects.json"), "utf8"))).toMatchObject({ version: 2, projects: { keep: {}, other: {} } });
+    expect(notes.find((n) => n.id === "mem-g")?.errors).toEqual(["specific failure text"]);
+    expect(report.errors).toHaveLength(2);
+    expect(report.errors.join("\n")).toMatch(/Exit code 1[\s\S]*\(a\+\)\+b/);
+  });
+
+  it("files a device-named V3 project under <name>-project", () => {
+    const from = tmp();
+    const to = tmp();
+    mkdirSync(join(from, "records"), { recursive: true });
+    mkdirSync(join(from, "projects", "aux"), { recursive: true });
+    writeFileSync(join(from, "records", "mem-1.md"), createV3Record("mem-1", { scope: "project", project: "aux" }));
+    writeFileSync(join(from, "records", "mem-2.md"), createV3Record("mem-2", { scope: "global" }));
+    writeFileSync(join(from, "projects", "aux", "project.toml"), `id = "aux"\n`);
+
+    convertV3(from, to);
+    const { notes } = loadNotes(to);
+    expect(notes.find((n) => n.id === "mem-1")?.project).toBe("aux-project");
+    expect(existsSync(join(to, "notes", "aux-project"))).toBe(true);
+    expect(notes.find((n) => n.id === "mem-2")?.project).toBe("global");
+    expect(Object.keys(JSON.parse(readFileSync(join(to, "projects.json"), "utf8")).projects)).toEqual(["aux-project"]);
   });
 });

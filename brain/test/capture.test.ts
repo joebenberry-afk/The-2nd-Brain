@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,6 +125,29 @@ describe("capture.errorSignature", () => {
   it("returns empty string for empty error", () => {
     expect(errorSignature("")).toBe("");
     expect(errorSignature("   ")).toBe("");
+  });
+
+  it("keeps a leading exit status over the stdout that follows it", () => {
+    expect(errorSignature("Exit code 2\nruns/fill:\nchart/")).toBe("Exit code 2");
+    expect(errorSignature("Exit code 2\nbash: -c: line 1: unexpected EOF while looking for matching `''")).toBe("bash: -c: line 1: unexpected EOF while looking for matching `''");
+  });
+
+  it("signs a leading exit status by a keyword-less diagnostic after it", () => {
+    expect(errorSignature("Exit code 128\nfatal: bad object abc")).toBe("fatal: bad object abc");
+    expect(errorSignature("Exit code 1\nThe directory is not empty.")).toBe("The directory is not empty.");
+    expect(errorSignature("Exit code 1\nbrain: Unknown option '-b'.")).toBe("brain: Unknown option '-b'.");
+  });
+
+  it("signs a Windows missing command by its 'not recognized' line", () => {
+    expect(errorSignature("Exit code 1\n\n> x@1.0.0 build\n> tsc-missing-xyz -p .\n\n'tsc-missing-xyz' is not recognized as an internal or external command,\noperable program or batch file."))
+      .toBe("'tsc-missing-xyz' is not recognized as an internal or external command,");
+    expect(errorSignature("Exit code 1\nx : The term 'x' is not recognized as the name of a cmdlet, function, script file,\nAt line:1 char:1\n+ x\n+ ~\n    + CategoryInfo : ObjectNotFound: (x:String) [], CommandNotFoundException"))
+      .toMatch(/^x : The term 'x' is not recognized/);
+  });
+
+  it("never signs a failure by an OMP output notice", () => {
+    expect(errorSignature("boom\n[raw output: artifact://12]\nCommand exited with code 1")).toBe("boom");
+    expect(errorSignature("[Showing lines 1-40 of 90 (4.0KB limit). Read artifact://7 for full output]\nCommand exited with code 1")).toBe("Command exited with code 1");
   });
 });
 
@@ -253,6 +277,39 @@ describe("capture.appendEvent", () => {
     const content = readFileSync(join(dir, files[0] as string), "utf8");
     const line = JSON.parse(content.trim()) as ToolEvent;
     expect(line.command).not.toContain("secret123");
+  });
+
+  it("masks long-run secrets in the command but keeps SHAs in the error", () => {
+    const home = tmp();
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    appendEvent(home, "s", "", { tool: "bash", command: "curl -X POST https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX -d hi", ok: false, error: `fatal: bad object ${sha}` });
+    appendEvent(home, "s", "", { tool: "bash", command: "aws configure set aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", ok: true });
+    const [slack, aws] = readFileSync(join(eventsDir(home), "s.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as ToolEvent);
+    expect(slack?.command).not.toContain("XXXXXXXXXXXXXXXXXXXXXXXX");
+    expect(slack?.error).toContain(sha);
+    expect(aws?.command).not.toContain("EXAMPLEKEY");
+  });
+
+  const SHA_A = "0123456789abcdef0123456789abcdef01234567";
+  const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
+  const cherryPickFails = (home: string) => appendEvent(home, "s", home, { tool: "bash", command: `git cherry-pick ${SHA_A}`, ok: false, error: "error: could not apply 0123456... conflict in src/x.ts" });
+
+  it.each([`git cherry-pick -x ${SHA_B}`, `git cherry-pick ${SHA_B} --strategy-option=theirs`])("keeps masked commands that differ only in a SHA apart: %s", (fixed) => {
+    const home = tmp();
+    cherryPickFails(home);
+    appendEvent(home, "s", home, { tool: "bash", command: fixed, ok: true });
+    expect(readFileSync(join(eventsDir(home), "s.jsonl"), "utf8")).not.toContain(SHA_A);
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("still pairs a rerun of the same SHA with an extra flag, without the log's tags", () => {
+    const home = tmp();
+    cherryPickFails(home);
+    appendEvent(home, "s", home, { tool: "bash", command: `git cherry-pick -x ${SHA_A}`, ok: true });
+    const proposals = scanEvents(home, []);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]!.text).toContain("git cherry-pick -x ***");
+    expect(proposals[0]!.text).not.toMatch(/\*\*\*[0-9a-f]{6}|0123456789abcdef0123/);
   });
 
   it("never throws on unwritable home", () => {
@@ -721,6 +778,28 @@ describe("capture.rejectProposal", () => {
     const home = tmp();
     expect(() => rejectProposal(home, "p-9999999999")).toThrow("no proposal");
   });
+
+  it("keeps rejections through a BOM, and never overwrites an unreadable rejected.json", () => {
+    const home = tmp();
+    appendEvent(home, "s", home, { tool: "bash", command: "cargo build", ok: false, error: "error[E0425]: cannot find value `x` in this scope" });
+    appendEvent(home, "s", home, { tool: "bash", command: "cargo build --offline", ok: true });
+    rejectProposal(home, scanEvents(home, [])[0]!.id);
+    const file = join(home, "rejected.json");
+    const first = JSON.parse(readFileSync(file, "utf8")).hashes as string[];
+    writeFileSync(file, String.fromCharCode(0xfeff) + readFileSync(file, "utf8")); // PowerShell 5.1's Out-File
+    writeFileSync(join(home, "state", "capture-cursor.json"), "{}");
+    expect(scanEvents(home, [])).toEqual([]);
+    const inbox = (id: string, text: string) => writeFileSync(join(home, "state", "inbox", `${id}.json`), JSON.stringify({ id, at: "2026-09-27T10:00:00Z", project: "demo", kind: "gotcha", text, errors: [], tested: false, source: "capture", evidence: [] }));
+    inbox("p-0000000001", "Second false alarm");
+    rejectProposal(home, "p-0000000001");
+    const after = readFileSync(file, "utf8");
+    expect(after.charCodeAt(0)).not.toBe(0xfeff);
+    expect(JSON.parse(after).hashes).toEqual(expect.arrayContaining(first));
+    writeFileSync(file, "{ not json");
+    inbox("p-0000000002", "Third false alarm");
+    expect(() => rejectProposal(home, "p-0000000002")).toThrow(/not valid JSON/);
+    expect(readFileSync(file, "utf8")).toBe("{ not json");
+  });
 });
 
 describe("capture.pendingCount", () => {
@@ -851,7 +930,7 @@ describe("capture.findFix", () => {
       text: "Fix 1",
       project: "global",
       kind: "gotcha",
-      errors: ["error"],
+      errors: ["cannot open"],
       tested: true,
     });
 
@@ -873,7 +952,7 @@ describe("capture.findFix", () => {
       text: "Fix",
       project: "global",
       kind: "gotcha",
-      errors: ["error"],
+      errors: ["disk quota exceeded"],
       tested: true,
     });
 
@@ -887,7 +966,7 @@ describe("capture.findFix", () => {
       text: "Untested",
       project: "global",
       kind: "gotcha",
-      errors: ["error"],
+      errors: ["disk quota exceeded"],
       tested: false,
     });
 
@@ -895,11 +974,11 @@ describe("capture.findFix", () => {
       text: "Tested",
       project: "global",
       kind: "gotcha",
-      errors: ["error"],
+      errors: ["disk quota exceeded"],
       tested: true,
     });
 
-    const fix = findFix([untested, tested], "error", null);
+    const fix = findFix([untested, tested], "disk quota exceeded", null);
     expect(fix?.id).toBe(tested.id);
   });
 
@@ -911,7 +990,7 @@ describe("capture.findFix", () => {
       text: "Will be retired",
       project: "global",
       kind: "gotcha",
-      errors: ["error"],
+      errors: ["disk quota exceeded"],
       tested: true,
     });
 
@@ -919,8 +998,82 @@ describe("capture.findFix", () => {
     writeFileSync(created.path, formatNote(retiredNote));
 
     const { notes: reloadedNotes } = loadNotes(home);
-    const fix = findFix(reloadedNotes, "error", null);
+    const fix = findFix(reloadedNotes, "disk quota exceeded", null);
     expect(fix).toBeNull();
+  });
+
+  it("ignores echoed data: a printed note, its own id, code frames", () => {
+    const home = tmp();
+    const pattern = "never displayed (it showed a partial range)";
+    const note = createNote(home, { text: "Anchor fix", project: "global", kind: "gotcha", errors: [pattern, "ERR_UNSUPPORTED_ESM_URL_SCHEME"], tested: true });
+    expect(findFix([note], `Exit code 2\n---\nid: n-x\nerrors:\n  - ${pattern}\n---\nls: cannot access 'missing'`, null)).toBeNull();
+    expect(findFix([note], `Exit code 1\nnotes/global/${note.id}.md:7:  - ${pattern}\nls: cannot access 'missing'`, null)).toBeNull();
+    expect(findFix([note], `Exit code 1\n FAIL test/a.test.ts > anchors\n ❯ test/a.test.ts:5:25\n      4|   const text = [\n      5|     "${pattern}",\n       |     ^`, null)).toBeNull();
+    // Real diagnostics still fire, including one whose source line is echoed above it.
+    expect(findFix([note], `Edit rejected: the anchor was ${pattern}.`, null)).toBe(note);
+    const esm = "node:internal/modules/esm/load:193\n    throw new ERR_UNSUPPORTED_ESM_URL_SCHEME(parsed, schemes);\n          ^\n\nError [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and node are supported. Received protocol 'c:'\n    at throwIfUnsupportedURLScheme (node:internal/modules/esm/load:193:11)";
+    expect(findFix([note], `Exit code 1\n${esm}`, null)).toBe(note);
+  });
+
+  it("still fires on diagnostics that look like source: JSON logs, `type …`, `at least …`, YAML documents", () => {
+    const home = tmp();
+    for (const [pattern, error] of [
+      ["ECONNREFUSED 127.0.0.1:5432", 'Exit code 1\n{"level":50,"msg":"connect ECONNREFUSED 127.0.0.1:5432"}'],
+      ["Rate limit exceeded", '{"error":{"message":"Rate limit exceeded"}}'],
+      ["is not a subtype of type 'String'", "type 'Null' is not a subtype of type 'String' in type cast"],
+      ["at least one file must be specified", "at least one file must be specified"],
+      ["INSTALLATION FAILED: missing image.tag", "---\nError: INSTALLATION FAILED: missing image.tag\n---"],
+    ] as const) {
+      const note = createNote(home, { text: `Fix for ${pattern}`, project: "global", kind: "gotcha", errors: [pattern], tested: true });
+      expect(findFix([note], error, null)).toBe(note);
+    }
+  });
+
+  it("never fires an exit status alone, even from an existing note", () => {
+    const home = tmp();
+    const note = { ...createNote(home, { text: "Exit fix", project: "global", kind: "gotcha", tested: true }), errors: ["Exit code 1"] };
+    expect(findFix([note], "Exit code 101\nerror: could not compile `app`", null)).toBeNull();
+    expect(() => createNote(home, { text: "x", project: "global", errors: ["Exit code 1"] })).toThrow(/exit status/);
+    expect(() => createNote(home, { text: "x", project: "global", errors: ["(no output)"] })).toThrow(/exit status/);
+  });
+
+  it("never fires a bare exception class, even from an existing note", () => {
+    const home = tmp();
+    for (const pattern of ["AssertionError", "E AssertionError", "AssertionError:", "builtins.KeyError"]) {
+      expect(() => createNote(home, { text: "x", project: "global", errors: [pattern] })).toThrow(/exception class/);
+    }
+    expect(createNote(home, { text: "Shapes differ", project: "global", errors: ["AssertionError: shapes differ"] }).errors).toEqual(["AssertionError: shapes differ"]);
+    const note = { ...createNote(home, { text: "Shapes fix", project: "global", kind: "gotcha", tested: true }), errors: ["AssertionError"] };
+    const traceback = (file: string) => `Traceback (most recent call last):\n  File "${file}", line 9, in <module>\n    assert a.shape == b.shape\nAssertionError`;
+    expect(findFix([note], traceback("tests/test_tokenizer.py"), null)).toBeNull();
+    const other = tmp();
+    appendEvent(other, "s", other, { tool: "bash", command: "python check_shapes.py", ok: false, error: traceback("check_shapes.py") });
+    appendEvent(other, "s", other, { tool: "bash", command: "python check_shapes.py --skip-gpu", ok: true });
+    expect(scanEvents(other, []).map((p) => [p.errors, p.tested])).toEqual([[[], true]]);
+  });
+
+  it("never fires a catch-all error word, even from an existing note", () => {
+    const home = tmp();
+    const rejects = (patterns: string[], why: RegExp) => { for (const p of patterns) expect(() => createNote(home, { text: "x", project: "global", errors: [p] })).toThrow(why); };
+    rejects(["Error", "Error:", "Exception", "Warning"], /exception class/);
+    rejects(["Traceback", "FAILED", "fatal:", "npm ERR!", "npm error", "npm error code 1", "npm ERR! code 1", "Traceback (most recent call last):", "Traceback (most recent call last)",
+      "During handling of the above exception, another exception occurred:", "The above exception was the direct cause of the following exception:", "==========", "===== FAILURES ====="], /no particular error/);
+    rejects(["Command failed with exit code 1", "returned non-zero exit status 1", "error Command failed with exit code 1.", "Process completed with exit code 1."], /exit status/);
+    expect(createNote(home, { text: "Registry fix", project: "global", errors: ["npm error code E404"] }).errors).toEqual(["npm error code E404"]);
+    expect(createNote(home, { text: "Module fix", project: "global", errors: ["Error: Cannot find module 'x'"] }).errors).toEqual(["Error: Cannot find module 'x'"]);
+    expect(createNote(home, { text: "Repo fix", project: "global", errors: ["fatal: not a git repository"] }).errors).toEqual(["fatal: not a git repository"]);
+    const note = { ...createNote(home, { text: "Generic fix", project: "global", kind: "gotcha", tested: true }), errors: ["Error:"] };
+    expect(findFix([note], "TypeError: x is not a function\nError: boom", null)).toBeNull();
+    expect(findFix([{ ...note, errors: ["Traceback (most recent call last):"] }], "Traceback (most recent call last):\n  File \"x.py\", line 1\nKeyError: 'a'", null)).toBeNull();
+  });
+
+  it("skips a note scoped to another host", () => {
+    const home = tmp();
+    const note = { ...createNote(home, { text: "OMP anchor fix", project: "global", kind: "gotcha", errors: ["is not from this session."], tested: true }), host: "omp" };
+    const error = "Error: hash is not from this session.";
+    expect(findFix([note], error, null, undefined, "claude-code")).toBeNull();
+    expect(findFix([note], error, null, undefined, "omp")).toBe(note);
+    expect(findFix([note], error, null)).toBe(note);
   });
 });
 
@@ -1306,6 +1459,22 @@ describe("capture ignores ephemeral experiments", () => {
     appendEvent(home, "inline", home, { tool: "bash", command: "npm ci && npm test", ok: true });
     expect(scanEvents(home, []).map((p) => [p.tested, p.errors])).toEqual([[true, ["Error: dependency missing"]]]);
   });
+
+  it("skips the Brain home's own state/ scripts, not scripts/ nor another repo's state/", () => {
+    const pair = (home: string, cwd: string, dir: string) => {
+      appendEvent(home, "st", cwd, { tool: "bash", command: `node ${dir}/x.mjs`, ok: false, error: "Error: analysis failed" });
+      appendEvent(home, "st", cwd, { tool: "bash", command: `node --check ${dir}/x.mjs && node ${dir}/x.mjs`, ok: true });
+      return scanEvents(home, []).length;
+    };
+    const home = tmp();
+    expect(pair(home, home, "state")).toBe(0);
+    const scripts = tmp();
+    expect(pair(scripts, scripts, "scripts")).toBe(1);
+    const other = tmp();
+    const repo = join(other, "repo");
+    mkdirSync(join(repo, "state"), { recursive: true });
+    expect(pair(other, repo, "state")).toBe(1);
+  });
 });
 describe("capture repair boundaries", () => {
   it.each(["edit", "write", "apply_patch", "create", "replace", "notebook", "move", "rename", "delete"])("does not learn command fixes across a successful %s", (tool) => {
@@ -1325,6 +1494,41 @@ describe("capture repair boundaries", () => {
     expect(scanEvents(home, []).map((p) => p.errors)).toEqual([["ERROR: Cannot find module"]]);
   });
 
+  it.each(["sed -i 's/a/b/' src/x.js && npm test", "perl -pi -e 's/a/b/' src/x.js && npm test", "echo fixed > src/x.js && npm test"])("treats a file rewrite in the shell as an edit: %s", (fixed) => {
+    const home = tmp();
+    appendEvent(home, "repair", home, { tool: "bash", command: "npm test", ok: false, error: "AssertionError: ('hr', 43.746835906080506)" });
+    appendEvent(home, "repair", home, { tool: "bash", command: fixed, ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("keeps a repair whose output only goes to /dev/null", () => {
+    const home = tmp();
+    appendEvent(home, "repair", home, { tool: "bash", command: "npm test", ok: false, error: "ERROR: Cannot find module" });
+    appendEvent(home, "repair", home, { tool: "bash", command: "npm ci > /dev/null && npm test", ok: true });
+    expect(scanEvents(home, []).map((p) => p.errors)).toEqual([["ERROR: Cannot find module"]]);
+  });
+
+  it("never turns a bare exit status into a pattern", () => {
+    const home = tmp();
+    appendEvent(home, "exit", home, { tool: "Bash", command: "npx vitest run test/a.test.ts", ok: false, error: "Exit code 1\nCargo.lock\nCargo.toml" });
+    appendEvent(home, "exit", home, { tool: "Bash", command: "npx vitest run test/a.test.ts --update", ok: true });
+    expect(scanEvents(home, []).map((p) => p.errors)).toEqual([[]]);
+  });
+
+  it("never captures the Brain's own CLI, and never a private note's text", () => {
+    const home = tmp();
+    appendEvent(home, "own", home, { tool: "Bash", command: 'brain note "staging box is 10.20.30.40" --private --global', ok: false, error: "brain: --global and --private exclude each other" });
+    appendEvent(home, "own", home, { tool: "Bash", command: 'brain note "staging box is 10.20.30.40" --private', ok: true });
+    appendEvent(home, "own", home, { tool: "Bash", command: './brain/bin/brain.mjs note "staging box is 10.20.30.40" --private', ok: true });
+    appendEvent(home, "own", home, { tool: "Bash", command: `bash -c 'brain note "staging box is 10.20.30.40" --private'`, ok: true });
+    expect(existsSync(join(eventsDir(home), "own.jsonl"))).toBe(false);
+    appendEvent(home, "own", home, { tool: "Bash", command: './brain/bin/brain.mjs note "s" --kind', ok: false, error: "brain: --kind needs a value" });
+    appendEvent(home, "own", home, { tool: "Bash", command: './brain/bin/brain.mjs note "s" --kind gotcha', ok: true });
+    appendEvent(home, "own", home, { tool: "Bash", command: 'node brain/bin/brain.mjs note "s" --kind', ok: false, error: "brain: --kind needs a value" });
+    appendEvent(home, "own", home, { tool: "Bash", command: 'node brain/bin/brain.mjs note "s" --kind gotcha', ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
   it("retains a distinctive long pytest signature without suppressing unrelated failures", () => {
     const home = tmp();
     const error = "FAILED tests/test_x.py::test_" + "long_name_".repeat(12) + " - Failed: DID NOT RAISE";
@@ -1342,5 +1546,77 @@ describe("capture repair boundaries", () => {
     appendEvent(other, "second", other, { tool: "bash", command: "pytest tests/test_y.py", ok: false, error: error.replace("test_x", "test_y") });
     appendEvent(other, "second", other, { tool: "bash", command: "pytest tests/test_y.py --strict", ok: true });
     expect(scanEvents(other, [])).toHaveLength(1);
+  });
+
+  it("blocks a rejected error signature in its own project only", () => {
+    const home = tmp();
+    const alpha = join(home, "alpha"), beta = join(home, "beta");
+    mkdirSync(alpha); mkdirSync(beta);
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { alpha: { paths: [alpha] }, beta: { paths: [beta] } } }));
+    const pair = (session: string, cwd: string, failed: string, fixed: string) => {
+      appendEvent(home, session, cwd, { tool: "bash", command: failed, ok: false, error: "E AssertionError: x mismatch" });
+      appendEvent(home, session, cwd, { tool: "bash", command: fixed, ok: true });
+      return scanEvents(home, []);
+    };
+    const [first] = pair("a1", alpha, "pytest tests/test_x.py", "pytest tests/test_x.py --lf");
+    expect([first?.project, first?.errors]).toEqual(["alpha", ["AssertionError: x mismatch"]]);
+    rejectProposal(home, first!.id);
+    expect(pair("b1", beta, "pytest tests/test_y.py", "pytest tests/test_y.py -x")).toHaveLength(1);
+    expect(pair("a2", alpha, "pytest tests/test_z.py", "pytest tests/test_z.py -x")).toHaveLength(0);
+  });
+
+  it("keeps honouring an unscoped error rejection written before rejections were per project", () => {
+    const home = tmp();
+    const legacy = createHash("sha256").update("e:assertionerror: x mismatch").digest("hex").slice(0, 16);
+    writeFileSync(join(home, "rejected.json"), JSON.stringify({ hashes: [legacy] }));
+    appendEvent(home, "s", home, { tool: "bash", command: "pytest tests/test_x.py", ok: false, error: "E AssertionError: x mismatch" });
+    appendEvent(home, "s", home, { tool: "bash", command: "pytest tests/test_x.py --lf", ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("rejects an error under the owner when the proposal's project id has become an alias", () => {
+    const home = tmp();
+    const dir = join(home, "old");
+    mkdirSync(dir);
+    const pair = (session: string, fixed: string) => {
+      appendEvent(home, session, dir, { tool: "bash", command: "pytest tests/test_x.py", ok: false, error: "E AssertionError: x mismatch" });
+      appendEvent(home, session, dir, { tool: "bash", command: fixed, ok: true });
+      return scanEvents(home, []);
+    };
+    const [first] = pair("a1", "pytest tests/test_x.py --lf");
+    expect(first?.project).toBe("old");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { alpha: { aliases: ["old"] } } }));
+    rejectProposal(home, first!.id);
+    expect(pair("a2", "pytest tests/test_x.py -x")).toEqual([]);
+  });
+
+  it("never pairs an already paired failure again", () => {
+    const home = tmp();
+    appendEvent(home, "s", home, { tool: "bash", command: "cargo build", ok: false, error: "error[E0425]: cannot find value `x` in this scope" });
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test", ok: false, error: "Exit code 1" });
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test -- -u", ok: true });
+    const proposals = scanEvents(home, []);
+    expect(proposals).toHaveLength(1); // cargo build still waits: the cursor rereads npm test
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test -- --run", ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+    acceptProposal(home, proposals[0]!.id);
+    writeFileSync(join(home, "state", "capture-cursor.json"), "{}");
+    expect(scanEvents(home, loadNotes(home).notes)).toEqual([]);
+  });
+
+  const LONG_FLAGS = Array.from({ length: 14 }, (_, i) => `--exclude=test/fixtures/generated-snapshot-${i}.test.ts`).join(" ");
+  it.each(["|| true", "2>&1 | tail -20", "; echo done", "&& sed -i s/a/b/ f"])("does not trust a success cut in the log before `%s`", (tail) => {
+    const home = tmp();
+    appendEvent(home, "cut", home, { tool: "bash", command: "npx vitest run", ok: false, error: "AssertionError: expected 90 to be 81" });
+    appendEvent(home, "cut", home, { tool: "bash", command: `npx vitest run ${LONG_FLAGS} ${tail}`, ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+  });
+
+  it("does not trust a clean retry after a cut success either", () => {
+    const home = tmp();
+    appendEvent(home, "cut", home, { tool: "bash", command: "npx vitest run", ok: false, error: "AssertionError: expected 90 to be 81" });
+    appendEvent(home, "cut", home, { tool: "bash", command: `npx vitest run ${LONG_FLAGS} || true`, ok: true });
+    appendEvent(home, "cut", home, { tool: "bash", command: "npx vitest run --retry=3", ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
   });
 });

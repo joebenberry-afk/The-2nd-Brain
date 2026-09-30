@@ -80,6 +80,39 @@ it("named registered docs return the best heading or a bounded H2 outline", () =
   expect(estimateTokens(bounded)).toBeLessThanOrEqual(30);
 });
 
+it("outlines a named doc whose file name has '-', '_' or accents, never a look-alike", () => {
+  const { home, root, project } = setup();
+  writeFileSync(join(root, "docs", "release-plan.md"), "# Plan\n\n## Milestones\nShip.\n\n## Goals\nDash goals.\n");
+  writeFileSync(join(root, "docs", "release_plan.md"), "# Plan\n\n## Risks\nNone.\n\n## Goals\nUnderscore goals.\n");
+  writeFileSync(join(root, "docs", "Café.md"), "## Menu\nCoffee.\n\n## Hours\nOpen.\n");
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/release-plan.md", "docs/release_plan.md", "docs/Café.md", "docs/LOOP.md"] } } }));
+  expect(docAnswer(home, project, "release_plan.md")?.text).toBe("docs/release_plan.md: Risks · Goals");
+  expect(docAnswer(home, project, "release-plan.md")?.text).toBe("docs/release-plan.md: Milestones · Goals");
+  expect(docAnswer(home, project, "docs/release_plan.md goals")?.text).toBe("docs/release_plan.md › Goals (line 6)");
+  expect(docAnswer(home, project, "Café.md")?.text).toBe("docs/Café.md: Menu · Hours");
+  expect(docAnswer(home, project, "cafe.md")?.text).toBe("docs/Café.md: Menu · Hours");
+  expect(docAnswer(home, project, "What is in LOOP.md?")?.text).toBe("docs/LOOP.md: Goals · Resume · Other");
+  expect(docAnswer(home, project, "docs/LOOP.md#resume")?.text).toBe("docs/LOOP.md › Resume (line 6)");
+});
+
+it("resolves See: anchors written as heading text, in another case, quoted or percent-encoded", () => {
+  const { root, file } = setup();
+  writeFileSync(file, "# Plan\n\n## Goals\nShip anchored memory.\n\n## Resume\nCurrent checkpoint.\n\n## Current campaign\nShip the checkpoint.\n\n## 6. Kill rules (unchanged from V4, restated)\nKill.\n");
+  for (const anchor of ["docs/LOOP.md#Resume", "`docs/LOOP.md#resume`", "\"docs/LOOP.md#resume\""]) expect(readAnchor(root, anchor)).toBe("Current checkpoint.");
+  for (const anchor of ["docs/LOOP.md#Current campaign", "docs/LOOP.md#Current%20campaign", "docs/LOOP.md#Current-Campaign"]) expect(readAnchor(root, anchor)).toBe("Ship the checkpoint.");
+  for (const anchor of ["docs/LOOP.md#6. Kill rules (unchanged from V4, restated)", "docs/LOOP.md#6-Kill-Rules-unchanged-from-V4-restated", "docs/LOOP.md#6-kill-rules-unchanged-from-v4-restated"]) expect(readAnchor(root, anchor)).toBe("Kill.");
+  expect(readAnchor(root, "docs/LOOP.md#absent")).toBeUndefined();
+  expect(readAnchor(root, "docs/LOOP.md#%E0%A4%A")).toBeUndefined();
+});
+
+it("labels a quoted See: anchor on the card without stray quotes", () => {
+  const { home, project } = setup();
+  writeWork(home, project.id, "Goal: x\nSee: `docs/LOOP.md#Resume`");
+  const card = renderCard(home, [], project);
+  expect(card).toContain("docs/LOOP.md › Resume:\nCurrent checkpoint.");
+  expect(card).not.toContain("`docs/LOOP.md");
+});
+
 it("matches GitHub-style Unicode, punctuation and duplicate heading slugs, ignoring fences", () => {
   const { root, file } = setup();
   writeFileSync(file, "```md\n## Fake\n```\n## Café & Next!\nFirst.\n## Café & Next!\nSecond.\n## End\nOther.\n");
@@ -127,6 +160,8 @@ it("CLI adds and lists docs, deduplicates, preserves config and refuses invalid 
   expect((await run("project", "docs", "add", "docs/LOOP.md")).code).toBe(0);
   expect((await run("project", "docs", "list")).out).toBe("docs/LOOP.md");
   expect(JSON.parse(readFileSync(join(home, "projects.json"), "utf8"))).toEqual({ extra: true, projects: { repo: { tags: ["node"], custom: 42, docs: ["docs/LOOP.md"] } } });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/LOOP.md", "gone.md"] } } }));
+  expect((await run("project", "docs", "list")).out).toBe(`docs/LOOP.md\ngone.md (missing under ${root})`);
   writeFileSync(join(root, "code.ts"), "code");
   for (const path of [file, "../outside.md", "code.ts", "missing.md", "C:\\outside.md", "/outside.md"]) {
     expect((await run("project", "docs", "add", path)).code).not.toBe(0);

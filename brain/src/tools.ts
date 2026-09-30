@@ -65,7 +65,9 @@ export const brainTools: BrainTool[] = [
     },
     run(params, { home, cwd, env, sub }) {
       const text = requireString(params.text, "text");
-      const kind = typeof params.kind === "string" && (KINDS as readonly string[]).includes(params.kind) ? (params.kind as Kind) : undefined;
+      // As the CLI does: a kind silently stored as "note" loses the classification without a word.
+      const kind = (params.kind == null || params.kind === "" ? undefined : String(params.kind)) as Kind | undefined;
+      if (kind !== undefined && !(KINDS as readonly string[]).includes(kind)) throw new Error(`unknown kind ${kind} (${KINDS.join(", ")})`);
       const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
       const project = resolveProject(home, cwd, env);
       const scope = params.global === true ? GLOBAL : project.id;
@@ -74,8 +76,8 @@ export const brainTools: BrainTool[] = [
       // Only a parent can vouch for a project fix; global fixes need the owner's confirmation.
       const wantsTested = params.tested === true;
       const tested = wantsTested && !sub && (same?.project ?? scope) !== GLOBAL;
-      const untested = sub ? " (untested: the parent or `brain tested <id>` confirms)"
-        : wantsTested && !tested ? " (untested: a global fix is confirmed with `brain tested <id>`)" : "";
+      const untested = same?.tested ? "" : sub ? " (untested: the parent or `brain tested <id>` confirms)"
+        : wantsTested && !tested ?" (untested: the owner confirms a global fix with `brain tested <id>`)" : "";
       if (same) {
         const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested });
         return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}`, kind: "note", project: project.id };

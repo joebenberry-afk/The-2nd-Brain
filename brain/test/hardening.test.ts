@@ -34,11 +34,91 @@ describe("secrets never reach notes or working state", () => {
     }
   });
 
-  it("leaves prose after Basic/Bearer alone but masks scheme tokens", () => {
-    for (const text of ["Basic Upscaler project architecture decisions", "Visual Basic Scripting", "Digest username"]) {
+  it("masks credential pairs inside URL queries and flag=KEY=value", () => {
+    for (const [text, secret] of [
+      ["curl https://h/p?api_key=a1b2c3d4e5f6g7h8i9j0", "a1b2c3d4e5f6g7h8i9j0"],
+      ['Invoke-RestMethod "https://h/?apikey=hunter1&password=hunter2"', "hunter"],
+      ["Max retries exceeded with url: /v1?api_key=hunter2", "hunter2"],
+      ["kubectl create secret generic db --from-literal=password=hunter2", "hunter2"],
+      ["docker run --env=API_TOKEN=abcdef123456789 img", "abcdef123456789"],
+      ["terraform apply -var=db_password=hunter2", "hunter2"],
+      ["helm install x --set=db.password=hunter2", "hunter2"],
+      ["curl http://localhost:8080/v1?api_key=a1b2c3d4e5f6g7h8i9j0", "a1b2c3d4e5f6g7h8i9j0"],
+      ["curl https://api.example.com:443/v1?password=hunter2", "hunter2"],
+      ["with url: https://h/p?api_key=a1b2c3d4e5f6g7h8i9j0", "a1b2c3d4e5f6g7h8i9j0"],
+      ["wget --url=https://h/p?password=hunter2", "hunter2"],
+      ['{"url":"https://h/p?password=hunter2"}', "hunter2"],
+      ["kubectl create secret generic db --from-literal=password=s3cr?tvalue9", "tvalue9"],
+    ]) {
+      for (const longRuns of [true, false]) expect(scrub(text as string, { longRuns }).text).not.toContain(secret);
+    }
+    for (const text of ["open https://example.com/p?page=2", "vite --port=8080", "curl http://localhost:8080/v1?page=2"]) expect(scrub(text)).toEqual({ text, scrubbed: false });
+  });
+
+  it("masks short password names, JWTs and mysql -p<password>, not ports or BYPASS", () => {
+    const jwt = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJkZW1vIn0.c2lnbmF0dXJlLXNhbXBsZQ";
+    for (const [text, secret] of [
+      ["export DB_PASS=hunter2; npm run migrate", "hunter2"],
+      ["$env:PGPASS='hunter2'", "hunter2"],
+      ["export MYSQL_PWD=hunter2", "hunter2"],
+      ["SMTP_PASS=hunter2 node send.js", "hunter2"],
+      [`curl -H "Cookie: session=${jwt}"`, "eyJ"],
+      [jwt, "eyJ"],
+      ["mysql -u root -phunter2 -h db", "hunter2"],
+      ["docker exec -it db mysql -uroot -phunter2", "hunter2"],
+      ["kubectl exec -it pod -- mariadb-dump -phunter2 app", "hunter2"],
+      ["/usr/bin/mysql -uroot -phunter2 app", "hunter2"],
+      ["./mysql -uroot -phunter2 app", "hunter2"],
+      [String.raw`C:\xampp\mysql\bin\mysql.exe -u root -phunter2 shop`, "hunter2"],
+      [String.raw`.\mysqldump.exe -uroot -phunter2 shop > dump.sql`, "hunter2"],
+      [String.raw`& "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -uroot -phunter2`, "hunter2"],
+      ["cd x && C:/xampp/mysql/bin/mysql.exe -uroot -phunter2 shop", "hunter2"],
+      ['& "mysql.exe" -uroot -phunter2', "hunter2"],
+      ["for db in a b; do\n  if true; then\n            /usr/bin/mysql -uroot -phunter2 $db\n  fi\ndone", "hunter2"],
+      ["mysql -h db -u app \\\n  -pS3cretPw9 app < seed.sql", "S3cretPw9"],
+      ["/usr/bin/mysql -h db \\\r\n  -u app -pS3cretPw9 app", "S3cretPw9"],
+      ["mysql -h db -u app `\n  -pS3cretPw9 app", "S3cretPw9"],
+      [String.raw`Local DB: connect with ` + "`" + String.raw`C:\xampp\mysql\bin\mysql.exe -uroot -pS3cretPw9` + "` from the repo root", "S3cretPw9"],
+      ["Next: run `/usr/local/mysql/bin/mysql -uapp -pS3cretPw9 app < seed.sql`", "S3cretPw9"],
+      ['"$MYSQL_HOME"/bin/mysql -uroot -phunter2', "hunter2"],
+      ["SMTP_PASS: hunter2", "hunter2"],
+      ["pass=hunter2", "hunter2"],
+      ["auth: { user: 'me@x.com', pass: 'hunter2' }", "hunter2"],
+      ['{ "pass": "hunter2" }', "hunter2"],
+      ["mailer needs pass: 'Sup3rS3cret!' in config", "Sup3rS3cret"],
+      ["DB_PASS={s3cr3t-Value} npm run migrate", "s3cr3t"],
+      ["SMTP_PASS=[Zx81aa] node send.mjs", "Zx81aa"],
+    ]) {
+      for (const longRuns of [true, false]) expect(scrub(text as string, { longRuns }).text).not.toContain(secret);
+    }
+    for (const text of ["docker run -p 8080:80 img", "BYPASS_CACHE=true npm test", "pytest fails from pwd: C:/repo/tests", "vitest --passWithNoTests=true", 'docker run -v "$PWD":/app img',
+      "docker run --name mysql-db -p3306:3306 mysql:8", "docker run --name mysql -p3306:3306 mysql:8", "gcc $(mysql_config --cflags) -pthread",
+      "gcc -I/usr/include/mysql -pthread -o app app.c", "find /etc/mysql -path '*.cnf' -print",
+      'docker run --name "mysql" -p3306:3306 mysql:8', "docker run --name 'mysql' -p8080:80 -d mysql:8", 'docker run -e MYSQL_DATABASE="mysql" -p3306:3306 mysql:8',
+      'docker run -d --hostname "mysql" -p3306:3306', 'git log -S "mysql" -p3', "gcc -O2 \\\n  -I/usr/include/mysql -pthread -o app app.c",
+      "./configure \\\n  --with-mysql=/usr/local/mysql -prefix=/opt", "make: *** [app] Error 1\ncc -c x.c\n-L/usr/lib/mysql -pthread -lmysqlclient",
+      "gcc `mysql_config --cflags --libs` -pthread -o app app.c",
+      "ls /etc/mysql -p", "cp ./mysql -p /tmp", String.raw`C:\xampp\mysql\bin\mysql.exe: [Warning] Using a password on the command line interface can be insecure.`,
+      "E2 gate. Pass: anchored arm needs at most 2 tool calls; memory.pass=true in summary.json", "First pass: collect the files",
+      "--- PASS: TestParseConfig (0.00s)", "{ pass: true }", '{"pass":true}', '{"firstPass":{"tokens":1}}', "s.pass === s.runs", "s.pass == n", "s.pass = []", "firstPass: {"]) {
       expect(scrub(text)).toEqual({ text, scrubbed: false });
     }
-    for (const text of ["Basic dXNlcjpwYXNzd29yZA==", "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig", "Authorization: Basic Upscaler", "Bearer abcdefghijklmnopqrstuvwxyz"]) {
+    for (const hostile of ["x" + " ".repeat(32_768) + "y", "\n" + " ".repeat(32_768) + "y", "mysql " + "\\\n".repeat(16_384), "mysql " + "`\n ".repeat(10_922),
+      "`mysql ".repeat(4_681), ";`/a/".repeat(6_553), ';"/a'.repeat(8_192), "\n/a/a/a/a/a/a/a/a/a/a/a/a/a".repeat(1_260)]) {
+      const started = performance.now();
+      scrub(hostile);
+      expect(performance.now() - started).toBeLessThan(250);
+    }
+  });
+
+  it("leaves prose after Basic/Bearer alone but masks scheme tokens", () => {
+    for (const text of ["Basic Upscaler project architecture decisions", "Visual Basic Scripting", "Digest username", "Run The Basic Upscaler/tools/bench.ps1", "C:/x/The Basic Upscaler/src/x.py"]) {
+      expect(scrub(text)).toEqual({ text, scrubbed: false });
+    }
+    for (const text of ["Basic dXNlcjpwYXNzd29yZA==", "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig", "Authorization: Basic Upscaler", "Bearer abcdefghijklmnopqrstuvwxyz",
+      "Bearer abc123def456/xyz", "Basic dXNl/cjpwYXNz", "Authorization: Basic Upscaler/x", `curl -H "X-Upstream: Basic ywi/ajQ+iX5HpKGDKf8ezbL1F5efJVr5"`,
+      "Basic dxnlcg/cGFzcw==", "Bearer abcdefghij/KLMNOP1234567890", "Bearer ya/29a0AfH6SMBx3kq"]) {
+      expect(scrub(text, { longRuns: false }).text).toMatch(/(Basic|Bearer) \*\*\*/);
       expect(scrub(text).text).toMatch(/(Basic|Bearer) \*\*\*/);
     }
   });

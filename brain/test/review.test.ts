@@ -1,10 +1,10 @@
 /** Regressions for the code-review findings on brain/src (each failed before its fix). */
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acceptProposal, rejectProposal, errorSignature, findFix, scanCommits, scanEvents } from "../src/capture.ts";
+import { acceptProposal, listProposals, pendingCount, rejectProposal, errorSignature, findFix, scanCommits, scanEvents } from "../src/capture.ts";
 import { convertV3 } from "../src/convert.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import secondBrain, { type HostLike } from "../src/omp.ts";
@@ -453,6 +453,40 @@ it("review displays each full scrubbed proposal body before acceptance", async (
   expect(text).toContain("Actual command: npm test -- --run");
   expect(text).toContain("Error: package unavailable");
   expect(text).not.toContain("SyntheticPassword");
+});
+
+it("review lists this project's and global proposals, and counts the rest (--all shows them)", async () => {
+  const home = tmp();
+  mkdirSync(join(home, "state", "inbox"), { recursive: true });
+  for (const project of ["demo", "global", "other"]) {
+    writeFileSync(join(home, "state", "inbox", `p-${project}.json`), JSON.stringify({ id: `p-${project}`, at: new Date().toISOString(), project, kind: "gotcha", text: `proposal from ${project}`, tested: false, errors: [], evidence: [], source: "capture" }));
+  }
+  const review = async (...args: string[]) => {
+    const out: string[] = [];
+    await main(["review", ...args], { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: home, out: (s) => out.push(s), err: (s) => out.push(s) });
+    return out.join("\n");
+  };
+  const scoped = await review();
+  expect(scoped).toContain("proposal from demo");
+  expect(scoped).toContain("proposal from global");
+  expect(scoped).not.toContain("proposal from other");
+  expect(scoped).toContain("+1 in other projects (brain review --all)");
+  expect(await review("--all")).toContain("proposal from other");
+  rmSync(join(home, "state", "inbox", "p-demo.json"));
+  rmSync(join(home, "state", "inbox", "p-global.json"));
+  expect(await review()).toBe("nothing to review here; +1 in other projects (brain review --all)");
+});
+
+it("a proposal under an id that became an alias is listed, counted and accepted under its owner", () => {
+  const home = tmp();
+  mkdirSync(join(home, "state", "inbox"), { recursive: true });
+  writeFileSync(join(home, "state", "inbox", "p-0123456789.json"), JSON.stringify({ id: "p-0123456789", at: new Date().toISOString(), project: "old", kind: "gotcha", text: "proposal from old", tested: false, errors: [], evidence: [], source: "capture" }));
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { owner: { aliases: ["old"] } } }));
+  expect(listProposals(home)[0]?.project).toBe("owner");
+  expect(pendingCount(home, "owner")).toBe(1);
+  const note = acceptProposal(home, "p-0123456789");
+  expect(note.project).toBe("owner");
+  expect(existsSync(join(home, "notes", "owner", `${note.id}.md`))).toBe(true);
 });
 
 describe("proposal id boundary", () => {

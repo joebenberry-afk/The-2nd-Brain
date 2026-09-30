@@ -393,7 +393,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             }
           }, 0);
         }
-        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, prompt: typeof prompt === "string" ? prompt : undefined });
+        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt: typeof prompt === "string" ? prompt : undefined });
 
         if (cardContent) {
           state.carded = true;
@@ -549,7 +549,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!fields.ok && fields.error) {
         const project = resolveProject(home, cwd, env);
         const { notes } = loadNotes(home);
-        const fix = findFix(notes, fields.error, project, home);
+        const fix = findFix(notes, fields.error, project, home, "omp");
 
         if (fix) {
           // The full fix once per context: a repeat of the same error costs a pointer, not the text.

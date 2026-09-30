@@ -1,5 +1,6 @@
 /** Start-of-session memory: complete facts, scoped context, and a hard total budget. */
 import { pendingCount } from "./capture.ts";
+import { projectDocs } from "./docs.ts";
 import { displayLine, firstLine, GLOBAL, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
 import { recall, staleHere } from "./search.ts";
@@ -28,6 +29,8 @@ export interface CardOptions {
   tools?: boolean;
   now?: Date;
   subagent?: boolean;
+  /** The host rendering the card; recurring fixes count only that host's fires. */
+  host?: "omp" | "claude-code";
   /** First user prompt, used only for ranking, never persisted. */
   prompt?: string;
 }
@@ -95,16 +98,16 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   // Parse labels before extracting warnings so parent goals, next steps and Done never leak.
   const warning = opts.subagent && work?.text
     ? planFit(work.text.replace(/^See:.*$/gm, ""), work.text.length).split(/(?=^Done:)/m)[0]?.match(/^Watch out: [\s\S]*/m)?.[0] ?? "" : "";
-  const workingState = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : workText(work, project.root);
+  const workingState = opts.subagent ? cutToTokens(warning.replace(/\s+/g, " ").trim(), 40) : workText(work, project.root, project.docRoot, project.docRoot ? projectDocs(home, project) : []);
   const candidates = cardCandidates(notes, project);
   // A fix that fired in several recent sessions of this role (child or not) is a mistake agents
   // here keep making: say it before the first attempt, not after. It retires itself when the
   // mistake stops, because then it stops firing.
-  const fires = fixFires(home, opts.subagent === true, 7, now);
+  const fires = fixFires(home, opts.subagent === true, 7, now, opts.host);
   const paused = pausedFixes(home, notes);
   // Any note that could fire as a fix here qualifies, untagged globals included.
   const recurring = notes
-    .filter((n) => !n.retired && n.tested && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project))
+    .filter((n) => !n.retired && n.tested && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project) && !(opts.host && n.host && n.host !== opts.host))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
   const ranked = rankForCard(candidates, project, opts.subagent ? workingState : work?.text ?? "", now, home, opts.prompt);

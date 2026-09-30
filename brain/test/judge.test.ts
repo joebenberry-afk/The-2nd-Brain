@@ -74,19 +74,55 @@ it("explicit note-id recalls are never judged", async () => {
   expect(judge).not.toHaveBeenCalled();
 });
 
+it("a note id pasted in another case or with brackets is an id read, never judged", async () => {
+  const notes = [note("n-0123456789")]; const judge = vi.fn(rejectAll);
+  expect(await judgedAnswer(notes, "[N-0123456789].", { project }, judge)).toMatchObject({ ids: ["n-0123456789"], judged: false });
+  expect(judge).not.toHaveBeenCalled();
+});
+
 it("does not resurrect a dropped retired note or its replacement", async () => {
   const notes = [note("old", { retired: "2026-09-28", replacedBy: "new" }), note("new", { body: "Different current advice" })];
   expect(answerWithHits(notes, "quartz migration", { project }).ids).toEqual(["new", "old"]);
   expect(await judgedAnswer(notes, "quartz migration", { project }, rejectAll)).toMatchObject({ ids: [], dropped: 2 });
 });
 
-it("collapses whitespace, cuts at 450 characters, then scrubs note text and the query", async () => {
+it("collapses whitespace, scrubs, then cuts at 450 characters note text, and scrubs the query", async () => {
   const original = note("safe", { body: "Quartz\n\t migration password=syntheticSecret123 " + "ordinary words ".repeat(50) });
   const text = judgeText(original);
-  expect(text).toBe(("Quartz migration password=syntheticSecret123 " + "ordinary words ".repeat(50)).slice(0, 450).replace("syntheticSecret123", "***"));
+  expect(text).toBe(("Quartz migration password=syntheticSecret123 " + "ordinary words ".repeat(50)).replace("syntheticSecret123", "***").slice(0, 450));
   const judge = vi.fn(async (_query: string, candidates: { id: string; text: string }[]) => new Map(candidates.map(c => [c.id, 1])));
   await judgedAnswer([original], "quartz migration password=syntheticSecret123", { project }, judge);
   expect(judge.mock.calls[0]).toEqual(["quartz migration password=***", [{ id: "safe", text }]]);
+});
+
+// A secret straddling character 450 must be masked whole, not cut below its pattern's minimum length.
+const base64Run = "Ab1".repeat(14).slice(0, 40);
+const awsKey = "AKIA" + "Z9Y8X7W6V5U4T3S2";
+const leaks = (text: string, secret: string) => Array.from({ length: secret.length - 11 }, (_, i) => secret.slice(i, i + 12)).some(part => text.includes(part));
+
+it("never sends part of a secret that straddles the 450-character cut", () => {
+  // "Quartz migration " (17) + "ab " × n puts the secret at offset 17 + 3n.
+  const run = judgeText(note("run", { body: "Quartz migration " + "ab ".repeat(132) + base64Run + " tail words" }));
+  const key = judgeText(note("key", { body: "Quartz migration " + "ab ".repeat(139) + awsKey + " tail words" }));
+  expect(leaks(run, base64Run)).toBe(false);
+  expect(leaks(key, awsKey)).toBe(false);
+  expect(run.length).toBeLessThanOrEqual(450);
+});
+
+it("never sends part of a secret that straddles the cut of a plan-doc excerpt", async () => {
+  const base = mkdtempSync(join(tmpdir(), "brain-judge-cut-"));
+  roots.push(base);
+  const home = join(base, "home"), root = join(base, "repo");
+  mkdirSync(home); mkdirSync(join(root, "docs"), { recursive: true });
+  // "Quartz migration: " (18) + "ab " × 132 puts the run at offset 414 of the excerpt.
+  writeFileSync(join(root, "docs", "LOOP.md"), "## Quartz migration\n" + "ab ".repeat(132) + base64Run + " tail words\n");
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/LOOP.md"] } } }));
+  const seen: string[] = [];
+  const judge: Judge = async (_q, candidates) => { seen.push(...candidates.map(c => c.text)); return new Map(candidates.map(c => [c.id, 0.9])); };
+  expect(await judgedAnswer([], "quartz migration", { project: { id: "repo", tags: [], root }, home }, judge)).toMatchObject({ text: "docs/LOOP.md › Quartz migration (line 1)", judged: true });
+  expect(seen).toHaveLength(1);
+  expect(leaks(seen[0]!, base64Run)).toBe(false);
+  expect(seen[0]!.length).toBeLessThanOrEqual(450);
 });
 
 it("uses the calibrated request and caches by query, note id and text across factory calls", async () => {

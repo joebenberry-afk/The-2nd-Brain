@@ -7,10 +7,14 @@
  *                                     "tags": ["typescript", "omp"], "aliases": ["the-2nd-brain"] } } }
  *
  * Resolution: BRAIN_PROJECT → projects.json path (longest prefix) → projects.json remote →
- * git remote repo name → git root folder name → cwd folder name. Tags are the declared ones plus
- * the stack implied by manifest files at the root (package.json → node, pyproject.toml → python, …).
+ * git remote repo name → main checkout folder name (a linked worktree names its main checkout) →
+ * (no git) the nearest folder at or above cwd, below the user's home folder, that projects.json
+ * names → cwd folder name. Tags
+ * are the declared ones plus the stack implied by manifest files at the root (package.json → node,
+ * pyproject.toml → python, …).
  */
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
 import { slug, tagKey, tagList, writeAtomic } from "./util.ts";
@@ -19,8 +23,10 @@ import { scrub } from "./scrub.ts";
 export interface Project {
   id: string;
   tags: string[];
-  /** The git root (or cwd) the project was resolved from; null when set explicitly. */
+  /** The git root, declared path or registered folder (else cwd) the project was resolved from; null when none is known. */
   root: string | null;
+  /** The declared `paths` folder when a git repo inside it is the root; registered docs also resolve there. */
+  docRoot?: string;
 }
 
 export interface ProjectEntry {
@@ -80,6 +86,15 @@ function sameRepo(a: string, b: string): boolean {
   return a.split("/").length >= 3 && b.split("/").length >= 3 && tail(a) === tail(b);
 }
 
+/** Windows device names: git cannot index notes/con/…, so no project may take one as its id. */
+const RESERVED = /^(?:con|prn|aux|nul|com\d|lpt\d)$/;
+
+/** A name slugged into a project id: never "global" (the shared scope) nor a device name. */
+export function idFor(name: string): string {
+  const d = slug(name);
+  return d === GLOBAL ? "global-project" : RESERVED.test(d) ? `${d}-project` : d;
+}
+
 /**
  * projects.json, with every key and alias slugged the way derived ids are — so all ways of naming
  * a project agree, and no synced key can point notes/ or work/ outside the home.
@@ -96,9 +111,8 @@ export function loadProjects(home: string): Record<string, ProjectEntry> {
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!value || typeof value !== "object") continue;
     const entry = value as ProjectEntry;
-    const aliases = Array.isArray(entry.aliases) ? entry.aliases.filter((a): a is string => typeof a === "string").map(slug) : undefined;
-    // "global" is the scope every project sees: a project can never take that id.
-    const id = slug(key) === GLOBAL ? "global-project" : slug(key);
+    const aliases = Array.isArray(entry.aliases) ? entry.aliases.filter((a): a is string => typeof a === "string").map(idFor) : undefined;
+    const id = idFor(key);
     projects[id] = { ...entry, ...(aliases ? { aliases } : {}) };
   }
   return projects;
@@ -111,6 +125,8 @@ export function loadProjects(home: string): Record<string, ProjectEntry> {
  */
 export function addProjectTag(home: string, id: string, tag: string): boolean {
   if (scrub(tag).scrubbed || scrub(tagKey(tag)).scrubbed) throw new Error("tag contains a credential; choose a non-secret tag");
+  // An old id listed as an alias tags its owner: a key named like the alias would take the repo back.
+  id = canonical(loadProjects(home), id);
   const file = join(home, "projects.json");
   let data: { projects: Record<string, unknown> } = { projects: {} };
   if (existsSync(file)) {
@@ -119,7 +135,7 @@ export function addProjectTag(home: string, id: string, tag: string): boolean {
     if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(`${file}: expected { "projects": { … } }`);
     data = parsed as { projects: Record<string, unknown> };
   }
-  const key = Object.keys(data.projects).find((k) => (slug(k) === GLOBAL ? "global-project" : slug(k)) === id) ?? id;
+  const key = Object.keys(data.projects).find((k) => idFor(k) === id) ?? id;
   const entry = data.projects[key];
   if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(`${file}: project ${key} is not an object`);
   const current = entry as Record<string, unknown> | undefined;
@@ -145,9 +161,40 @@ export function projectDocPath(root: string | null, path: string): string | unde
   }
 }
 
-/** Register one explicit document without changing unrelated project configuration. */
+/**
+ * A registered doc: stored relative to the declared folder when a repo inside it is the root (docs
+ * listed before that were stored against the root, hence the fallback).
+ */
+export function docFile(project: Project, path: string): string | undefined {
+  const inWorktree = worktreeSpelling(project.root, project.docRoot, path);
+  return (inWorktree ? projectDocPath(project.root, inWorktree) : undefined)
+    ?? projectDocPath(project.docRoot ?? project.root, path) ?? (project.docRoot ? projectDocPath(project.root, path) : undefined);
+}
+
+/**
+ * A path spelled against the declared folder, as the linked worktree `root` spells it: docs are
+ * stored against the folder (so against the main checkout inside it), but a worktree reads its own copy.
+ */
+export function worktreeSpelling(root: string | null, docRoot: string | undefined, path: string): string | undefined {
+  if (!root || !docRoot || !path || isAbsolute(path) || win32.isAbsolute(path)) return undefined;
+  const main = mainCheckout(root);
+  if (main === root) return undefined;
+  try {
+    const rel = relative(realpathSync.native(main), resolve(realpathSync.native(docRoot), path.replace(/\\/g, "/")));
+    return rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel.replace(/\\/g, "/") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Register one explicit document without changing unrelated project configuration. It is stored
+ * relative to the declared folder when there is one (so it resolves from every repo inside it),
+ * spelled as on disk (so a case-sensitive checkout finds it), and only once.
+ */
 export function addProjectDoc(home: string, project: Project, path: string): boolean {
-  const target = projectDocPath(project.root, path);
+  // As typed, the path is relative to the root in use (a repo inside the declared folder, a worktree).
+  const target = projectDocPath(project.root, path) ?? projectDocPath(project.docRoot ?? null, path);
   if (!target) throw new Error("doc must be an existing relative .md file inside the project root");
   if (scrub(path).scrubbed) throw new Error("doc path contains a credential");
   const file = join(home, "projects.json");
@@ -158,14 +205,25 @@ export function addProjectDoc(home: string, project: Project, path: string): boo
     if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(file + ': expected { "projects": { … } }');
     data = parsed as { projects: Record<string, unknown> };
   }
-  const key = Object.keys(data.projects).find(k => (slug(k) === GLOBAL ? "global-project" : slug(k)) === project.id) ?? project.id;
+  const key = Object.keys(data.projects).find(k => idFor(k) === project.id) ?? project.id;
   const entry = data.projects[key];
   if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(file + ": project " + key + " is not an object");
   const current = entry as Record<string, unknown> | undefined;
   if (current?.docs !== undefined && (!Array.isArray(current.docs) || !current.docs.every(d => typeof d === "string"))) throw new Error(file + ": " + key + ".docs must be a list of strings");
   const docs = (current?.docs ?? []) as string[];
-  const normalized = relative(project.root!, target).replace(/\\/g, "/");
-  if (docs.some(d => normalizePath(d) === normalizePath(normalized))) return false;
+  // Stored against the declared folder, else the main checkout: a file in a linked worktree is
+  // stored as the checkout's, since the worktree goes away. docRoot contains the main checkout.
+  // realpathSync.native returns the on-disk case on Windows.
+  const root = realpathSync.native(project.root!);
+  const main = realpathSync.native(mainCheckout(root));
+  const base = realpathSync.native(project.docRoot ?? main);
+  const onDisk = (doc: string) => {
+    const file = realpathSync.native(doc);
+    const rel = relative(root, file);
+    return relative(base, rel.startsWith("..") || isAbsolute(rel) ? file : join(main, rel)).replace(/\\/g, "/");
+  };
+  const normalized = onDisk(target);
+  if (docs.some(d => { const f = docFile(project, d); return f ? onDisk(f) === normalized : normalizePath(d) === normalizePath(normalized); })) return false;
   data.projects[key] = { ...current, docs: [...docs, normalized] };
   writeAtomic(file, JSON.stringify(data, null, 2) + "\n");
   return true;
@@ -182,18 +240,32 @@ export function gitRoot(cwd: string): string | null {
   }
 }
 
+/** The git directory shared by all worktrees of the checkout at `root` (a linked worktree's .git is a file). */
+function gitCommonDir(root: string): string | null {
+  try {
+    const dotgit = join(root, ".git");
+    if (!statSync(dotgit).isFile()) return dotgit;
+    const target = readFileSync(dotgit, "utf8").split("gitdir:")[1]?.trim();
+    if (!target) return null;
+    const gitdir = resolve(root, target);
+    const common = join(gitdir, "commondir");
+    return existsSync(common) ? resolve(gitdir, readFileSync(common, "utf8").trim()) : gitdir;
+  } catch {
+    return null;
+  }
+}
+
+/** The main checkout of the repo at `root`: itself, unless `root` is a linked worktree. */
+function mainCheckout(root: string): string {
+  const common = gitCommonDir(root);
+  return common && basename(common) === ".git" ? dirname(common) : root;
+}
+
 /** The `origin` URL of the repository at `root`, read from git config without running git. */
 export function gitRemote(root: string): string | null {
   try {
-    const dotgit = join(root, ".git");
-    let gitdir = dotgit;
-    if (statSync(dotgit).isFile()) {
-      const target = readFileSync(dotgit, "utf8").split("gitdir:")[1]?.trim();
-      if (!target) return null;
-      gitdir = resolve(root, target);
-      const common = join(gitdir, "commondir");
-      if (existsSync(common)) gitdir = resolve(gitdir, readFileSync(common, "utf8").trim());
-    }
+    const gitdir = gitCommonDir(root);
+    if (!gitdir) return null;
     const config = readFileSync(join(gitdir, "config"), "utf8");
     const section = /\[remote "origin"\]([\s\S]*?)(?:\n\[|$)/.exec(config);
     const url = section ? /^\s*url\s*=\s*(.+)$/m.exec(section[1] ?? "") : null;
@@ -229,7 +301,7 @@ export function inferTags(root: string | null): string[] {
 }
 
 /** The declared id a derived id belongs to: itself, or the project that lists it as an alias. */
-function canonical(projects: Record<string, ProjectEntry>, derived: string): string {
+export function canonical(projects: Record<string, ProjectEntry>, derived: string): string {
   if (projects[derived]) return derived;
   const owner = Object.entries(projects).find(([, e]) => Array.isArray(e.aliases) && e.aliases.includes(derived));
   return owner ? owner[0] : derived;
@@ -242,12 +314,14 @@ function tagsOf(entry: ProjectEntry | undefined, root: string | null = null): st
 
 /**
  * A project named explicitly (BRAIN_PROJECT, --project): slugged like every derived id — so it
- * can never leave notes/ or work/ — and mapped through aliases.
+ * can never leave notes/ or work/ — and mapped through aliases. When cwd resolves to that project
+ * anyway, its root (a declared or registered folder) comes with it.
  */
 export function projectById(home: string, id: string, cwd: string): Project {
   const projects = loadProjects(home);
-  const derived = slug(id);
-  const canonicalId = canonical(projects, derived === GLOBAL ? "global-project" : derived);
+  const canonicalId = canonical(projects, idFor(id));
+  const auto = resolveProject(home, cwd, {}); // empty env: no BRAIN_PROJECT, so no recursion
+  if (auto.id === canonicalId) return auto;
   const root = gitRoot(cwd);
   return { id: canonicalId, tags: tagsOf(projects[canonicalId], root), root };
 }
@@ -258,18 +332,25 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
   if (explicit) return projectById(home, explicit, cwd);
 
   const here = canonicalPath(resolve(cwd));
-  let best: { len: number; id: string } | null = null;
+  let best: { len: number; id: string; path: string } | null = null;
   for (const [id, entry] of Object.entries(projects)) {
     for (const declared of Array.isArray(entry.paths) ? entry.paths : []) {
       if (typeof declared !== "string" || !declared.trim()) continue;
       const root = canonicalPath(declared);
       if ((here === root || here.startsWith(root + "/")) && (!best || root.length > best.len)) {
-        best = { len: root.length, id };
+        best = { len: root.length, id, path: declared };
       }
     }
   }
   const root = gitRoot(cwd);
-  if (best) return { id: best.id, tags: tagsOf(projects[best.id], root ?? resolve(cwd)), root: root ?? resolve(cwd) };
+  if (best) {
+    const declared = resolve(best.path);
+    // A git repo inside the declared folder stays the root: See: lines, evidence and edited paths are
+    // relative to it. Docs registered against the declared folder resolve through docRoot. A linked
+    // worktree of the declared checkout (.claude/worktrees/x) is that checkout, not a repo inside it.
+    const inner = root !== null && canonicalPath(mainCheckout(root)).startsWith(canonicalPath(best.path) + "/");
+    return { id: best.id, tags: tagsOf(projects[best.id], root ?? declared), root: root ?? declared, ...(inner ? { docRoot: declared } : {}) };
+  }
 
   const remote = root ? gitRemote(root) : null;
   if (remote) {
@@ -279,13 +360,27 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
         return { id, tags: tagsOf(entry, root), root };
       }
     }
-    const derived = slug(key.split("/").pop() ?? "");
-    const id = canonical(projects, derived === GLOBAL ? "global-project" : derived);
+    const id = canonical(projects, idFor(key.split("/").pop() ?? ""));
     return { id, tags: tagsOf(projects[id], root), root };
   }
-  const derived = slug(basename(root ?? resolve(cwd)));
-  const id = canonical(projects, derived === GLOBAL ? "global-project" : derived);
-  return { id, tags: tagsOf(projects[id], root ?? resolve(cwd)), root: root ?? resolve(cwd) };
+  const idOf = (dir: string) => canonical(projects, idFor(basename(dir)));
+  if (!root) {
+    // Without git, a subfolder (the hook's cwd after `cd scripts`) belongs to the nearest folder
+    // projects.json names (an id or alias). Never the home folder or above: one note from ~ must not
+    // claim every folder beneath it.
+    const top = canonicalPath(homedir());
+    const belowHome = (dir: string) => { const at = canonicalPath(dir); return at !== top && !top.startsWith(at + "/"); };
+    for (let dir = resolve(cwd); dirname(dir) !== dir && belowHome(dir); dir = dirname(dir)) {
+      const id = idOf(dir);
+      if (projects[id]) return { id, tags: tagsOf(projects[id], dir), root: dir };
+    }
+    const id = idOf(resolve(cwd));
+    return { id, tags: tagsOf(projects[id], resolve(cwd)), root: resolve(cwd) };
+  }
+  // A linked worktree (<repo>/.claude/worktrees/<name>) is named after its main checkout; it stays
+  // the root, so edited paths and See: anchors are relative to the checkout in use.
+  const id = idOf(mainCheckout(root));
+  return { id, tags: tagsOf(projects[id], root), root };
 }
 
 /**

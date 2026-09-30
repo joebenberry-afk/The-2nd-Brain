@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
-import { addProjectTag } from "./project.ts";
+import { addProjectTag, canonical, loadProjects } from "./project.ts";
 import { mergeRejected } from "./capture.ts";
 import { nowIso, tagKey } from "./util.ts";
 import { scrub } from "./scrub.ts";
@@ -120,8 +120,14 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
   });
 
   if (pullResult.status !== 0 && !(rebaseInProgress(home) && resolveWorkConflicts(home))) {
+    // Name the conflicted files before aborting: git's own advice ("git rebase --continue") is
+    // wrong once the rebase is aborted, and the CONFLICT lines went to stdout.
+    const files = rebaseInProgress(home) ? unmerged(home) : [];
     abortRebase(home);
-    throw new SyncError(pullResult.stderr.slice(0, 500));
+    throw new SyncError(files.length
+      ? `sync stopped: ${files.join(", ")} changed on both machines; your changes are committed here, nothing was pulled or pushed. ` +
+          "Resolve by hand: git pull --rebase --autostash, fix those files, git add them, git rebase --continue, then brain sync."
+      : (pullResult.stderr || pullResult.stdout).slice(0, 500));
   }
   // `pull --autostash` exits 0 even when re-applying the local changes conflicted: never report
   // success with unmerged files. Brain files are merged by rule; anything else is the owner's call.
@@ -273,7 +279,7 @@ export function shareNote(home: string, id: string, tag: string): Note & { tagge
   if (scrub(tag).scrubbed || scrub(normalizedTag).scrubbed) throw new SyncError("tag contains a credential; choose a non-secret tag");
   if (!normalizedTag) throw new SyncError("a tag is required");
   // Tag the source project first: if projects.json cannot be edited, nothing has moved yet.
-  const taggedProject = note.project !== GLOBAL && addProjectTag(home, note.project, normalizedTag) ? note.project : undefined;
+  const taggedProject = note.project !== GLOBAL && addProjectTag(home, note.project, normalizedTag) ? canonical(loadProjects(home), note.project) : undefined;
   const tags = note.tags.includes(normalizedTag) ? note.tags : [...note.tags, normalizedTag].sort();
   const saved = saveNote(home, { ...note, project: GLOBAL, tags });
   return taggedProject ? { ...saved, taggedProject } : saved;

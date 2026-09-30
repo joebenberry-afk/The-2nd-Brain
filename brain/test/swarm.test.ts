@@ -384,7 +384,9 @@ describe("batch 3: CLI", () => {
 
   it("check fails on a broken home and names files the loader never reads", async () => {
     const { home, io } = cliSetup();
-    expect((await cli(["check", "--home", join(home, "nope")], io)).code).toBe(1);
+    // A home that does not exist is refused before any command runs, naming the path.
+    const missing = await cli(["check", "--home", join(home, "nope")], io);
+    expect(missing).toMatchObject({ code: 2, err: `brain: Brain home ${join(home, "nope")} does not exist (check SECOND_BRAIN_HOME or --home)` });
     createNote(home, { text: "fine", project: "demo" });
     mkdirSync(join(home, "notes", "SZ Tool"), { recursive: true });
     mkdirSync(join(home, "notes", "demo", "sub"), { recursive: true });
@@ -392,10 +394,13 @@ describe("batch 3: CLI", () => {
     writeFileSync(join(home, "notes", "demo", "n-z.MD"), "x");
     mkdirSync(join(home, "work"), { recursive: true });
     writeFileSync(join(home, "work", "demo.md"), "<<<<<<< HEAD\na\n=======\nb\n>>>>>>> theirs\n");
+    // Device names: git on Windows cannot index them and every resolver maps aux to aux-project.
+    mkdirSync(join(home, "notes", "aux"));
+    writeFileSync(join(home, "work", "aux.md"), "x");
     writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { a: "x", b: { paths: "C:/work/b" } } }));
     const result = await cli(["check"], io);
     expect(result.code).toBe(1);
-    for (const bad of ["SZ Tool", join("demo", "sub"), "n-top.md", "n-z.MD", "conflict markers", "a is not an object", "b.paths"]) expect(result.err).toContain(bad);
+    for (const bad of ["SZ Tool", join("demo", "sub"), "n-top.md", "n-z.MD", "conflict markers", "a is not an object", "b.paths", "--to aux-project", "work/aux-project.md"]) expect(result.err).toContain(bad);
   });
 
   it("the Claude Code hook counts its sessions", async () => {
@@ -565,6 +570,8 @@ describe("batch 3: privacy and security", () => {
     const out = await note?.execute("id", { text: "Toolchain repair: run the fix script", kind: "gotcha", error: "npm ERR! code E401", tested: true, global: true }, undefined, undefined, ctx);
     expect(out?.content[0]?.text).toContain("untested");
     expect(loadNotes(home).notes[0]).toMatchObject({ project: "global", tested: false });
+    saveNote(home, { ...loadNotes(home).notes[0]!, tested: true });
+    expect((await note?.execute("id", { text: "Toolchain repair: run the fix script", tested: true, global: true }, undefined, undefined, ctx))?.content[0]?.text).not.toContain("untested");
     expect((await note?.execute("id", { text: "Catch-all fix", error: "re:.", tested: true }, undefined, undefined, ctx))?.content[0]?.text).toMatch(/^brain: error pattern matches almost anything/);
   });
 
@@ -596,6 +603,15 @@ describe("batch 3: privacy and security", () => {
     expect(findFix([note], `${"word ".repeat(20)}failed`, null)).toBeNull();
     expect(performance.now() - started).toBeLessThan(200);
     expect(() => createNote(home, { text: "y", project: "global", errors: ["re:(\\w+\\s?)+: command not found"] })).toThrow(/backtrack/);
+    // Chained unbounded quantifiers backtrack polynomially: about a second on one 120-char line.
+    const chained = { ...note, errors: ["re:.*\\s.*\\s.*\\s.*\\s.*quota exceeded"] };
+    const again = performance.now();
+    expect(findFix([chained], "x ".repeat(60), null)).toBeNull();
+    expect(performance.now() - again).toBeLessThan(200);
+    for (const pattern of ["re:.*\\s.*\\s.*\\s.*\\s.*quota exceeded", "re:a+b+c+d+ failed", "re:.*timeout.*retry"]) {
+      expect(() => createNote(home, { text: "z", project: "global", errors: [pattern] })).toThrow(/backtrack/);
+    }
+    expect(createNote(home, { text: "w", project: "global", errors: ["re:^Path '[^']*:\\d+' not found"] }).errors).toHaveLength(1);
   });
 
   it("scrubs a long dotted line in linear time", () => {

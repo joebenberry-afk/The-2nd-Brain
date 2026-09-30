@@ -104,9 +104,7 @@ Brain home (a git repo)
 2. Writes take one argument. Anything that needs a flag to be useful is designed wrong.
 3. Budgets are enforced in code (truncate, then refuse), never in a document.
 4. The Brain never blocks, vetoes, steers or continues host work. It adds context or nothing.
-   *Owner-approved exception (2026-09-28), opt-in via `BRAIN_STOP_NUDGE=on`:* one end-of-turn
-   continuation per main session after 30 tool calls without a Brain write, asking to save state
-   or a learning.
+   *`BRAIN_STOP_NUDGE` exception withdrawn: measured and deleted (V5 §8 P3, `421beaa`).*
 5. Files are the truth. Anything derived is rebuilt from files on start; nothing derived is
    committed.
 6. Node built-ins only in the library and the extension. No dependency is added without a

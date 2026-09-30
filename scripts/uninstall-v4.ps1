@@ -2,7 +2,8 @@
 .SYNOPSIS
   Remove the Second Brain V4 OMP extension; with -Restore, bring back the most recently parked
   older extension (second-brain or second-brain-v3). -RemovePath takes brain\bin (and the checkout,
-  where earlier versions put brain.cmd) off the user PATH, keeping every other entry as stored.
+  where earlier versions put brain.cmd) off the user PATH, keeping every other entry as stored, and
+  deletes the generated brain\bin\brain.cmd and brain.ps1.
   Notes and working state are untouched. Works with Windows PowerShell 5.1 and 7.
 #>
 [CmdletBinding()]
@@ -49,6 +50,8 @@ if ($RemovePath) {
     Set-ItemProperty -Path "HKCU:\Environment" -Name Path -Value ($parts -join ";") -Type ExpandString
     [Environment]::SetEnvironmentVariable("SECOND_BRAIN_PATH_CHANGED", "1", "User")
     [Environment]::SetEnvironmentVariable("SECOND_BRAIN_PATH_CHANGED", $null, "User")
-    Write-Host "Removed $BinDir from the user PATH"
+    # The shims the installer generated; the committed sh shim stays.
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $BinDir "brain.cmd"), (Join-Path $BinDir "brain.ps1")
+    Write-Host "Removed $BinDir from the user PATH, and its brain.cmd and brain.ps1"
 }
 Write-Host "Restart OMP."

@@ -13,7 +13,7 @@ usable from any shell or agent through the `brain` command.
 | Moment | The agent gets | Cost |
 |---|---|---|
 | **Session start** | a *start card*: where we left off, the 5 notes that matter for this project and the current work | ≤ 400 tokens, nothing when there is nothing to say |
-| **Compaction** | the same card again, including the working state it would otherwise lose — injected straight after compaction, even mid-run | ≤ 400 tokens, cache-stable |
+| **Compaction** | nothing: the host's own summary carries goal and next (measured, V5 §8 P4); the working state is saved and feeds the next session's start card | 0 |
 | **Working** | `brain_recall(query)` · `brain_note(text)` · `brain_state(goal/done/next)` — one argument each; recall a note id to read it in full; a retired answer comes back marked as retired, with its replacement | ≤ 3 lines per recall |
 | **A tool fails** | the one known, tested fix for that error, appended to the result | ≤ 80 tokens, or nothing |
 | **New project** | recall global procedure notes for proven setups (stack and why, scaffold steps, gotchas, done-check) | ordinary note recall |
@@ -29,7 +29,7 @@ cases: dev 13/15, held-out 7/8). At 2,000 notes a warm recall takes ~26 ms, at 5
 notes/<project>/*.md     one Markdown file per durable fact (decision, gotcha, procedure, fact, note)
 notes/global/*.md        cross-project notes; tagged ones reach only projects with that tag
 notes/*/private/         never leaves the machine
-work/<project>.md        working state: goal · done · next · watch out (+ files edited, last failure)
+work/<project>.md        working state: goal · done · next · watch out (files edited, the last failure and the last ask stay machine-local in state/work/<project>.auto.md, never synced)
 projects.json            optional: extra paths, remotes and tags per project
 ```
 

@@ -1,8 +1,8 @@
 /** One-shot import of V3 records. */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
-import { loadNotes, parseFrontmatter, saveNote, type Note, GLOBAL } from "./notes.ts";
-import { loadProjects } from "./project.ts";
+import { errorPatternProblem, loadNotes, parseFrontmatter, saveNote, type Note, GLOBAL } from "./notes.ts";
+import { idFor, loadProjects } from "./project.ts";
 import { nowIso, slug, writeAtomic } from "./util.ts";
 
 export interface ConvertReport {
@@ -123,6 +123,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
 
   // projects.json is merged into as written (raw), and never rewritten when it does not parse.
   const projectsFile = join(toHome, "projects.json");
+  let rawFile: Record<string, unknown> = {};
   let rawProjects: Record<string, unknown> = {};
   let projectsWritable = true;
   if (existsSync(projectsFile)) {
@@ -130,6 +131,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
       const parsed: unknown = JSON.parse(readFileSync(projectsFile, "utf8").replace(/^\uFEFF/, ""));
       const inner = (parsed as { projects?: unknown } | null)?.projects;
       if (!inner || typeof inner !== "object") throw new Error('expected { "projects": { … } }');
+      rawFile = parsed as Record<string, unknown>;
       rawProjects = inner as Record<string, unknown>;
     } catch (error) {
       projectsWritable = false;
@@ -172,7 +174,10 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
 
         // Map V3 to V4 fields
         const kind = mapV3ToV4Kind(v3Record.type);
-        const project = slug(mapV3ToV4Project(v3Record.scope, v3Record.project, v3Record.domains));
+        // A V3 project named "Global" is a project, not the scope every project sees, and a device
+        // name (aux) is not a folder git can index.
+        const mapped = slug(mapV3ToV4Project(v3Record.scope, v3Record.project, v3Record.domains));
+        const project = mapped === GLOBAL && v3Record.scope !== "project" ? GLOBAL : idFor(mapped);
         const tags = mapV3ToV4Tags(v3Record.scope, v3Record.domains, v3Record.terms);
         const at = v3Record.valid_from || v3Record.recorded_at || "1970-01-01T00:00:00Z";
         const tested = v3Record.status === "current" && (v3Record.grade === "TESTED" || v3Record.grade === "VERIFIED");
@@ -182,6 +187,11 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
             : undefined;
 
         const body = v3Record.body ? `${v3Record.title}\n\n${v3Record.body}` : v3Record.title;
+        const errors = (v3Record.trigger_errors || []).filter((e) => {
+          const problem = errorPatternProblem(e);
+          if (problem) report.errors.push(`${path}: ${problem}`);
+          return !problem;
+        });
 
         // Create note
         const note: Note = {
@@ -192,7 +202,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
           at,
           source: "convert",
           tags,
-          errors: v3Record.trigger_errors || [],
+          errors,
           evidence: v3Record.evidence || [],
           tested,
           replaces: v3Record.supersedes,
@@ -230,7 +240,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
         const parsed = parseTomlString(content);
 
         // Keyed by the slugged id; an entry already present (under any spelling) is kept as is
-        const projectId = slug(typeof parsed.id === "string" && parsed.id ? parsed.id : projectName.name);
+        const projectId = idFor(typeof parsed.id === "string" && parsed.id ? parsed.id : projectName.name);
         if (existingProjects[projectId]) {
           continue;
         }
@@ -278,7 +288,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
   // Merge new entries into projects.json exactly as it was written (never through the normalized copy)
   if (projectsWritable) {
     if (!opts?.dryRun && Object.keys(newProjectEntries).length > 0) {
-      writeAtomic(projectsFile, JSON.stringify({ projects: { ...rawProjects, ...newProjectEntries } }, null, 2) + "\n");
+      writeAtomic(projectsFile, JSON.stringify({ ...rawFile, projects: { ...rawProjects, ...newProjectEntries } }, null, 2) + "\n");
     }
     report.projects = Object.keys(newProjectEntries).length;
   }

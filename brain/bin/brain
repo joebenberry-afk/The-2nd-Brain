@@ -1,7 +1,31 @@
 #!/bin/sh
 # `brain` for sh and Git Bash (Claude Code runs its hooks and its Bash tool there on Windows, where
 # brain.cmd is not found). Node >= 22.18 runs the TypeScript sources directly; otherwise Bun.
-dir=$(dirname "$0")
+# No subprocess on the common path: every hook and agent CLI call pays for each one.
+case $0 in */*) dir=${0%/*} ;; *) dir=$(dirname "$0") ;; esac
+# Git Bash rewrites arguments that look like POSIX paths ("/clear x" -> "C:/Program Files/Git/clear x"):
+# note text must arrive as typed. The script path and --home/--from values are converted here instead
+# (`--home "$(mktemp -d)"` names /tmp/..., which only cygpath can map), and absolute --evidence paths;
+# /c/... env values still convert.
+case ${OSTYPE:-} in
+  msys* | cygwin*)
+    case $dir in
+      /[a-zA-Z]/*) d=${dir#/}; dir=${d%%/*}:${dir#/?} ;;
+      /*) dir=$(cygpath -m "$dir") ;;
+    esac
+    export MSYS2_ARG_CONV_EXCL='*'
+    prev=
+    for arg do
+      shift
+      case $prev in --home | --from) arg=$(cygpath -m -- "$arg") ;; esac
+      case $arg in --home=?* | --from=?*) arg=${arg%%=*}=$(cygpath -m -- "${arg#*=}") ;; esac
+      # An absolute --evidence path too; cygpath drops ":", so a ":line" suffix is kept aside.
+      case $prev in --evidence) case $arg in /*) p=${arg%%:*}; arg=$(cygpath -m -- "$p")${arg#"$p"} ;; esac ;; esac
+      case $arg in --evidence=/*) v=${arg#*=}; p=${v%%:*}; arg=--evidence=$(cygpath -m -- "$p")${v#"$p"} ;; esac
+      set -- "$@" "$arg"
+      prev=$arg
+    done ;;
+esac
 case "$(node --version 2>/dev/null)" in
   v22.1[89].* | v22.[2-9][0-9].* | v2[3-9].* | v[3-9][0-9].*) exec node "$dir/brain.mjs" "$@" ;;
 esac

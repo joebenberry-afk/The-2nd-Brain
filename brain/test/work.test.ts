@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, workText, workPath, writeAuto, writeWork } from "../src/work.ts";
+import { AUTO_BUDGET, WORK_BUDGET, formatAuto, readWork, stateSaved, workText, workPath, writeAuto, writeWork } from "../src/work.ts";
 import * as util from "../src/util.ts";
 import { estimateTokens } from "../src/util.ts";
 
@@ -56,6 +56,43 @@ describe("work", () => {
     const home = tmp();
     const longText = "x".repeat(WORK_BUDGET * 5);
     const work = writeWork(home, "p1", longText);
+    expect(estimateTokens(work.text)).toBeLessThanOrEqual(WORK_BUDGET);
+  });
+
+  it("writeWork: a long plan keeps its See: line whole, and the reply says it was cut", () => {
+    const home = tmp();
+    const see = "See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#83-question-phrased-recall-queries-rejected-2026-09-28";
+    const text = `Goal: ${"ship the anchored memory work ".repeat(6)}\nNext: ${"run the gate and the agentbench control ".repeat(4)}\nDone: ${"landed the judge threshold change ".repeat(7)}\n${see}`;
+    expect(text.length).toBeGreaterThan(700);
+    const work = writeWork(home, "p", text);
+    expect(work.text.split("\n")).toContain(see);
+    expect(work.text).toMatch(/^Goal: ship/);
+    expect(estimateTokens(work.text)).toBeLessThanOrEqual(WORK_BUDGET);
+    expect(stateSaved(work)).toMatch(new RegExp(`^state saved \\(\\d+ tokens\\); cut from ${text.length} chars to fit ${WORK_BUDGET} tokens`));
+    expect(stateSaved(writeWork(home, "p", "Goal: short\n" + see))).toMatch(/^state saved \(\d+ tokens\)$/);
+  });
+
+  it("writeWork: a See: block over half the budget is cut, never Goal and Next", () => {
+    const home = tmp();
+    const see = "See: " + Array.from({ length: 30 }, (_, i) => `brain/src/module${i}.ts:${i * 10}`).join("; ");
+    expect(see.length).toBeGreaterThan(600);
+    const work = writeWork(home, "p", `Goal: finish the privacy audit\nNext: rerun the gate\n${see}`);
+    expect(work.text).toMatch(/^Goal: finish the privacy audit\nNext: rerun the gate\nSee: brain\/src\/module0\.ts:0;/);
+    expect(estimateTokens(work.text)).toBeLessThanOrEqual(WORK_BUDGET);
+  });
+
+  it("writeWork: See: lines over half the budget are kept whole while they fit, never cut mid-anchor", () => {
+    const home = tmp();
+    const see = ["phase-three-recall-question-phrasing-experiment", "83-question-phrased-recall-queries-rejected-2026-09-28", "6-kill-rules-unchanged-from-v4-restated-and-extended"]
+      .map((slug) => `See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#${slug}`.padEnd(110, "x"));
+    const text = `Goal: ${"ship the anchored memory work ".repeat(5)}\nNext: ${"run the gate and the agentbench control ".repeat(3)}\nWatch out: approvals\n${see.join("\n")}`;
+    expect(text.length).toBeGreaterThan(600);
+    const work = writeWork(home, "p", text);
+    const lines = work.text.split("\n");
+    expect(lines.filter((line) => line.startsWith("See:") && line.endsWith("…"))).toEqual([]);
+    expect(lines).toContain(see[0]);
+    expect(lines).toContain(see[1]);
+    expect(work.text).toMatch(/^Goal: ship/);
     expect(estimateTokens(work.text)).toBeLessThanOrEqual(WORK_BUDGET);
   });
 
