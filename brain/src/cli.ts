@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { acceptProposal, appendEvent, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, hostNoise, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, scratchPath, scrubCut, toolEventFrom, unmatchedErrors, untag } from "./capture.ts";
-import { renderCard } from "./card.ts";
+import { LEAN_LINE, renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { projectDocs } from "./docs.ts";
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
@@ -580,8 +580,11 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
         try { rmSync(fixDir, { recursive: true, force: true }); }
         catch { /* pending telemetry cleanup must not suppress the card */ }
-        // After compaction the card is absent by design; a resumed transcript already holds one.
-        if (p.source !== "compact" && p.source !== "resume") {
+        // Compaction drops the card: its state is not repeated (§8 P4), but the lean rule is behaviour
+        // the rest of the session still needs. A resumed transcript already holds a card.
+        if (p.source === "compact") {
+          output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: LEAN_LINE } };
+        } else if (p.source !== "resume") {
           const { notes } = loadNotes(home);
           if (!sub) {
             try { scanEvents(home, notes); } catch (error) { failed(error); /* the card matters more than capture */ }

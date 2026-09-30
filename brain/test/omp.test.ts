@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { LEAN_LINE } from "../src/card.ts";
 import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, type HostLike } from "../src/omp.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
@@ -182,6 +183,13 @@ describe("OMP extension", () => {
     // Second call: no card
     const second = start({ prompt: "again" }, c);
     expect(second).toBeUndefined();
+
+    // Compaction dropped the card: the next prompt carries only the lean line, once.
+    handlers.get("session_compact")!({}, c);
+    const lean = start({ prompt: "after compaction" }, c) as any;
+    expect(lean.message.content).toBe(LEAN_LINE);
+    expect(lean.message.customType).not.toBe(CARD_TYPE);
+    expect(start({ prompt: "later" }, c)).toBeUndefined();
   });
 
   it("a session resumed in a new process keeps its card: none again until a compaction", () => {

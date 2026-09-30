@@ -9,12 +9,13 @@ import { loadNotes } from "./notes.ts";
 import { resolveProject } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
 import { appendEvent, errorSignature, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
-import { renderCard } from "./card.ts";
+import { LEAN_LINE, renderCard } from "./card.ts";
 import { logUse } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
 import { writeAuto } from "./work.ts";
 
 export const CARD_TYPE = "brain.card";
+const LEAN_TYPE = "brain.lean";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
 
 export interface HostLike {
@@ -41,6 +42,8 @@ interface SessionState {
   pendingFixes?: Map<string, { id: string; project: string }>;
   /** Messages in the last context this session sent; a drop means earlier text may be gone. */
   contextLength?: number;
+  /** A compaction dropped the card: the next prompt carries the lean line again. */
+  leanDue?: boolean;
 }
 
 function asObject(value: unknown): Json | undefined {
@@ -146,11 +149,11 @@ export function editedPaths(input: unknown): string[] {
   return [...new Set(found)].filter((p) => !/^[a-z][a-z0-9+.-]*:\/\//i.test(p));
 }
 
-function buildCardMessage(content: string): { message: { customType: string; content: string; display: boolean; details: Json } } {
+function buildCardMessage(content: string, customType = CARD_TYPE): { message: { customType: string; content: string; display: boolean; details: Json } } {
   const details: Json = { v: 4 };
   return {
     message: {
-      customType: CARD_TYPE,
+      customType,
       content,
       display: false,
       details,
@@ -378,6 +381,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // last compaction: a second one repeats the same lines and echoes this session's own ask.
       if (!state.carded && cardSinceCompaction(ctx)) state.carded = true;
       if (!state.carded) {
+        state.leanDue = false;
         const { notes } = loadNotes(home);
         const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
         const subagent = isSubagent(ctx);
@@ -402,6 +406,12 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         }
         state.carded = true;
         return undefined;
+      }
+      // Compaction dropped the card: its state is not repeated (§8 P4), the lean rule is. Its own
+      // type, so a process restarted after compaction still cards in full.
+      if (state.leanDue) {
+        state.leanDue = false;
+        return buildCardMessage(LEAN_LINE, LEAN_TYPE);
       }
 
       return undefined;
@@ -478,6 +488,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       saveAuto(ctx);
       state.pendingFixes = undefined;
       state.fixed = undefined;
+      state.leanDue = true;
 
       return undefined;
     } catch (error) {

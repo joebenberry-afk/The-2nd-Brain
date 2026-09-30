@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFil
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { LEAN_LINE } from "../src/card.ts";
 import { main, type Io } from "../src/cli.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 import { appendEvent, findFix, renderFix, scanEvents } from "../src/capture.ts";
@@ -814,12 +815,13 @@ describe("claude-code hook lifecycle", () => {
     expect(readdirSync(join(home, "state", "pending-fixes"))).toEqual([]);
   });
 
-  it("cards startup and clear, but not resume, compact or an unknown source", async () => {
+  it("cards startup and clear, only the lean line after compact, nothing on resume or an unknown source", async () => {
     const { home, send, telemetry } = hookSetup();
     createNote(home, { project: "demo", text: "Demo decision", kind: "decision" });
     for (const source of ["startup", "clear"]) expect((await send({ hook_event_name: "SessionStart", source })).json.hookSpecificOutput.additionalContext).toContain("Demo decision");
     await send({ hook_event_name: "SessionEnd" });
-    for (const source of ["resume", "compact", "other"]) expect((await send({ hook_event_name: "SessionStart", source })).json).toEqual({});
+    expect((await send({ hook_event_name: "SessionStart", source: "compact" })).json.hookSpecificOutput.additionalContext).toBe(LEAN_LINE);
+    for (const source of ["resume", "other"]) expect((await send({ hook_event_name: "SessionStart", source })).json).toEqual({});
     expect(telemetry().filter((row) => row.kind === "card")).toHaveLength(2);
   });
 
