@@ -6,6 +6,7 @@ source: agent
 errors:
   - ERR_UNSUPPORTED_ESM_URL_SCHEME
 tested: "true"
+replaces: n-7742a45edd
 ---
 
 Node ESM on Windows rejects bare C:/ absolute import paths (protocol 'c:'); import with a relative path or pathToFileURL(path).href, or run the script with bun, which accepts C:/ paths.

@@ -188,8 +188,13 @@ Recall searches the whole registered section, preferring more distinct query ter
    counts delivered cards; a `brain card` preview is not one. Every row carries the build that
    wrote it (newest source mtime); stats count only the newest build unless `--all-builds`: OMP
    and MCP processes keep the build they started with, while hooks and CLI calls stamp the build
-   current at each call, so a session's role comes from all its rows in the window. Anything
-   never used for a week gets removed (plan rule 1).
+   current at each call, so a session's role comes from all its rows in the window.
+   `tool schemas (OMP, <date>): N active ≈ T tokens per request · uncalled Nd: U ≈ W tokens`
+   sets the schemas the newest OMP main session sent top-level (snapshot at its first prompt;
+   tools mounted under `xd://` ship a route line, not a schema, and are left out) against tool
+   calls in the event logs; the biggest uncalled ones are listed. Disabling them is host config
+   (OMP MCP/tool settings), not a Brain change. Anything never used for a week gets removed
+   (plan rule 1).
 
 Tool descriptions and card footers say when to act: recall before exploring, choosing or retrying;
 notes for repo-invisible learning; state when goal/next changes. OMP subagents keep only
@@ -199,7 +204,7 @@ tell a child from its parent: a child's project-scoped `brain note --tested` is 
 (a global one stays untested until the owner runs `brain tested <id>`), and its `brain state`
 replaces the parent's plan. That reaches OMP children through bash and Claude Code subagents, whose instructions carry the managed block (`brain state` when the goal changes).
 
-**Context hand-off.** Main sessions above 250,000 context tokens get one ≤40-token rollover
+**Context hand-off.** Main sessions above 150,000 context tokens get one ≤40-token rollover
 line per crossing: save `brain_state` with Goal/Next/See: and open a fresh session; its start
 card carries the saved state. `projects.json` accepts a project-level numeric `rollover`
 threshold (tokens); `0` disables the hint. Unknown usage is silent, subagents never get it,
@@ -216,6 +221,10 @@ finished 16/16 edits and retained goal/next 4/4 in each arm. Recorded total cost
 seeding and handoff, fell from $40.1323 to $21.0601 ($2.5083 to $1.3163 per finished task,
 −47.5%); continuation cost fell from $23.1659 to $4.1466 (−82.1%). The feature is kept.
 This trial scripts compliance with the hint; it does not prove agents initiate rollover unprompted.
+`--threshold 150000 --seed-rows 4400 --label v5-rollover-150k` (157k seeded, 4+4, 2026-10-05)
+also kept 16/16 and 4/4 per arm: $0.928 → $0.525 per finished task (−43.4%), continuation
+$8.58 → $2.10 (−75.5%); the $0.32 handoff pays back within one task. The default dropped from
+250k to 150k on this result.
 
 ## 3. Other harnesses
 

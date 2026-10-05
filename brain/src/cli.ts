@@ -17,7 +17,7 @@ import { runMcp } from "./mcp.ts";
 import { judgedAnswer, typesafeJudge, typesafePairJudge } from "./judge.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
-import { noteUsage, pausedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
+import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 import { noteHint, tidyReport } from "./tidy.ts";
@@ -376,6 +376,12 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     c.io.out(`notes used (${s.days}d): ${used} of ${active.length} active · never: ${active.length - used} (brain tidy)`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
+    const schemas = toolSchemaUse(c.home, s.days);
+    if (schemas) {
+      const waste = schemas.unused.reduce((sum, tool) => sum + tool.tokens, 0);
+      c.io.out(`tool schemas (OMP, ${schemas.at.slice(0, 10)}): ${schemas.tools} active ≈ ${schemas.tokens} tokens per request · uncalled ${s.days}d: ${schemas.unused.length} ≈ ${waste} tokens`);
+      if (schemas.unused.length) c.io.out(`  ${schemas.unused.slice(0, 8).map(tool => `${tool.name} (${tool.source}, ${tool.tokens})`).join(" · ")}${schemas.unused.length > 8 ? " …" : ""}`);
+    }
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
     for (const f of s.fixOutcomes.slice(0, 5)) c.io.out(`fix outcomes: ${f.id} helped ${f.helped}/missed ${f.missed}`);
     fixesToReview(c);

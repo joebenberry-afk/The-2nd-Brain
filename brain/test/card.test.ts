@@ -7,7 +7,7 @@ import { CARD_BUDGET, cardCandidates, rankForCard, renderCard } from "../src/car
 import { createNote, loadNotes, saveNote, type Note } from "../src/notes.ts";
 import type { Project } from "../src/project.ts";
 import { cutToTokens, estimateTokens } from "../src/util.ts";
-import { logUse, rotateTelemetry, stats, telemetryPath } from "../src/telemetry.ts";
+import { logUse, rotateTelemetry, saveToolSchemas, stats, telemetryPath, toolSchemaUse } from "../src/telemetry.ts";
 import { writeAuto, writeWork } from "../src/work.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-card-"));
@@ -423,6 +423,25 @@ describe("telemetry session roles and rotation", () => {
     expect(statSync(rotated).size).toBeGreaterThanOrEqual(1_048_576);
     expect(readFileSync(telemetryPath(home), "utf8")).toBe(row);
     expect(readdirSync(join(home, "state")).filter((name) => name.endsWith(".rot"))).toEqual([]);
+  });
+
+  it("lists active tool schemas not called inside the window, largest first", () => {
+    const home = tmp();
+    expect(toolSchemaUse(home, 7, NOW)).toBeNull();
+    saveToolSchemas(home, [
+      { name: "read", source: "builtin", tokens: 300 },
+      { name: "mcp__small", source: "mcp", tokens: 100 },
+      { name: "mcp__big", source: "mcp", tokens: 900 },
+    ], NOW);
+    mkdirSync(join(home, "state", "events"), { recursive: true });
+    const event = (tool: string, at: string) => JSON.stringify({ v: 1, at, session: "s", cwd: home, tool, ok: true });
+    // mcp__big was last called 8 days ago: outside a 7-day window, inside a 30-day one.
+    writeFileSync(join(home, "state", "events", "s.jsonl"), [event("read", "2026-09-27T11:00:00Z"), event("mcp__big", "2026-09-19T12:00:00Z")].join("\n") + "\n");
+    expect(toolSchemaUse(home, 7, NOW)).toEqual({ at: NOW.toISOString().replace(/\.\d+Z$/, "Z"), tools: 3, tokens: 1300, unused: [
+      { name: "mcp__big", source: "mcp", tokens: 900 },
+      { name: "mcp__small", source: "mcp", tokens: 100 },
+    ] });
+    expect(toolSchemaUse(home, 30, NOW)?.unused.map(tool => tool.name)).toEqual(["mcp__small"]);
   });
 
   it("rotates a full file to telemetry.1.jsonl", () => {

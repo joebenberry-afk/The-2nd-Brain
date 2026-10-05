@@ -325,3 +325,20 @@ external memory systems (agent://ext-survey). Built:
 - **Rollover hint** at 250k context (`projects.json` `rollover`, 0 = off), once per crossing,
   never for subagents. compactbench `v5-rollover` 4 + 4: −47.5 % cost per finished task, goal kept
   4/4 both arms; the trial scripted compliance with the hint.
+
+### 8.8 Token-efficiency pass (2026-10-05)
+
+- **Rollover default 250k → 150k.** compactbench `--threshold` (seed sized to land just past it):
+  `v5-rollover-150k` 4+4 at 157k seeded, 16/16 and goal 4/4 per arm, $0.928 → $0.525 per
+  finished task (−43.4 %); the handoff turn ($0.32) pays back within one task. Real main
+  sessions, 14 days: 45 of 68 crossed 150k, 34 crossed 250k, and $910 of $1,542 main spend came
+  after the 150k crossing. No real session has received the hint yet (shipped 10-04; the only
+  crossing ran an older extension), so live compliance is still unmeasured.
+- **Silent-recall chains: no change.** Of 86 recalls that followed a silent one within 3 min,
+  60 were a different topic, 9 a rephrasing, 17 the identical query: about one wasted turn a
+  day, below what agentbench resolves.
+- **Tool-schema audit** in `brain stats` (OMP snapshot of top-level schemas vs event-log calls).
+  First live reading: 15 top-level tools ≈ 3.7k tokens, none uncalled in 14 days. OMP 18.6
+  mounts MCP tools under `xd://`, so the old "11 unused jev schemas ≈ 4.8k" no longer applies.
+- **Notes:** three global gotchas confirmed tested (112 failures in 14 days); one ESM duplicate
+  retired. The V3 `mem-*` notes `brain tidy` lists as unused stay: the frozen eval expects them.

@@ -10,7 +10,7 @@ import { resolveProject } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
 import { appendEvent, captureUserRules, errorSignature, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
-import { logUse } from "./telemetry.ts";
+import { logUse, saveToolSchemas } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
 import { writeAuto } from "./work.ts";
 import { rolloverHint } from "./rollover.ts";
@@ -27,6 +27,8 @@ export interface HostLike {
   /** Per session: OMP binds each child session to its own API, so this changes only that child. */
   getActiveTools?: () => string[];
   setActiveTools?: (names: string[]) => Promise<void>;
+  /** Every configured tool with its schema; the active ones are sent on each request. */
+  getAllTools?: () => { name: string; description: string; parameters: unknown; sourceInfo?: { source?: string } }[];
 }
 
 type Json = Record<string, unknown>;
@@ -429,6 +431,23 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
               scanEvents(home, notes);
             } catch (error) {
               failed("scanEvents", error);
+            }
+            // What every request pays in tool schemas, for `brain stats` to set against actual use.
+            // At the first prompt, not session_start: MCP servers have connected by then. The host's
+            // enabled list includes tools mounted under xd://, which ship a route line, not a schema;
+            // the system prompt names those routes, so they are left out.
+            try {
+              if (typeof pi.getActiveTools === "function" && typeof pi.getAllTools === "function") {
+                const enabled = new Set(pi.getActiveTools());
+                const system = Array.isArray(eventObj?.systemPrompt) ? eventObj.systemPrompt.join("\n") : "";
+                saveToolSchemas(home, pi.getAllTools().filter(tool => enabled.has(tool.name) && !system.includes(`xd://${tool.name}`)).map(tool => ({
+                  name: tool.name,
+                  source: tool.sourceInfo?.source ?? "unknown",
+                  tokens: estimateTokens(tool.name + tool.description + JSON.stringify(tool.parameters ?? {})),
+                })));
+              }
+            } catch (error) {
+              failed("toolSchemas", error);
             }
           }, 0);
         }

@@ -16,45 +16,45 @@ function home(rollover?: unknown): string {
 }
 afterEach(() => { for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-const line = "Brain: context 251k. Save brain_state (Goal/Next/See:) and start a fresh session; the card carries it over.";
+const line = "Brain: context 151k. Save brain_state (Goal/Next/See:) and start a fresh session; the card carries it over.";
 describe("rollover threshold", () => {
   it("fires once per crossing, survives host reload, and rearms below the threshold", () => {
     const dir = home();
-    expect(rolloverHint(dir, "demo", "main", 250000)).toBe("");
-    expect(rolloverHint(dir, "demo", "main", 250001)).toBe(line);
+    expect(rolloverHint(dir, "demo", "main", 150000)).toBe("");
+    expect(rolloverHint(dir, "demo", "main", 150001)).toBe(line);
     expect(rolloverHint(dir, "demo", "main", 300000)).toBe("");
     expect(rolloverHint(dir, "demo", "main", undefined)).toBe("");
     expect(rolloverHint(dir, "demo", "main", 300000)).toBe("");
     expect(rolloverHint(dir, "demo", "main", 100000)).toBe("");
-    expect(rolloverHint(dir, "demo", "main", 250001)).toBe(line);
-    expect(rolloverHint(dir, "demo", "fresh", 250001)).toBe(line);
+    expect(rolloverHint(dir, "demo", "main", 150001)).toBe(line);
+    expect(rolloverHint(dir, "demo", "fresh", 150001)).toBe(line);
     expect(estimateTokens(line)).toBeLessThanOrEqual(40);
     expect(line).not.toContain("\n");
   });
   it("silences subagents without consuming the main-session crossing", () => {
     const dir = home();
-    expect(rolloverHint(dir, "demo", "main", 250001, true)).toBe("");
-    expect(rolloverHint(dir, "demo", "main", 250001)).toBe(line);
+    expect(rolloverHint(dir, "demo", "main", 150001, true)).toBe("");
+    expect(rolloverHint(dir, "demo", "main", 150001)).toBe(line);
   });
   it("obeys config 0 and custom numeric thresholds without env flags", () => {
     expect(rolloverHint(home(0), "demo", "main", 900000)).toBe("");
     const dir = home(10000);
     expect(rolloverHint(dir, "demo", "main", 10000)).toBe("");
     expect(rolloverHint(dir, "demo", "main", 11000)).toContain("context 11k");
-    for (const invalid of [-1, "0", null]) expect(rolloverHint(home(invalid), "demo", "main", 250001)).toBe(line);
+    for (const invalid of [-1, "0", null]) expect(rolloverHint(home(invalid), "demo", "main", 150001)).toBe(line);
   });
   it("fails open on invalid usage and unavailable state storage", () => {
     const dir = home();
     for (const tokens of [NaN, Infinity, -1, "251000", null]) expect(rolloverHint(dir, "demo", "main", tokens)).toBe("");
     writeFileSync(join(dir, "state"), "not a directory");
-    expect(rolloverHint(dir, "demo", "main", 250001)).toBe("");
+    expect(rolloverHint(dir, "demo", "main", 150001)).toBe("");
   });
 });
 
 describe("host rollover delivery", () => {
   it("reads Claude input plus cache usage, not cumulative output; Stop and tool hooks share one latch", async () => {
     const dir = home(), transcript = join(dir, "transcript.jsonl");
-    const usage = (input: number) => writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { usage: { input_tokens: input, cache_read_input_tokens: 240000, cache_creation_input_tokens: 5000, output_tokens: 999999 } } }) + "\n{unfinished");
+    const usage = (input: number) => writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { usage: { input_tokens: input, cache_read_input_tokens: 140000, cache_creation_input_tokens: 5000, output_tokens: 999999 } } }) + "\n{unfinished");
     const hook = async (event: string, extra: object = {}) => {
       let out = "";
       const code = await main(["hook", "claude-code"], { env: { SECOND_BRAIN_HOME: dir, BRAIN_PROJECT: "demo" }, cwd: dir, stdin: () => JSON.stringify({ hook_event_name: event, session_id: "main", transcript_path: transcript, tool_name: "Read", ...extra }), out: text => { out = text; }, err: () => {} });
@@ -85,11 +85,11 @@ describe("host rollover delivery", () => {
     secondBrain(host, { SECOND_BRAIN_HOME: dir, BRAIN_PROJECT: "demo" });
     const ctx = (tokens: number, kind = "main") => ({ cwd: dir, agent: { kind }, getContextUsage: () => ({ tokens }), sessionManager: { getSessionId: () => "main" } });
     const turn = (tokens: number, kind = "main") => handlers.get("turn_end")!({}, ctx(tokens, kind));
-    turn(250000); turn(250001, "sub"); expect(sendMessage).not.toHaveBeenCalled();
-    turn(250001); turn(300000);
+    turn(150000); turn(150001, "sub"); expect(sendMessage).not.toHaveBeenCalled();
+    turn(150001); turn(300000);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith({ customType: "brain.rollover", content: line, display: false }, { triggerTurn: false, deliverAs: "nextTurn" });
-    turn(100000); turn(250001); expect(sendMessage).toHaveBeenCalledTimes(2);
+    turn(100000); turn(150001); expect(sendMessage).toHaveBeenCalledTimes(2);
     writeFileSync(join(dir, "projects.json"), JSON.stringify({ projects: { demo: { rollover: 0 } } }));
     turn(500000); expect(sendMessage).toHaveBeenCalledTimes(2);
   });

@@ -19,11 +19,14 @@ const { values } = parseArgs({ options: {
   model: { type: "string", default: "openai-codex/gpt-6-astra" }, thinking: { type: "string", default: "low" },
   label: { type: "string", default: "v5-rollover" }, timeout: { type: "string", default: "600" },
   output: { type: "string" }, "seed-rows": { type: "string", default: "12000" },
+  // The hint's threshold under test; the seed must fill the context past it (~35.5 tokens a row).
+  threshold: { type: "string", default: "250000" },
 } });
-const reps = Number(values.reps), timeout = Number(values.timeout) * 1000, seedRows = Number(values["seed-rows"]);
+const reps = Number(values.reps), timeout = Number(values.timeout) * 1000, seedRows = Number(values["seed-rows"]), threshold = Number(values.threshold);
 assert.equal(values.scenario, "rollover");
 assert(Number.isInteger(reps) && reps > 0 && Number.isFinite(timeout) && timeout > 0);
 assert(Number.isInteger(seedRows) && seedRows > 0);
+assert(Number.isInteger(threshold) && threshold > 0);
 const output = values.output ? resolve(values.output) : mkdtempSync(join(tmpdir(), "compactbench-rollover-"));
 mkdirSync(output, { recursive: true });
 const source = join(output, "src");
@@ -46,7 +49,7 @@ const jsonl = (path: string): Row[] => existsSync(path) ? readFileSync(path, "ut
 async function run(rep: number, condition: "continue" | "rollover", goal: string, next: string, seed: string): Promise<Row> {
   const dir = join(output, `${rep}-${condition}`), home = join(dir, "home"), fixture = join(dir, "fixture"), sessions = join(dir, "sessions");
   for (const path of [home, fixture, sessions]) mkdirSync(path, { recursive: true });
-  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { compactbench: { rollover: condition === "continue" ? 0 : 250000 } } }));
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { compactbench: { rollover: condition === "continue" ? 0 : threshold } } }));
   writeFileSync(join(fixture, "package.json"), '{"name":"compactbench","private":true}');
   writeFileSync(join(fixture, "config.json"), JSON.stringify({ alpha: 1, beta: 2, gamma: 3, delta: 4 }, null, 2));
   const contextPath = join(dir, "contexts.jsonl");
@@ -96,7 +99,7 @@ async function run(rep: number, condition: "continue" | "rollover", goal: string
     seedCost = usageCost(seedMessages);
     const usage = seedMessages.at(-1)?.usage ?? {};
     seedTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-    assert(seedTokens > 250000, `seed was only ${seedTokens} tokens; increase --seed-rows`);
+    assert(seedTokens > threshold, `seed was only ${seedTokens} tokens; increase --seed-rows`);
     if (condition === "rollover") {
       const start = events.length;
       await prompt("Follow the Brain rollover hint: save the current goal and next step with brain_state, then reply HANDOFF READY only. Do not edit any files.");
@@ -128,10 +131,10 @@ async function run(rep: number, condition: "continue" | "rollover", goal: string
   const hints = cards.filter(c => c.customType === "brain.rollover");
   const goalRetained = new RegExp(`Goal:\\s*[^\\n]*${goal}`, "i").test(answer) && new RegExp(`Next:\\s*[^\\n]*${next}`, "i").test(answer);
   const cardCarried = cards.some(c => c.customType === "brain.card" && textOf(c).includes(goal) && textOf(c).includes(next));
-  const valid = !error && seedTokens > 250000 && (condition === "continue" || stateWritten && switched && hints.length > 0 && cardCarried);
+  const valid = !error && seedTokens > threshold && (condition === "continue" || stateWritten && switched && hints.length > 0 && cardCarried);
   const finished = valid ? tasks.filter(t => t.ok).length : 0;
   const cost = usageCost(assistants()), continuationCost = cost - seedCost;
-  const row = { label: values.label, scenario: "rollover", model: values.model, rep, condition, goal, next, seedTokens, seedCost, handoffCost, continuationCost, cost, finished, tasks, valid, goalRetained, cardCarried, hints: hints.length, error, answer, evidence: dir };
+  const row = { label: values.label, scenario: "rollover", model: values.model, threshold, rep, condition, goal, next, seedTokens, seedCost, handoffCost, continuationCost, cost, finished, tasks, valid, goalRetained, cardCarried, hints: hints.length, error, answer, evidence: dir };
   appendFileSync(join(output, "results.jsonl"), JSON.stringify(row) + "\n");
   console.log(JSON.stringify(row));
   return row;
@@ -149,7 +152,7 @@ const summaries = ["continue", "rollover"].map(condition => {
 });
 const [control, rollover] = summaries;
 const keep = rows.every(r => r.valid && r.goalRetained && r.finished === 4) && rollover.costPerFinishedTask! < control.costPerFinishedTask!;
-const summary = { label: values.label, reps, summaries, verdict: keep ? "keep" : "reject", output };
+const summary = { label: values.label, threshold, reps, summaries, verdict: keep ? "keep" : "reject", output };
 writeFileSync(join(output, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
 console.log(JSON.stringify(summary, null, 2));
 process.exitCode = rows.every(r => r.valid) ? 0 : 1;

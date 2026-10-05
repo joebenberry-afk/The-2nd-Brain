@@ -10,7 +10,7 @@
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nowIso } from "./util.ts";
+import { nowIso, writeAtomic } from "./util.ts";
 import { scrub } from "./scrub.ts";
 import { idQuery, type Note } from "./notes.ts";
 
@@ -297,6 +297,59 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const fixes = [...fired].map(([id, seen]) => ({ id, sessions: seen.size })).sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
   const fixOutcomes = [...outcomes.values()].filter(f => f.helped + f.missed > 0).sort((a, b) => b.firings - a.firings || a.id.localeCompare(b.id));
   return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors };
+}
+
+/** One tool the host sends the model on every request, with its schema size. */
+export interface ToolSchema {
+  name: string;
+  /** Host origin class: builtin, extension, mcp, sdk. */
+  source: string;
+  tokens: number;
+}
+
+const TOOL_SCHEMAS = "tool-schemas-omp.json";
+
+/**
+ * The newest OMP main session's active tool schemas (agent cost is turns × context: every request
+ * re-sends them). Names and sizes only, never descriptions. A rename, so readers never see half a
+ * file. Never throws.
+ */
+export function saveToolSchemas(home: string, tools: ToolSchema[], now: Date = new Date()): void {
+  try {
+    writeAtomic(join(home, "state", TOOL_SCHEMAS), JSON.stringify({ at: nowIso(now), tools }) + "\n");
+  } catch {
+    // the snapshot is advisory
+  }
+}
+
+/** Active tool schemas next to their calls in the event logs: what each request pays for unused tools. */
+export function toolSchemaUse(home: string, days = 7, now: Date = new Date()): { at: string; tools: number; tokens: number; unused: ToolSchema[] } | null {
+  let snapshot: { at: string; tools: ToolSchema[] };
+  try {
+    snapshot = JSON.parse(readFileSync(join(home, "state", TOOL_SCHEMAS), "utf8"));
+    if (typeof snapshot.at !== "string" || !Array.isArray(snapshot.tools)) return null;
+  } catch {
+    return null;
+  }
+  const since = now.getTime() - days * 86_400_000;
+  const called = new Set<string>();
+  const dir = join(home, "state", "events");
+  let names: string[] = [];
+  try { names = readdirSync(dir).filter(name => name.endsWith(".jsonl")); } catch { /* no events yet */ }
+  for (const name of names) {
+    let text: string;
+    try {
+      if (statSync(join(dir, name)).mtimeMs < since) continue;
+      text = readFileSync(join(dir, name), "utf8");
+    } catch { continue; }
+    for (const line of text.split("\n")) {
+      // A cheap pre-filter: event rows are written by appendEvent with these exact keys.
+      const tool = /"tool":"([^"]+)"/.exec(line)?.[1], at = /"at":"([^"]+)"/.exec(line)?.[1];
+      if (tool && at && Date.parse(at) >= since) called.add(tool);
+    }
+  }
+  const unused = snapshot.tools.filter(tool => !called.has(tool.name)).sort((a, b) => b.tokens - a.tokens);
+  return { at: snapshot.at, tools: snapshot.tools.length, tokens: snapshot.tools.reduce((sum, tool) => sum + tool.tokens, 0), unused };
 }
 
 /** Apply outcome demotion since each note was last edited. */
