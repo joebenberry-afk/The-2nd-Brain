@@ -432,7 +432,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             }
           }, 0);
         }
-        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt: typeof prompt === "string" ? prompt : undefined, parentEdits: subagent ? parentEdits(ctx) ?? state.parentEdits : undefined });
+        // agentbench `on+nochild`: the child-card cost trial's control arm (plan §8.7 kill rule).
+        const noChild = subagent && (env.BRAIN_EXPERIMENT ?? "").split(",").includes("nochild");
+        const cardContent = noChild ? "" : renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt: typeof prompt === "string" ? prompt : undefined, parentEdits: subagent ? parentEdits(ctx) ?? state.parentEdits : undefined });
 
         if (cardContent) {
           state.carded = true;

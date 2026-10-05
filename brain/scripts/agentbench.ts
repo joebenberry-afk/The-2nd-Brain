@@ -190,6 +190,12 @@ const TASKS: Record<string, Task> = {
         && /\b4\b/.test(answer) && /2500|2\.5\s*s/.test(answer) && /config\.ts/.test(answer);
     },
   },
+  // Child-card trial: the work happens in a subagent, so its card (or its absence) is what varies.
+  delegate: {
+    prompt: "Two slices, each for its own subagent via the task tool, run one after the other; do not edit files yourself. Slice 1: fix the bug that makes `npm test` fail (source only, tests unchanged) and show npm test passing. Slice 2, after slice 1: deploy this app to staging. Then report in one line what changed and which deploy target was used.",
+    verify: (dir) => read(dir, "test/cart.test.ts") === FIXTURE["test/cart.test.ts"] && testsPass(dir)
+      && existsSync(join(dir, ".deployed-amber")) && !existsSync(join(dir, ".deployed-blue")) && !existsSync(join(dir, ".deployed-green")),
+  },
 };
 
 /** The rename task must not break what already worked; the discount bug is the fix task's. */
@@ -214,11 +220,13 @@ interface Score {
   toolCalls: number;
   toolResultTokens: number;
   failedTools: number;
+  /** Session files, parent and subagents: `delegate` runs need > 1 or no child ever started. */
+  sessionFiles: number;
   answer: string;
 }
 
 function score(sessionDir: string): Score {
-  const s: Score = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, toolCalls: 0, toolResultTokens: 0, failedTools: 0, answer: "" };
+  const s: Score = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, toolCalls: 0, toolResultTokens: 0, failedTools: 0, sessionFiles: 0, answer: "" };
   const files: string[] = [];
   const walk = (d: string): void => {
     for (const n of readdirSync(d)) {
@@ -228,6 +236,7 @@ function score(sessionDir: string): Score {
     }
   };
   if (existsSync(sessionDir)) walk(sessionDir);
+  s.sessionFiles = files.length;
   for (const file of files) {
     for (const line of readFileSync(file, "utf8").split("\n")) {
       let e: { type?: string; message?: { role?: string; usage?: Record<string, number> & { cost?: { total?: number } }; content?: { type: string; text?: string }[]; isError?: boolean } };

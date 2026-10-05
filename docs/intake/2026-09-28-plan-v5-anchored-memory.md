@@ -311,7 +311,11 @@ external memory systems (agent://ext-survey). Built:
 - **Child card** (≤ 200 tokens, both hosts; Claude Code via SubagentStart): parent Watch out,
   recurring fixes, `brief`-tagged standing rules (≤ 80 tokens), the parent's files in play, a
   registered-doc outline plus the best-matching section. `brief` is a non-scoping tag. The parent
-  card says `children get: <n> rules`. **Not yet benchmarked on cost** (kill rule applies).
+  card says `children get: <n> rules`. **Benchmarked 2026-10-05** (agentbench `delegate`, `on` vs
+  `on+nochild`, two batches 6+6, 12/12 pass both arms, every run 3 sessions; nochild children
+  verified card-less): with the card −9.2 % tokens and −2.1 turns in both batches, but cost
+  +9 % then 0 %, pooled +4.9 % ($0.694 vs $0.662, sd ≈ $0.11; inside noise). No cost win, so
+  the kill rule says delete; owner decision pending.
 - **Owner rules captured on first statement** (UserPromptSubmit / OMP input, main sessions,
   deterministic cues) as `brain review` proposals; Claude Code auto-memory listed read-only for
   `brain accept` (35 live entries; never written).
