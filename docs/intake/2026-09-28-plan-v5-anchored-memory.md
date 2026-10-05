@@ -314,8 +314,8 @@ external memory systems (agent://ext-survey). Built:
   card says `children get: <n> rules`. **Benchmarked 2026-10-05** (agentbench `delegate`, `on` vs
   `on+nochild`, two batches 6+6, 12/12 pass both arms, every run 3 sessions; nochild children
   verified card-less): with the card −9.2 % tokens and −2.1 turns in both batches, but cost
-  +9 % then 0 %, pooled +4.9 % ($0.694 vs $0.662, sd ≈ $0.11; inside noise). No cost win, so
-  the kill rule says delete; owner decision pending.
+  +9 % then 0 %, pooled +4.9 % ($0.694 vs $0.662, sd ≈ $0.11; inside noise). No cost win; owner
+  kept it (2026-10-05): the token and turn gain held in both batches, the cost gap is noise.
 - **Owner rules captured on first statement** (UserPromptSubmit / OMP input, main sessions,
   deterministic cues) as `brain review` proposals; Claude Code auto-memory listed read-only for
   `brain accept` (35 live entries; never written).
