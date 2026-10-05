@@ -15,6 +15,7 @@
  * fresh workspaces, one isolated Brain home per pair, no handoff except persisted Brain memory.
  * Notes and their later card/recall/fix exposure, plus B-only metrics, are retained in each row.
  * v5-nudge rejected: +11.9% A+B tokens, +4.2% cost vs same-batch control; control wrote notes 6/6.
+ * v5-staleafter rejected: a `stale_after` brain_note parameter, +18% A+B tokens, +12% cost, used 0/6.
  */
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
@@ -288,7 +289,7 @@ interface SessionRow extends Run, Score {
 const conditions = (values.conditions ?? (values.tasks === "learn" ? "on" : "off,on")).split(",").map((c) => c.trim()).filter(Boolean);
 const taskNames = values.tasks!.split(",").map((t) => t.trim()).filter((t) => TASKS[t]);
 const reps = Number(values.reps);
-if (taskNames.includes("learn") && (taskNames.length !== 1 || !conditions.length || conditions.some((c) => !["off", "on"].includes(c)))) throw new Error("learn runs alone with off/on conditions");
+if (taskNames.includes("learn") && (taskNames.length !== 1 || !conditions.length || conditions.some((c) => !/^(off|on(\+[a-z]+)*)$/.test(c)))) throw new Error("learn runs alone with off, on or on+<experiment> conditions");
 const scratch = mkdtempSync(join(tmpdir(), "agentbench-"));
 /** Session files stay (local, never committed) so the next experiment can study where turns went. */
 const kept = join(HOME, "state", "agentbench", new Date().toISOString().replace(/[:.]/g, "-"));

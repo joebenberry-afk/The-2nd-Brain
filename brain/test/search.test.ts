@@ -28,7 +28,7 @@ describe("search", () => {
     expect(tokens("The QUICK Brown")).toEqual(["quick", "brown"]);
     expect(tokens("test test test")).toEqual(["test"]);
     expect(tokens("one two three")).toEqual([]);
-    expect(tokens("short-word very-Long")).toEqual(["short", "word", "long"]);
+    expect(tokens("short-word very-Long")).toEqual(["short", "word", "long", "short-word", "very-long"]);
     expect(tokens("python azure")).toEqual(["python", "azure"]);
   });
 
@@ -520,4 +520,24 @@ describe("evidence and replacement answers", () => {
     expect(result.text).toMatch(/note.*learn/i);
     expect(result.text).not.toContain("brain_note");
   });
+});
+
+it("indexes whole identifiers, camel/acronym parts, separator/path parts and light suffixes", () => {
+  expect(tokens("loadConfig HTTPServer source/cache_store/read-notes", true, false)).toEqual([
+    "loadconfig", "httpserver", "source", "cache", "store", "read", "notes"
+  ]);
+  expect(tokens("loadConfig HTTPServer source/cache_store/read-notes")).toEqual(expect.arrayContaining([
+    "loadconfig", "load", "config", "httpserver", "http", "server", "source", "cache", "store", "read", "notes", "source/cache_store/read-notes"
+  ]));
+  expect(tokens("boxes loading loaded running")).toEqual(expect.arrayContaining(["boxes", "box", "loading", "loaded", "load", "running", "run"]));
+  expect(tokens("class status analysis")).not.toEqual(expect.arrayContaining(["cla", "statu", "analysi"]));
+  expect(tokens("LOOP.md 18.4.1", true)).toEqual(["loop.md", "18.4.1"]);
+});
+
+it("recalls identifier parts and suffix variants with exact terms ahead of aliases", () => {
+  const project = { id: "test", tags: [], root: null };
+  const corpus = [note("n-exact", { body: "config" }), note("n-camel", { body: "loadConfig" }), note("n-snake", { body: "config_store" }), note("n-box", { body: "box storage" })];
+  expect(recall(corpus, "config", { project, limit: 10 }).map(hit => hit.note.id)).toEqual(["n-exact", "n-snake"]);
+  expect(recall([corpus[1]!], "config", { project })[0]?.note.id).toBe("n-camel");
+  expect(recall([corpus[3]!], "boxes", { project })[0]?.note.id).toBe("n-box");
 });

@@ -1208,7 +1208,7 @@ describe("capture batch five regressions", () => {
       "C:\\work\\fourth.test.ts(8,2): error TS2345: invalid argument at 0xcdcdcdcd",
     ];
     log(home, diagnostics.map((error) => row({ ok: false, error })).join(""));
-    expect(capture.unmatchedErrors(home, [])).toEqual([{ signature: "<path>: error TS2345: invalid argument at <hex>", count: 4 }]);
+    expect(capture.unmatchedErrors(home, [])).toEqual([{ signature: "<path>: error TS2345: invalid argument at <hex>", count: 4, pattern: "error TS2345: invalid argument at", tool: "bash" }]);
     expect(errorSignature("import { failure } from 'x';\nConnection refused by server")).toBe("Connection refused by server");
     expect(errorSignature("Error: " + "complete ".repeat(20))).toMatch(/complete$/);
     expect(errorSignature("❯ test/a.test.ts (2 tests | 1 failed)\n→ Cannot read property value")).toBe("Cannot read property value");
@@ -1394,8 +1394,8 @@ describe("capture batch five regressions", () => {
     writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { a: { paths: [a] }, b: { paths: [b] } } }));
     const known = createNote(home, { text: "Known repair", project: "a", tested: true, errors: ["Error: known failure"] });
     log(home, row({ cwd: a, ok: false, error: "Error: known failure" }) + row({ cwd: b, ok: false, error: "Error: known failure" }) + row({ cwd: a, ok: false, error: "Error: frequent failure" }).repeat(3) + row({ cwd: a, ok: false, error: "Error: rare failure" }) + row({ cwd: a, ok: false, error: "Error: old failure", at: "2000-01-01T00:00:00Z" }) + row({ cwd: a, ok: true, error: "Error: not a failure" }));
-    expect(capture.unmatchedErrors(home, [known], { days: 7, project: "a" })).toEqual([{ signature: "Error: frequent failure", count: 3 }, { signature: "Error: rare failure", count: 1 }]);
-    expect(capture.unmatchedErrors(home, [known], { project: "b" })).toEqual([{ signature: "Error: known failure", count: 1 }]);
+    expect(capture.unmatchedErrors(home, [known], { days: 7, project: "a" })).toEqual([{ signature: "Error: frequent failure", count: 3, pattern: "Error: frequent failure", tool: "bash", then: "bash" }, { signature: "Error: rare failure", count: 1, pattern: "Error: rare failure", tool: "bash", then: "bash" }]);
+    expect(capture.unmatchedErrors(home, [known], { project: "b" })).toEqual([{ signature: "Error: known failure", count: 1, pattern: "Error: known failure", tool: "bash", then: "bash" }]);
   });
 });
 

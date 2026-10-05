@@ -65,12 +65,23 @@ are dropped (0.75 let 1-2 wrong answers through on reruns of the same 54 queries
 ±0.02 between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual doc-heading or no-match fallback
 still applies. Only the scrubbed query and note body text (whitespace collapsed, scrubbed, then
 cut to 450 characters, so a secret at the cut is masked whole) are sent. Private notes are never sent and remain lexical, unjudged.
-A plan-doc heading answer (its heading and first paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.
+A plan-doc heading answer (its heading and best-matching paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.
 Set `BRAIN_JUDGE=off` to opt out; without a key, or on timeout, HTTP or parse errors, recall
 **fails open** to its unchanged lexical answer. Calls take about 300 ms, with a 5-second
 timeout. A small per-process cache avoids repeated calls for the same query, note id and text.
 The endpoint defaults to `https://api.typesafe.ai` (`TYPESAFE_BASE_URL` overrides it).
 Recall telemetry retains query/ids and adds `judged` (a successful check) and `dropped` (count).
+
+**Tidy and note usage.** `brain tidy [--all] [--days N]` is a read-only report of duplicate or
+contradictory notes and active notes older than N days (default 30) with no recent use. Without
+a judge key it lists lexical similarities, not semantic claims. With `TYPESAFE_API_KEY`, public
+pairs are checked in batches of at most 20; private text never leaves the machine, and judge
+failures leave lexical suggestions intact. Retire commands are suggestions only, keeping the
+newer note. New public CLI/tool notes can append a duplicate/contradiction hint; no hint changes
+the normal reply, and subagents skip it. Local per-note telemetry counts recalls, explicit id
+opens, rendered card appearances and fix fires across the current and rotated logs.
+`brain stats --days N` reports used/never-used active notes across the Brain home, like its
+other usage totals; retained telemetry, not an unlimited lifetime history, defines that window.
 
 **Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`,
 which marks an entry that does not resolve here `(missing under <root>)`)
@@ -80,20 +91,36 @@ never code. A working state line `See: docs/LOOP.md#checkpoint` is shown as that
 text wherever the state appears (card, `brain state`), so the state never drifts from the
 repo; a missing file or heading shows `anchor missing: …`, never an old copy.
 
+Recall searches the whole registered section, preferring more distinct query terms and then heading matches; unnamed queries need at least two distinct matching terms. `brain project docs suggest [-n N]` (default 5) ranks checkout Markdown files by distinct silent or doc-answered queries logged locally in the last 30 days, skips registered docs, and prints explicit `brain project docs add <path>` commands. It never registers files itself or sends scanned docs to a judge. `--project <id>` uses that project's existing declared checkout when run elsewhere. Scanning uses git-tracked Markdown when available, otherwise a bounded walk excluding hidden folders and `node_modules` (at most 2,000 files, 512 KiB each).
+
 ## 2. Verify in the first sessions
 
 1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message
    (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt);
    later prompts add nothing, and a session resumed in a new OMP process (restart,
-   `/resume`) keeps the card it already holds until a compaction. Subagents inherit only the parent plan’s Watch out field
-   (≤40 tokens), never Goal/Next/Done or auto observations, and cannot overwrite state through
-   the Brain tools (the CLI can: see below).
+   `/resume`) keeps the card it already holds until a compaction. Child cards on both hosts are
+   capped at **200 tokens total**: the parent plan’s Watch out field (≤40 tokens), up to two
+   recurring fixes counted over child sessions, standing rules (≤6 lines/80 tokens), up to eight
+   parent-session edited paths, and live H2/H3 doc headings with line numbers (≤60 tokens). A
+   complete section whose heading best matches the brief is included only when it fits both
+   ≤120 tokens and the remaining card budget; ordinary project notes use leftover space. Children
+   never inherit Goal/Next/Done or auto observations, and cannot overwrite state through the
+   Brain tools (the CLI can: see below).
    Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
    A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
-   the card up front (`Often hit lately …`, at most two), before the first attempt; it drops off by itself
+   the card up front (`Often hit lately …`, at most two, ≤80 tokens per parent fix), before the first attempt; fixes too long for that slot stay ordinary-note candidates. It drops off by itself
    once the mistake stops. Measured on GPT subagents: the OMP edit-grammar mistake fell from
    8/8 first edits to 2/8 with that line in the task; live on OMP 18.4.0, children whose card
    carried it (after 3 had hit the mistake) failed 0/5 first edits vs 3/3 before, for +39 tokens.
+
+   Add a standing child rule with `brain note "Use Node built-ins only" --tag brief`. Active
+   project-visible notes tagged `brief` are supplied once in the child rule block, not repeated
+   under Known here. `brief` is non-scoping: brief-only globals apply everywhere; other global
+   tags still require a project match. The parent card says
+   `children get: <n> rules` instead of repeating their bodies. OMP takes paths from the live
+   parent session and doc names from the first child prompt. Claude Code takes paths from the
+   parent’s captured event log; its documented SubagentStart input has no brief/prompt, so it
+   uses registered docs only. All lookups are local and read-only; only card ids/costs are logged.
 2. **Working state.** Ask the agent to set the plan (`brain_state`) when the goal or next step
    changes. OMP's own compaction summary carries goal and next: both were recalled in 100% of
    measured short and long sessions, with or without extra Brain context. The long sessions
@@ -118,6 +145,31 @@ repo; a missing file or heading shows `anchor missing: …`, never an old copy.
    script) and scripts under OS temp roots (including Git Bash `$TEMP`/`$TMP`) or a top-level
    `tmp/`, `temp/`, `cache/`, `.cache/` are never proposed; nor is a success after an edit,
    `sed -i` or a `>` redirect included (the code was repaired, not the command).
+
+   **Owner rules and Claude memory.** Main-session owner messages with durable cues (remember,
+   always/never, from now on, preferences or agent-model choices) become scrubbed, ≤400-character
+   pending `user` decisions, never prompt injections; questions, code/quoted examples, child
+   instructions and private-path messages are ignored. `brain accept` preserves source `user`
+   and adds `brief` for agent/model or always/never work rules. `brief` never scopes a global
+   note: a brief-only global applies everywhere; additional project tags still constrain it.
+   `brain review [--all]` also lists read-only, accept/reject-able `claude-memory` proposals
+   from `~/.claude/projects/<encoded path>/memory/*.md` (`CLAUDE_CONFIG_DIR` overrides `~/.claude`; CLI calls use their supplied environment),
+   excluding `MEMORY.md`, unreadable files and private paths. Declared project paths
+   map worktrees to their owner; undeclared folders use a bounded transcript cwd lookup or match
+   their encoding against real directory names (only matching prefixes, no file content scan). An
+   active, unexpired visible note covers an import when its headline matches or it contains
+   ≥80% of the candidate’s distinct words with matching negation: a conservative lexical check,
+   not semantic reconciliation. Accepted imports retain their body and provenance; rejected
+   headlines stay suppressed. No judge or network is used and Claude’s files are never changed.
+
+   Review also lists the five most frequent unmatched errors from the last 14 days, for this
+   project and global scope (`--all` includes other projects), with the last tool and next
+   successful step as context. Save a real repair with the suggested literal `--error` and
+   `--tested` to close the loop, or `brain dismiss "<signature>"` to ignore it; dismissal hashes
+   sync in `rejected.json`, without the error text. New `brain note`/`brain_note` notes without
+   explicit evidence attach up to three existing repo-relative files named in the text, or
+   session edits named by basename; private, outside-root and scratch files are excluded.
+   Existing-headline upgrades are unchanged, and missing evidence later marks recall as stale.
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
    hit rate, which fixes fired in how many sessions, errors the Brain swallowed to keep the host
    running (latest three), and frequent errors without a fix. Each recall row keeps its query
@@ -147,6 +199,24 @@ tell a child from its parent: a child's project-scoped `brain note --tested` is 
 (a global one stays untested until the owner runs `brain tested <id>`), and its `brain state`
 replaces the parent's plan. That reaches OMP children through bash and Claude Code subagents, whose instructions carry the managed block (`brain state` when the goal changes).
 
+**Context hand-off.** Main sessions above 250,000 context tokens get one ≤40-token rollover
+line per crossing: save `brain_state` with Goal/Next/See: and open a fresh session; its start
+card carries the saved state. `projects.json` accepts a project-level numeric `rollover`
+threshold (tokens); `0` disables the hint. Unknown usage is silent, subagents never get it,
+and the latch survives hook processes and OMP restarts, rearming only when usage drops back
+below the threshold. OMP queues the hint for the next model turn without starting an extra
+turn. Claude Code reads the latest assistant input/cache usage from a bounded transcript
+tail: PostToolUse adds model context, while Stop only shows a nonblocking user warning.
+The paid `node scripts/compactbench.ts --scenario rollover --reps 4 --label v5-rollover`
+trial compares continued long contexts with state-save plus RPC `new_session`, including
+handoff cost and goal retention. Its isolated evidence defaults to an OS temporary directory,
+not the real Brain home; `--output` selects another directory.
+Same-batch `v5-rollover-20261004` (GPT-6 Astra, 4+4 sessions, ~424k seeded tokens)
+finished 16/16 edits and retained goal/next 4/4 in each arm. Recorded total cost, including
+seeding and handoff, fell from $40.1323 to $21.0601 ($2.5083 to $1.3163 per finished task,
+−47.5%); continuation cost fell from $23.1659 to $4.1466 (−82.1%). The feature is kept.
+This trial scripts compliance with the hint; it does not prove agents initiate rollover unprompted.
+
 ## 3. Other harnesses
 
 **Claude Code.** In `~/.claude/settings.json` (or a project’s `.claude/settings.json`):
@@ -155,8 +225,11 @@ replaces the parent's plan. That reaches OMP children through bash and Claude Co
 {
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "PostToolUse": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "timeout": 30, "async": true, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "PostToolUseFailure": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "PreCompact": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "SessionEnd": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }]
   }
@@ -167,9 +240,9 @@ The `[ -f … ]` guard leaves a Brain checkout to its own `.claude/settings.json
 these hooks with another command: Claude Code de-duplicates only identical handlers, so both would
 run (two cards, every fix twice). The handler fails open (`{}`, exit 0; the swallowed error
 becomes a `brain stats` row), and `2>/dev/null || echo "{}"` covers a missing `brain` or runtime.
-The 30-second timeout also lifts SessionEnd's shared 1.5-second budget. PostToolUse never returns
-output, so it runs `async` instead of holding every tool result about 300 ms; the others stay
-synchronous (the card, the fix, the saved state). A PreCompact or SessionEnd right after the last
+The 30-second timeout also lifts SessionEnd's shared 1.5-second budget. PostToolUse runs
+`async` rather than holding every tool result about 300 ms; it may return a rollover hint
+for the next model context. The other hooks stay synchronous (card, fix, state, Stop warning). A PreCompact or SessionEnd right after the last
 tool call can miss that call's event, and `claude -p` stops a PostToolUse still running at exit.
 
 Successful and failed tools share the capture log (a backgrounded Bash launch is not logged), so
@@ -184,6 +257,8 @@ SessionStart source `compact` or `resume` adds no context; saved state feeds the
 Hooks with `agent_id`, SubagentStart and SubagentStop never write working state; child tool
 logs are separate from their parent’s. `agent_type` alone is also used by main sessions
 started with `--agent` and does not imply a child. Tool hooks do not spawn git.
+SubagentStart returns the child card as `hookSpecificOutput.additionalContext` and logs a
+`sub: true` card row under the child’s session identity; empty cards return `{}`.
 This checkout preserves its cloud setup hook and calls `bash brain/bin/brain` (Node or Bun).
 Payloads follow the [Claude Code hook reference](https://code.claude.com/docs/en/hooks).
 
@@ -233,7 +308,10 @@ errors:                    # error text this note fixes; "re:<regex>" for a patt
 evidence:
   - scripts/bootstrap.ps1
 tested: true               # only tested notes are appended to failed tool results
+tested_by: owner           # who verified it: owner (brain tested) | capture | agent | convert
+tested_at: 2026-09-28T09:00:00Z
 host: omp                  # optional: fires only on this host (omp | claude-code), lower case; brain check reports any other value
+stale_after: 2027-01-01    # optional: out of date from this date (UTC) or ISO instant on
 ---
 
 Clear PYTHONHOME before running python        ← the first line is the headline
@@ -244,8 +322,18 @@ Why and how, in as much detail as helps.
 A duplicate headline with a different normalized body is refused without altering the original:
 choose a new headline, or retire the original first. Identical bodies can still upgrade metadata.
 Within the recall shortlist, notes whose file evidence is entirely missing sort after fresh hits
-and carry `(stale evidence)`; cards apply a -3 ranking penalty without hiding the note. A
+and carry `(stale evidence)`; notes past `stale_after` (`brain note --stale-after <date>`) do the
+same with `(stale since <date>)` and are never pushed as a known fix. Cards apply a -3 ranking
+penalty to both without hiding the note. A
 stat-validated per-process cache reuses unchanged parsed notes; Markdown remains the truth.
+
+**Content-bound trust and keyword recall.** New file evidence (explicit or automatic, including metadata upgrades) stores flat `evidence_sha` entries (`path=12hex`, SHA-256 of file bytes with CRLF normalized); verification refreshes those snapshots and stores `tested_sha` over the whitespace-normalized body plus error patterns. Changed readable evidence shows `(evidence changed)` and gets the same -3 card penalty as missing evidence; a change after `tested_at` prevents a known-fix push. An edited verified body/error pattern loses its +3 tested bonus and fix eligibility, with `(edited since tested)` on an id read; `brain tested <id>` re-stamps both fingerprints. Missing files retain the existing advisory behavior, and absent `tested_sha` is legacy trusted (mi…
+
+`brain export <dir>` writes the public notes as an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+0.2 bundle for OKF readers: `kind` becomes `type`, `tested_by` becomes `verified` (`human:owner`
+only for the owner), retired notes become `status: deprecated` with links to their replacement.
+Private notes are never exported. The folder must be empty or an earlier export (which is
+replaced), and outside the Brain home except under `state/`.
 
 Retiring keeps the file (`retired:`, `replaced_by:`); `brain retire <id> [--by <new id>]` writes
 both sides. Recall prefers a visible current replacement with a short retired-note reference;

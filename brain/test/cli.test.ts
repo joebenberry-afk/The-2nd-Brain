@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { LEAN_LINE } from "../src/card.ts";
 import { main, type Io } from "../src/cli.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
-import { appendEvent, findFix, renderFix, scanEvents } from "../src/capture.ts";
+import { appendEvent, findFix, renderFix, scanEvents, unmatchedErrors } from "../src/capture.ts";
 import { estimateTokens } from "../src/util.ts";
 import { readWork } from "../src/work.ts";
 import { fixFires, logUse } from "../src/telemetry.ts";
@@ -26,7 +26,7 @@ function repo(name: string): string {
 async function run(argv: string[], io: Partial<Io> = {}): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = [];
   const err: string[] = [];
-  const code = await main(argv, { stdin: () => "", ...io, out: (s) => out.push(s), err: (s) => err.push(s) });
+  const code = await main(argv, { stdin: () => "", ...io, env: { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, ...io.env }, out: (s) => out.push(s), err: (s) => err.push(s) });
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
@@ -319,6 +319,10 @@ describe("brain cli", () => {
     const accepted = await run(["accept", ids[0] as string], io);
     expect(accepted.out).toMatch(/^accepted p-[0-9a-f]+ → n-[0-9a-f]{10}$/);
     expect((await run(["reject", ids[1] as string], io)).out).toBe(`rejected ${ids[1]}`);
+    const remaining = await run(["review"], io);
+    expect(remaining.out).toContain("Unmatched errors");
+    expect(remaining.out).not.toMatch(/^p-[0-9a-f]+/m);
+    for (const error of unmatchedErrors(home, loadNotes(home).notes)) await run(["dismiss", error.signature], io);
     expect((await run(["review"], io)).out).toBe("nothing to review");
     expect(loadNotes(home).notes).toHaveLength(1);
     expect(loadNotes(home).notes[0]?.tested).toBe(false);

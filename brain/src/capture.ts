@@ -12,10 +12,12 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
@@ -30,8 +32,13 @@ import {
   createNote,
   errorPatternProblem,
   displayLine,
+  expired,
+  findSameHeadline,
+  loadNotes,
   firstLine,
   isActive,
+  testedCurrent,
+  changedEvidence,
   type Note,
 } from "./notes.ts";
 import { type Project, canonical, loadProjects, normalizePath, projectById, resolveProject, visibleTo } from "./project.ts";
@@ -48,6 +55,8 @@ export interface ToolEvent {
   tool: string;
   command?: string;
   path?: string;
+  /** Read requested the entire file, rather than a line/offset window. */
+  fullRead?: boolean;
   ok: boolean;
   error?: string;
 }
@@ -60,7 +69,7 @@ export interface Proposal {
   text: string;
   errors: string[];
   tested: boolean;
-  source: "capture" | "commit";
+  source: "capture" | "commit" | "user" | "claude-memory";
   evidence: string[];
 }
 
@@ -77,6 +86,142 @@ function proposalId(evidence: string[], text: string): string {
 
 function saveProposal(home: string, proposal: Proposal): void {
   writeAtomic(join(inboxDir(home), `${proposal.id}.json`), JSON.stringify(proposal, null, 2) + "\n");
+}
+
+/** Deterministic owner sentences only: questions, quoted examples and code are not instructions. */
+export function userRuleSentences(message: string): string[] {
+  const prose = message.replace(/\x60{3}[\s\S]*?(?:\x60{3}|$)|~{3}[\s\S]*?(?:~{3}|$)/g, "")
+    .replace(/<([\w-]+)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, "")
+    .replace(/^(?:\s*>| {4}|\t).*$/gm, "");
+  const cue = /\b(?:remember|always|never|from now on|don['’]t\b[^.!?]*\bagain|do not\b[^.!?]*\bagain|I want you to|I prefer|my rule|owner rule)\b|\buse\s+\S+(?:\s+\S+){0,3}\s+for\s+(?:sub[ -]?agents?|agents?)\b/i;
+  return prose.split(/(?<=[.!?])\s+|\n+/).flatMap((sentence) => {
+    const text = sentence.trim();
+    const plain = text.replace(/\x60[^\x60]*\x60|"[^"\n]*"|“[^”\n]*”|'[^'\n]+'/g, "");
+    const modelChoice = /\buse\s+(?:\x60[\w.-]+\x60|"[\w.-]+")\s+for\s+(?:sub[ -]?agents?|agents?)\b/i.test(text);
+    if ((!cue.test(plain) && !modelChoice) || /\?\s*$/.test(text) || /^(?:can|could|would|should|did|does|is|are|why|how|what|when|where)\b|^do\s+(?!not\b)/i.test(plain.trim())) return [];
+    const cleaned = scrub(text, { longRuns: false }).text.replace(/\s+/g, " ").trim();
+    return cleaned ? [cleaned.length > 400 ? cleaned.slice(0, 399).trimEnd() + "…" : cleaned] : [];
+  });
+}
+
+/** 80% candidate-word coverage avoids hiding a long memory under a short generic note. */
+function coveredLearning(notes: Note[], text: string, project: Project | null): boolean {
+  const same = findSameHeadline(notes, text, project?.id ?? GLOBAL, project?.tags);
+  if (same && isActive(same) && !expired(same)) return true;
+  const words = (s: string) => new Set(s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  const wanted = words(text);
+  if (wanted.size < 4) return false;
+  const negative = (set: Set<string>) => ["never", "not", "no"].filter((word) => set.has(word)).join("|");
+  return notes.some((note) => {
+    if (!isActive(note) || expired(note) || !visibleTo(note, project)) return false;
+    const held = words(note.body);
+    return negative(held) === negative(wanted) && [...wanted].filter((word) => held.has(word)).length / wanted.size >= 0.8;
+  });
+}
+
+/** Capture is local and silent; child and private-path messages are never retained. */
+export function captureUserRules(home: string, message: unknown, project: Project, opts: { subagent?: boolean; now?: Date } = {}): Proposal[] {
+  if (opts.subagent || typeof message !== "string" || touchesPrivate({ cwd: "", command: message })) return [];
+  const seen = seenBefore(home, loadNotes(home).notes);
+  const out: Proposal[] = [];
+  for (const text of userRuleSentences(message)) {
+    const global = /\b(?:all projects|everywhere)\b/i.test(message);
+    const scope = global ? null : project;
+    if (coveredLearning(seen.notes, text, scope)) continue;
+    const evidence = ["user:" + (global ? GLOBAL : project.id)];
+    propose(home, seen, { id: proposalId(evidence, identity(text)), at: nowIso(opts.now), project: global ? GLOBAL : project.id,
+      kind: "decision", text, errors: [], tested: false, source: "user", evidence: [] }, out, scope);
+  }
+  return out;
+}
+
+/** Claude Code replaces each separator (including the colon) individually. */
+export function claudeProjectFolder(path: string): string {
+  return path.replace(/[\\/]+$/, "").replace(/[^A-Za-z0-9-]/g, "-");
+}
+
+/** A bounded transcript prefix supplies cwd when a memory folder has no declared project path. */
+function memoryProject(home: string, root: string, folder: string, paths: { path: string; id: string }[]): Project | null {
+  const match = paths.find(({ path }) => folder.toLowerCase() === claudeProjectFolder(path).toLowerCase()
+    || (folder.toLowerCase().startsWith(claudeProjectFolder(path).toLowerCase() + "-") && /-claude-worktrees-/i.test(folder.slice(claudeProjectFolder(path).length))));
+  if (match) return projectById(home, match.id, match.path);
+  let bytes: Buffer | undefined;
+  for (const file of readdirSync(join(root, folder)).filter((name) => name.endsWith(".jsonl")).slice(0, 5)) {
+    let fd: number | undefined;
+    try {
+      fd = openSync(join(root, folder, file), "r");
+      bytes ??= Buffer.alloc(64 * 1024);
+      const prefix = bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, 0)).toString("utf8");
+      for (const line of prefix.split("\n")) {
+        try {
+          const row = JSON.parse(line) as { cwd?: unknown };
+          if (typeof row.cwd === "string" && claudeProjectFolder(row.cwd).toLowerCase() === folder.toLowerCase()) return resolveProject(home, row.cwd, {});
+        } catch { /* partial or malformed transcript line */ }
+      }
+    } catch { /* another session may be writing or removing this file */ }
+    finally { if (fd !== undefined) closeSync(fd); }
+  }
+  // Memory-only folders have no transcript. Match encoded prefixes against real directory names,
+  // not a guessed dash-to-slash decoding; read no files and descend only matching prefixes.
+  const candidates = [homedir(), dirname(dirname(root))];
+  const wanted = folder.toLowerCase();
+  for (let i = 0; i < candidates.length; i++) {
+    const path = candidates[i]!;
+    const encoded = claudeProjectFolder(path).toLowerCase();
+    if (wanted === encoded) return resolveProject(home, path, {});
+    if (!wanted.startsWith(encoded + "-")) continue;
+    const leaf = folder.slice(encoded.length + 1);
+    // A separator-free final component is unambiguous even when its checkout is offline.
+    if (/^[A-Za-z0-9]+$/.test(leaf)) return resolveProject(home, join(path, leaf), {});
+    try {
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const child = join(path, entry.name);
+        const key = claudeProjectFolder(child).toLowerCase();
+        if (wanted === key || wanted.startsWith(key + "-")) candidates.push(child);
+      }
+    } catch { /* offline or inaccessible directory cannot resolve a project */ }
+  }
+  return null;
+}
+
+/** Virtual proposals: review/accept never writes or removes Claude Code's memory files. */
+export function listClaudeMemory(home: string, notes: Note[], opts: { env?: NodeJS.ProcessEnv; project?: Project } = {}): Proposal[] {
+  const env = opts.env ?? process.env;
+  const root = join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  const out: Proposal[] = [];
+  const paths = Object.entries(loadProjects(home)).flatMap(([id, entry]) => (entry.paths ?? []).map((path) => ({ path, id })));
+  if (opts.project?.root) paths.push({ path: opts.project.root, id: opts.project.id });
+  paths.sort((a, b) => b.path.length - a.path.length);
+  const rejected = readRejected(home);
+  let folders: string[];
+  try { folders = readdirSync(root).sort(); } catch { return out; }
+  for (const folder of folders) {
+    try {
+      const dir = join(root, folder, "memory");
+      if (!existsSync(dir) || touchesPrivate({ cwd: realpathSync(dir) })) continue;
+      const project = memoryProject(home, root, folder, paths);
+      if (!project) continue;
+      for (const file of readdirSync(dir).sort()) {
+        if (!file.endsWith(".md") || file.toUpperCase() === "MEMORY.MD") continue;
+        const path = join(dir, file);
+        try {
+          const info = statSync(path);
+          if (touchesPrivate({ cwd: realpathSync(path) }) || !info.isFile()) continue;
+          const raw = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
+          const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(raw);
+          const text = scrub(raw.slice(header?.[0].length ?? 0).trim(), { longRuns: false }).text;
+          if (!text || touchesPrivate({ cwd: "", command: text }) || coveredLearning(notes, text, project)
+            || out.some((p) => p.project === project.id && identity(p.text) === identity(text)) || rejected.has(rejectKey("h", identity(text)))) continue;
+          const evidence = ["claude-memory:" + path];
+          out.push({ id: proposalId(evidence, text), at: info.mtime.toISOString(), project: project.id,
+            kind: /(?:^|\n)\s*type:\s*(?:feedback|user)\b/i.test(header?.[1] ?? "") ? "decision" : "fact",
+            text, errors: [], tested: false, source: "claude-memory", evidence });
+        } catch { /* unreadable memory does not break review */ }
+      }
+    } catch { /* missing folder or project metadata: skip, never alter the source */ }
+  }
+  return out;
 }
 
 /**
@@ -120,6 +265,7 @@ export function toolEventFrom(
   tool: string;
   command?: string;
   path?: string;
+  fullRead?: boolean;
   ok: boolean;
   error?: string;
 } {
@@ -186,6 +332,7 @@ export function toolEventFrom(
     tool,
     command,
     path,
+    ...(/^(?:read|Read)$/.test(tool) ? { fullRead: !!path && !/:\d+(?:-\d+)?$/.test(path) && !["offset", "limit", "start_line", "end_line"].some(key => asRecord(input)[key] !== undefined) } : {}),
     ok,
     error,
   };
@@ -413,6 +560,7 @@ export function parseEvent(line: string): ToolEvent | null {
     if (value.v !== 1 || typeof value.ok !== "boolean" ||
         !["at", "session", "cwd", "tool"].every((key) => typeof value[key] === "string") ||
         !["command", "path", "error"].every((key) => value[key] === undefined || typeof value[key] === "string")) return null;
+    if (value.fullRead !== undefined && typeof value.fullRead !== "boolean") return null;
     return value as unknown as ToolEvent;
   } catch {
     return null;
@@ -438,6 +586,74 @@ function readEventTail(path: string, cursor: number): { bytes: Buffer; offset: n
   }
 }
 
+/** A descendant, not the root itself; relative compares Windows paths case-insensitively. */
+function within(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return !!rel && rel !== ".." && !rel.startsWith(".." + (process.platform === "win32" ? "\\" : "/")) && !isAbsolute(rel);
+}
+
+/** Replay Claude Code's edits; host scratchpads are optional exclusions for auto-save. */
+export function sessionEdits(home: string, session: string, root: string | null, scratchpads: string[] = []): string[] {
+  const edited: string[] = [];
+  if (!session) return edited;
+  const own = [join(homedir(), ".claude"), ...scratchpads.map((path) => resolve(path))];
+  try {
+    const bytes = readEventTail(join(eventsDir(home), safeSession(session) + ".jsonl"), 0).bytes;
+    const offset = Math.max(0, bytes.length - EVENT_CAP_BYTES - 8192);
+    const lines = bytes.subarray(offset, bytes.lastIndexOf(0x0a) + 1).toString("utf8").split("\n");
+    if (offset) lines.shift();
+    for (const line of lines) {
+      const event = parseEvent(line);
+      if (!event || event.session !== session || !event.ok || !/^(Edit|Write|MultiEdit)$/.test(event.tool) || !event.path || touchesPrivate(event)) continue;
+      const absolute = resolve(event.cwd, event.path);
+      const base = root ?? event.cwd;
+      const inside = within(base, absolute);
+      // Temp test repos are legitimate roots; only out-of-root scratch and host-owned files drop.
+      const ownFile = own.some((dir) => within(dir, absolute) && within(base, dir));
+      if (ownFile || (!inside && (scratchPath(absolute) || own.some((dir) => within(dir, absolute))))) continue;
+      const path = (inside ? relative(base, absolute) : absolute).replace(/\\/g, "/");
+      const prior = edited.indexOf(path);
+      if (prior >= 0) edited.splice(prior, 1);
+      edited.push(path);
+      if (edited.length > 20) edited.shift();
+    }
+  } catch { /* Capture is advisory; missing or unreadable logs never block saving a note. */ }
+  return edited;
+}
+
+/** Existing repo files mentioned by path, or session edits mentioned by basename; at most three. */
+export function autoEvidence(text: string, root: string | null, edited: string[]): string[] {
+  if (!root) return [];
+  let realRoot: string;
+  try { realRoot = realpathSync(root); } catch { return []; }
+  const evidence: string[] = [];
+  const add = (path: string): void => {
+    if (evidence.length >= 3) return;
+    try {
+      const absolute = resolve(root, path.replace(/\\/g, "/"));
+      if (!within(root, absolute)) return;
+      const rel = relative(root, absolute).replace(/\\/g, "/");
+      if (scratchPath(rel) || /(?:^|\/)\.claude(?:\/|$)/i.test(rel) || touchesPrivate({ cwd: absolute })) return;
+      const real = realpathSync(absolute);
+      if (!within(realRoot, real) || !statSync(real).isFile()) return;
+      const realRel = relative(realRoot, real).replace(/\\/g, "/");
+      if (scratchPath(realRel) || /(?:^|\/)\.claude(?:\/|$)/i.test(realRel) || touchesPrivate({ cwd: real })) return;
+      if (!evidence.includes(rel)) evidence.push(rel);
+    } catch { /* File evidence is optional, even when the filesystem is unavailable. */ }
+  };
+  for (const match of text.matchAll(/[^\s`"'<>()[\]{},;]+/g)) {
+    const path = match[0].replace(/(?::\d+){1,2}(?:-\d+)?$|#.*$/, "").replace(/[.!?:]+$/, "");
+    if (/^(?:[A-Za-z]:)?[\w.@~\\/-]+\.[A-Za-z\d_-]+$/.test(path)) add(path);
+    if (evidence.length >= 3) return evidence;
+  }
+  for (const path of edited) {
+    const name = basename(path.replace(/\\/g, "/"));
+    const escaped = name.replace(/[.*+?^{}$()|[\]\\]/g, "\\$&");
+    if (name && new RegExp("(?<!\\w)" + escaped + "(?!\\w)", "i").test(text)) add(path);
+    if (evidence.length >= 3) break;
+  }
+  return evidence;
+}
 /**
  * Append one tool event to the session's event log.
  * Scrubs command, error, path and cwd; retains bounded command/error/path text. Never throws.
@@ -451,6 +667,7 @@ export function appendEvent(
     tool: string;
     command?: string;
     path?: string;
+    fullRead?: boolean;
     ok: boolean;
     error?: string;
   },
@@ -488,6 +705,7 @@ export function appendEvent(
       tool: fields.tool,
       command,
       path,
+      ...(fields.fullRead !== undefined ? { fullRead: fields.fullRead } : {}),
       ok: fields.ok,
       error,
     };
@@ -560,6 +778,27 @@ function readRejected(home: string): Set<string> {
   return keys;
 }
 
+/** Preserve both synced and legacy rejection keys; never replace unreadable owner data. */
+function writeRejected(home: string, keys: string[]): void {
+  const path = rejectedPath(home);
+  let current = "";
+  try {
+    current = readFileSync(path, "utf8");
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") throw error;
+  }
+  if (current.trim()) {
+    try { parseRejected(current); }
+    catch { throw new CaptureError(`${path} is not valid JSON; fix or remove it before rejecting`); }
+  }
+  writeAtomic(path, formatRejected([...readRejected(home), ...keys]));
+}
+
+/** Dismiss a normalized unmatched signature everywhere, without syncing its text. */
+export function dismissError(home: string, signature: string): void {
+  if (!signature.trim()) throw new CaptureError("error signature is required");
+  writeRejected(home, [rejectKey("e", signature)]);
+}
 /** Retired notes also prevent re-proposing an accepted learning, within its visible scope. */
 interface Seen {
   notes: Note[];
@@ -805,18 +1044,17 @@ export function listProposals(home: string): Proposal[] {
 /**
  * Accept a proposal: create a note, delete the inbox file, return the note.
  */
-export function acceptProposal(home: string, id: string): Note {
+export function acceptProposal(home: string, id: string, opts: { env?: NodeJS.ProcessEnv; project?: Project } = {}): Note {
   if (!/^p-[a-f0-9]{10}$/.test(id) || id.length !== 12) throw new CaptureError(`invalid proposal id ${id}`);
   const inboxDir = join(home, "state", "inbox");
   const inboxFile = join(inboxDir, `${id}.json`);
 
-  if (!existsSync(inboxFile)) {
-    throw new CaptureError(`no proposal ${id}`);
-  }
-
   let prop: Proposal;
   try {
-    prop = JSON.parse(readFileSync(inboxFile, "utf8")) as Proposal;
+    const found = existsSync(inboxFile) ? JSON.parse(readFileSync(inboxFile, "utf8")) as Proposal
+      : listClaudeMemory(home, loadNotes(home).notes, opts).find((p) => p.id === id);
+    if (!found) throw new CaptureError(`no proposal ${id}`);
+    prop = found;
   } catch (error) {
     throw new CaptureError(
       `cannot read proposal ${id}: ${error instanceof Error ? error.message : String(error)}`
@@ -830,8 +1068,11 @@ export function acceptProposal(home: string, id: string): Note {
     kind: prop.kind,
     errors: prop.errors,
     evidence: prop.evidence,
+    evidenceRoots: prop.project === GLOBAL ? [] : [projectById(home, prop.project, home).root].filter((root): root is string => !!root),
     tested: prop.tested,
+    testedBy: "capture",
     source: prop.source,
+    tags: prop.source === "user" && /\b(?:agents?|sub[ -]?agents?|models?)\b|\b(?:always|never)\s+[a-z]+\b/i.test(prop.text) ? ["brief"] : [],
   });
 
   // Delete inbox file
@@ -847,45 +1088,26 @@ export function acceptProposal(home: string, id: string): Note {
 /**
  * Reject a proposal: remember headline and errors in rejected.json, delete inbox file.
  */
-export function rejectProposal(home: string, id: string): void {
+export function rejectProposal(home: string, id: string, opts: { env?: NodeJS.ProcessEnv; project?: Project } = {}): void {
   if (!/^p-[a-f0-9]{10}$/.test(id) || id.length !== 12) throw new CaptureError(`invalid proposal id ${id}`);
   const inboxDir = join(home, "state", "inbox");
   const inboxFile = join(inboxDir, `${id}.json`);
 
-  if (!existsSync(inboxFile)) {
-    throw new CaptureError(`no proposal ${id}`);
-  }
-
   let prop: Proposal;
   try {
-    prop = JSON.parse(readFileSync(inboxFile, "utf8")) as Proposal;
+    const found = existsSync(inboxFile) ? JSON.parse(readFileSync(inboxFile, "utf8")) as Proposal
+      : listClaudeMemory(home, loadNotes(home).notes, opts).find((p) => p.id === id);
+    if (!found) throw new CaptureError(`no proposal ${id}`);
+    prop = found;
   } catch (error) {
     throw new CaptureError(
       `cannot read proposal ${id}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 
-  // Rewriting an unreadable rejected.json from what could be read would drop every rejection in it.
-  const path = rejectedPath(home);
-  let current = "";
-  try {
-    current = readFileSync(path, "utf8");
-  } catch {
-    // none yet
-  }
-  if (current.trim()) {
-    try {
-      parseRejected(current);
-    } catch {
-      throw new CaptureError(`${path} is not valid JSON; fix or remove it before rejecting`);
-    }
-  }
-  const rejected = readRejected(home);
-  rejected.add(rejectKey("h", identity(prop.text)));
   // Listed under its owner once its project id became an alias (listProposals), so rejected there.
   const project = prop.project === GLOBAL ? GLOBAL : canonical(loadProjects(home), prop.project);
-  for (const err of prop.errors) rejected.add(errorKey(project, err));
-  writeAtomic(path, formatRejected(rejected));
+  writeRejected(home, [rejectKey("h", identity(prop.text)), ...prop.errors.map((err) => errorKey(project, err))]);
 
   // Delete inbox file
   try {
@@ -930,8 +1152,8 @@ function diagnosticText(text: string): string {
 }
 
 /**
- * Find an eligible fix for an error: active, tested, errors.length > 0, visibleTo project, not
- * scoped to another host, and not echoed by the output (its own id appears in it).
+ * Find an eligible fix for an error: active, tested, unexpired, errors.length > 0, visibleTo
+ * project, not scoped to another host, and not echoed by the output (its own id appears in it).
  * Match by longest pattern (regex: "re:" prefix, case-insensitive; else substring).
  * Ties: smallest id wins.
  */
@@ -962,8 +1184,9 @@ export function findFix(
   let demoted: Set<string> | undefined;
 
   for (const note of notes) {
-    if (!isActive(note) || !note.tested || !note.errors.length) continue;
+    if (!isActive(note) || !testedCurrent(note) || !note.errors.length || expired(note)) continue;
     if (!visibleTo(note, project) || (host && note.host && note.host !== host)) continue;
+    if ((note.project === GLOBAL || (note.project === project?.id && project.root)) && changedEvidence(note, [project?.root, project?.docRoot, home].filter((root): root is string => !!root), note.testedAt)) continue;
     if (echoed.includes(note.id.toLowerCase())) continue;
     if (home) {
       demoted ??= pausedFixes(home, notes);
@@ -1019,29 +1242,55 @@ export function renderFix(note: Note): string {
 }
 
 
+export interface UnmatchedError {
+  signature: string;
+  count: number;
+  pattern?: string;
+  tool?: string;
+  then?: string;
+}
+
 /** Recent failed signatures with no visible tested fix, most frequent first. */
-export function unmatchedErrors(home: string, notes: Note[], opts: { days?: number; project?: string } = {}): { signature: string; count: number }[] {
+export function unmatchedErrors(home: string, notes: Note[], opts: { days?: number; project?: string; global?: boolean } = {}): UnmatchedError[] {
   const dir = eventsDir(home);
   if (!existsSync(dir)) return [];
   const since = Date.now() - (opts.days ?? EVENT_RETENTION_DAYS) * 86_400_000;
-  const counts = new Map<string, number>();
+  const rows = new Map<string, UnmatchedError>();
+  const latest = new Map<string, number>();
+  const rejected = readRejected(home);
   const projects = new Map<string, Project>();
-  for (const name of readdirSync(dir).filter((name) => name.endsWith(".jsonl"))) {
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return []; }
+  for (const name of names.filter((name) => name.endsWith(".jsonl"))) {
     let bytes: Buffer;
     try {
       bytes = readEventTail(join(dir, name), 0).bytes;
     } catch {
       continue;
     }
-    for (const line of bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1).toString("utf8").split("\n")) {
-      const event = parseEvent(line);
-      if (!event || event.ok || !event.error || touchesPrivate(event) || hostNoise(event.tool, event.error) || !(Date.parse(event.at) >= since)) continue;
+    const lines = bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1).toString("utf8").split("\n");
+    // Walking backwards remembers the next success without rescanning for every failure.
+    const next = new Map<string, string | undefined>();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const event = parseEvent(lines[i]!);
+      if (!event) continue;
+      if (event.ok) {
+        next.set(event.session, touchesPrivate(event) ? undefined : scrub(
+          [event.tool, event.command || event.path].filter(Boolean).join(" ")
+        ).text.replace(/\s+/g, " ").trim().slice(0, 120));
+        continue;
+      }
+      const at = Date.parse(event.at);
+      if (!event.error || touchesPrivate(event) || hostNoise(event.tool, event.error) || !(at >= since)) continue;
       let project: Project | null = null;
       if (event.cwd) {
-        project = projects.get(event.cwd) ?? resolveProject(home, event.cwd, {});
-        projects.set(event.cwd, project);
+        try {
+          project = projects.get(event.cwd) ?? resolveProject(home, event.cwd, {});
+          projects.set(event.cwd, project);
+        } catch { continue; }
       }
-      if (opts.project && opts.project !== (project?.id ?? GLOBAL)) continue;
+      const scope = project?.id ?? GLOBAL;
+      if (opts.project && opts.project !== scope && !(opts.global && scope === GLOBAL)) continue;
       if (findFix(notes, event.error, project)) continue;
       const signature = signatureCut(errorSignature(scrub(event.error).text, Infinity)
         .replace(/(?:file:\/\/\/)?(?:[A-Za-z]:)?[\/\\]?(?:[\w.@~[\]-]+[\/\\])+[\w.@~[\]-]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)?/g, "<path>")
@@ -1049,9 +1298,27 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
         .replace(/^\d+:\d+\s+/, "").replace(/\bline\s+\d+\b/gi, "line <n>")
         .replace(/\b0x[\da-f]+\b|\b[\da-f]{8,}\b/gi, "<hex>"), 120);
       // A bare exit status groups unrelated failures: nothing a note could match.
-      if (signature && !EXIT_WRAPPER.test(signature)) counts.set(signature, (counts.get(signature) ?? 0) + 1);
+      if (!signature || EXIT_WRAPPER.test(signature) || rejected.has(rejectKey("e", signature))) continue;
+      let row = rows.get(signature);
+      if (!row) {
+        // The leading text names the failing tool or error class: a later segment alone (e.g.
+        // "No such file or directory") would make a fix fire on unrelated failures.
+        const parts = signature.split(/<[^>]+>/).map((part) => part.replace(/^[\s:;,'"`]+|[\s:;,'"`]+$/g, ""));
+        const usable = parts.filter((part) => part && !part.startsWith("re:") && !errorPatternProblem(part));
+        const lead = parts[0]!;
+        const pattern = lead.length >= 12 && usable.includes(lead) ? lead : usable.sort((a, b) => b.length - a.length)[0];
+        row = { signature, count: 0, ...(pattern ? { pattern } : {}) };
+        rows.set(signature, row);
+      }
+      row.count++;
+      if (!latest.has(signature) || at > latest.get(signature)!) {
+        latest.set(signature, at);
+        row.tool = scrub(event.tool).text;
+        const then = next.get(event.session);
+        if (then) row.then = then;
+        else delete row.then;
+      }
     }
   }
-  return [...counts].map(([signature, count]) => ({ signature, count }))
-    .sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));
+  return [...rows.values()].sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));
 }

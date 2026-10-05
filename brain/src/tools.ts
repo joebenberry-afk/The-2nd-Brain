@@ -1,9 +1,11 @@
 /** Shared Brain tools; transports supply identity, rendering and telemetry. */
 import { createNote, differentBody, findSameHeadline, GLOBAL, KINDS, loadNotes, upgradeNote, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { judgedAnswer, typesafeJudge } from "./judge.ts";
+import { judgedAnswer, typesafeJudge, typesafePairJudge } from "./judge.ts";
 import type { UseKind } from "./telemetry.ts";
 import { stateSaved, writeWork } from "./work.ts";
+import { noteHint } from "./tidy.ts";
+import { autoEvidence, sessionEdits } from "./capture.ts";
 
 export interface Param {
   type: "string" | "boolean";
@@ -17,6 +19,7 @@ export interface ToolContext {
   env: NodeJS.ProcessEnv;
   sub: boolean;
   session: string | undefined;
+  edited?: string[];
 }
 
 type ToolResult = { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[]; judged?: boolean; dropped?: number };
@@ -63,7 +66,7 @@ export const brainTools: BrainTool[] = [
       tested: { type: "boolean", description: "you verified it works", optional: true },
       global: { type: "boolean", description: "useful beyond this project", optional: true },
     },
-    run(params, { home, cwd, env, sub }) {
+    async run(params, { home, cwd, env, sub, session, edited }) {
       const text = requireString(params.text, "text");
       // As the CLI does: a kind silently stored as "note" loses the classification without a word.
       const kind = (params.kind == null || params.kind === "" ? undefined : String(params.kind)) as Kind | undefined;
@@ -79,11 +82,12 @@ export const brainTools: BrainTool[] = [
       const untested = same?.tested ? "" : sub ? " (untested: the parent or `brain tested <id>` confirms)"
         : wantsTested && !tested ?" (untested: the owner confirms a global fix with `brain tested <id>`)" : "";
       if (same) {
-        const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested });
+        const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root) });
         return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}`, kind: "note", project: project.id };
       }
-      const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], tested, source: "agent" });
-      return { text: `saved ${note.id}${untested}`, kind: "note", project: project.id };
+      const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });
+      const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env));
+      return { text: `saved ${note.id}${untested}${hint}`, kind: "note", project: project.id };
     },
   },
   {

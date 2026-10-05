@@ -129,7 +129,7 @@ describe("OMP extension", () => {
   });
   it("falls back to its own checkout as the home when SECOND_BRAIN_HOME is unset", () => {
     const { handlers } = load({}, false);
-    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "context", "session_before_branch", "session_before_switch", "session_branch", "session_compact", "session_shutdown", "session_switch", "tool_result"]);
+    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "context", "input", "session_before_branch", "session_before_switch", "session_branch", "session_compact", "session_shutdown", "session_start", "session_switch", "tool_result", "turn_end"]);
   });
 
   it("registers handlers even when home is empty (no notes)", () => {
@@ -781,7 +781,7 @@ describe("OMP extension under a hostile or limited host", () => {
   it("survives a host that does not know some events", () => {
     const { pi, handlers } = host({ unknownEvents: ["context", "session_compact"] });
     expect(() => secondBrain(pi, { SECOND_BRAIN_HOME: home })).not.toThrow();
-    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "session_before_branch", "session_before_compact", "session_before_switch", "session_branch", "session_shutdown", "session_start", "session_switch", "tool_result"]);
+    expect([...handlers.keys()].sort()).toEqual(["before_agent_start", "input", "session_before_branch", "session_before_compact", "session_before_switch", "session_branch", "session_shutdown", "session_start", "session_switch", "tool_result", "turn_end"]);
   });
 
   it("a child session keeps brain_recall and drops brain_note and brain_state; the parent keeps all", async () => {

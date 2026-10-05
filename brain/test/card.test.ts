@@ -260,13 +260,13 @@ describe("recurring known fix", () => {
     expect(card("omp")).toContain(`3× [gotcha, tested]`);
   });
 
-  it("keeps a recurring fix too long for its slot as an ordinary note", () => {
+  it("keeps a recurring fix too long for its parent slot as an ordinary note", () => {
     const home = tmp();
-    const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(105), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
-    const before = renderCard(home, loadNotes(home).notes, project, { tools: true, subagent: true, now: NOW });
+    const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(96), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
+    const before = renderCard(home, loadNotes(home).notes, project, { tools: true, now: NOW });
     expect(before).toContain(long.id);
-    for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: true, id: long.id }, NOW);
-    const after = renderCard(home, loadNotes(home).notes, project, { tools: true, subagent: true, now: NOW });
+    for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: false, id: long.id }, NOW);
+    const after = renderCard(home, loadNotes(home).notes, project, { tools: true, now: NOW });
     expect(after).not.toContain("Often hit lately");
     expect(after).toContain(long.id);
   });

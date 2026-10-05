@@ -47,17 +47,17 @@ it("counts heading and outline recalls as answered in stats", () => {
   expect(stats(home).recallQueries).toEqual({ logged: 2, silent: 0 });
 });
 
-it("reads only explicitly listed Markdown docs, with heading and first-paragraph precision", () => {
+it("reads only explicitly listed Markdown docs and searches their full sections", () => {
   const { home, root, file, project } = setup();
   expect(projectDocs(home, project)).toEqual([]);
   expect(docAnswer(home, project, "LOOP.md goals")?.text).toBeUndefined();
   writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/LOOP.md", "missing.md", "../outside.md", "code.ts"] } } }));
   expect(projectDocs(home, project)).toEqual([file]);
   expect(docAnswer(home, project, "LOOP.md goals")?.text).toBe("docs/LOOP.md › Goals (line 3)");
-  expect(docAnswer(home, project, "goals")?.text).toBe("docs/LOOP.md › Goals (line 3)");
+  expect(docAnswer(home, project, "goals")?.text).toBeUndefined();
   expect(docAnswer(home, project, "goals unrelated")?.text).toBeUndefined();
   writeFileSync(file, "## Goals\nFirst paragraph.\n\nSecret zebra detail.\n");
-  expect(docAnswer(home, project, "secret zebra")?.text).toBeUndefined();
+  expect(docAnswer(home, project, "secret zebra")?.text).toBe("docs/LOOP.md › Goals (line 1)");
   expect(projectDocs(home, { ...project, root: null })).toEqual([]);
   expect(readAnchor(root, "docs/LOOP.md#absent")).toBeUndefined();
 });

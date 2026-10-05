@@ -99,7 +99,7 @@ describe.skipIf(!PWSH)("install-v4.ps1 / uninstall-v4.ps1", () => {
       expect(nums.status, nums.stdout + nums.stderr).toBe(0);
       expect(loadNotes(home).notes.find((n) => n.project === "nums")).toMatchObject({ body: "Pin python 3.10 not 2.0", errors: ["0x80070005"] });
     }
-    if (BUN) expect(bunLoads(extensions)).toBe("before_agent_start,context,session_before_branch,session_before_switch,session_branch,session_compact,session_shutdown,session_start,session_switch,tool_result|brain_recall,brain_note,brain_state");
+    if (BUN) expect(bunLoads(extensions)).toBe("before_agent_start,context,input,session_before_branch,session_before_switch,session_branch,session_compact,session_shutdown,session_start,session_switch,tool_result,turn_end|brain_recall,brain_note,brain_state");
 
     const copy = ps("install-v4.ps1", "-ExtensionsDir", extensions, "-NoPath", "-NoEnv", "-Copy");
     expect(copy.status, copy.out).toBe(0);

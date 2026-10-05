@@ -205,6 +205,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
           errors,
           evidence: v3Record.evidence || [],
           tested,
+          testedBy: tested ? "convert" : undefined,
           replaces: v3Record.supersedes,
           replacedBy: v3Record.superseded_by,
           retired,

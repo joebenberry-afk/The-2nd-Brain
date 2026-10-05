@@ -37,6 +37,8 @@ export interface ProjectEntry {
   tags?: string[];
   /** Other ids this project resolves from (a renamed repo, a fork, another folder name). */
   aliases?: string[];
+  /** Main-session context rollover hint threshold in tokens; 0 disables it. */
+  rollover?: number;
 }
 
 /** Comparable path: forward slashes, no trailing slash, case-folded for Windows paths. */
@@ -314,14 +316,21 @@ function tagsOf(entry: ProjectEntry | undefined, root: string | null = null): st
 
 /**
  * A project named explicitly (BRAIN_PROJECT, --project): slugged like every derived id — so it
- * can never leave notes/ or work/ — and mapped through aliases. When cwd resolves to that project
- * anyway, its root (a declared or registered folder) comes with it.
+ * can never leave notes/ or work/ — and mapped through aliases. Prefer cwd when it belongs to the
+ * project (including worktrees), otherwise an existing declared checkout before cwd's git root.
  */
 export function projectById(home: string, id: string, cwd: string): Project {
   const projects = loadProjects(home);
   const canonicalId = canonical(projects, idFor(id));
   const auto = resolveProject(home, cwd, {}); // empty env: no BRAIN_PROJECT, so no recursion
   if (auto.id === canonicalId) return auto;
+  for (const path of projects[canonicalId]?.paths ?? []) {
+    try {
+      if (!statSync(path).isDirectory()) continue;
+      const declared = resolveProject(home, path, {});
+      if (declared.id === canonicalId) return declared;
+    } catch { /* an offline checkout cannot supply a root */ }
+  }
   const root = gitRoot(cwd);
   return { id: canonicalId, tags: tagsOf(projects[canonicalId], root), root };
 }
@@ -384,13 +393,13 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
 }
 
 /**
- * Whether a caller in `project` sees `note`: its own project's notes, untagged global notes, and
- * tagged global notes that share a tag with the project. `null` project sees global notes only.
+ * Whether a caller sees its own notes or applicable globals. `brief` describes behavior,
+ * never project scope; remaining global tags must share a project tag.
  */
 export function visibleTo(note: Note, project: Project | null): boolean {
   if (note.project === GLOBAL) {
-    if (!note.tags.length) return true;
-    return project !== null && note.tags.some((t) => project.tags.includes(t));
+    if (note.tags.every((t) => t === "brief")) return true;
+    return project !== null && note.tags.some((t) => t !== "brief" && project.tags.includes(t));
   }
   return project !== null && note.project === project.id;
 }

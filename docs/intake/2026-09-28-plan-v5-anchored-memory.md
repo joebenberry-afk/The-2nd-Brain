@@ -249,3 +249,75 @@ query as a phrase (case and accents folded, word-bounded) is now kept at Jev ≥
 (`PHRASE_FLOOR`, brain/src/judge.ts); every other note still needs 0.78. Real-query eval: 0 wrong
 on every recorded run, right unchanged; V3 dev 12 → 13/15 (D28 "Migration?" recovered). Known
 miss: "Palworld" (0.37). The floor was set on 20 queries, so held-out rows must keep checking it.
+
+### 8.5 Borrowed from OKF: expiry, verifier, export (2026-10-04)
+
+Owner asked for the best parts of Google's Open Knowledge Format v0.2 (markdown + YAML
+frontmatter bundles; github.com/GoogleCloudPlatform/open-knowledge-format). OKF stays an export
+format, not the canonical one: its data-catalog fields (attested computations, usage counts) have
+no use here, and v0.2 is young. D4 gains three optional keys; nothing else changes.
+
+- **`stale_after`** (OKF §5.5): a date (start of day, UTC) or ISO instant with an offset. Past
+  it, a note is stale everywhere: recall sorts it last and marks `(stale since <date>)`, the card
+  applies the stale-evidence −3, and it is never pushed as a known fix (an author-stated expiry,
+  unlike missing evidence, is not a guess). Set with `brain note --stale-after`; not a
+  `brain_note` parameter: tried as agentbench arm `v5-staleafter` (learn, 6 + 6, same batch):
+  +18 % A+B tokens, +12 % cost, landed 4 → 3, and no agent ever set it (0/6). Arm deleted.
+- **`tested_by` / `tested_at`** (OKF `verified`, §5.2–5.3): who verified a tested note and when:
+  `agent` (`brain_note`/`brain note --tested`), `capture` (an accepted fail→pass proposal),
+  `owner` (`brain tested <id>`, which re-stamps), `convert` (V3 grade). The first verifier sticks
+  on re-notes. Shown on explicit id reads; gating and ranking unchanged. Older tested notes stay
+  unrecorded.
+- **`brain export <dir>`**: public notes as an OKF 0.2 bundle (concept per note, `index.md` per
+  folder, `okf_version` at the root). `kind` → `type`, `source` → `generated.by`, `tested_by` →
+  `verified.by` (`human:owner` only for `owner`), `retired` → `status: deprecated` plus lineage
+  links, file evidence → a "<path> in the <project> checkout" source. Private notes never
+  exported; the target must be empty or an earlier export, outside the home except `state/`.
+  Live home (2026-10-04): 319 notes, all frontmatter valid YAML.
+
+### 8.6 Closing the loops (2026-10-04)
+
+Evidence (14 days): 388 recalls since 09-28, 216 silent; 180 new agent notes, 0 with evidence;
+0 capture notes ever; 133 basicupscaler notes in a week; top unmatched errors 74 × Claude Code
+heredoc quoting, 48 × `ls: cannot access`, 20 × OMP `find` timeouts. Owner: "do all of them".
+
+- **Unmatched errors in `brain review`**: the top 5 (14 days, this project + global) with the
+  latest tool, the next successful step in that session, a literal `--error` pattern (the
+  leading text when ≥ 12 chars, so a fix cannot fire on a generic tail like "No such file or
+  directory") and `brain dismiss "<signature>"` (hashes synced in `rejected.json`). Two global
+  gotchas written from the logs, untested until the owner confirms: n-f382485a63 (heredoc
+  quoting, `host: claude-code`), n-5ec31fc4ff (`find` timeouts, `host: omp`).
+- **Automatic evidence**: a new note without `--evidence` gets up to 3 existing repo files it
+  names (path, or basename of a file edited this session: OMP in memory, Claude Code from the
+  event log). Stale-evidence detection now has inputs.
+- **`brain tidy`**: read-only report of duplicate and contradictory pairs (Jev, two `noul`
+  questions per pair, batches of 20, fail open; lexical similars without a key) and notes unused
+  for 30 days. A new note's reply names a contradicted or duplicated note (top 3 similar,
+  judged); never for subagents or private notes.
+- **Note usage**: card rows now log the ids shown; `noteUsage` counts recalled / opened / carded /
+  fired; `brain stats` prints `notes used`. Live: 85 of 293 active notes used in 14 days.
+  Card ranking unchanged (needs a control).
+- **Doc recall**: registered docs are searched by whole section, the judge sees the best
+  paragraph; `brain project docs suggest` ranks checkout Markdown by silent queries it would
+  answer and prints `brain project docs add` commands (D5-1: never auto-registers). Frozen
+  real-query eval unchanged (right 7/34, wrong 0 judged on every run): the gain needs docs
+  registered. `--project <id>` now resolves that project's declared checkout from another repo.
+
+### 8.7 Time sinks from the transcripts (2026-10-04)
+
+Mined 392 OMP and 1,693 Claude Code transcripts (agent://omp-sinks, agent://cc-sinks) and ~20
+external memory systems (agent://ext-survey). Built:
+
+- **Child card** (≤ 200 tokens, both hosts; Claude Code via SubagentStart): parent Watch out,
+  recurring fixes, `brief`-tagged standing rules (≤ 80 tokens), the parent's files in play, a
+  registered-doc outline plus the best-matching section. `brief` is a non-scoping tag. The parent
+  card says `children get: <n> rules`. **Not yet benchmarked on cost** (kill rule applies).
+- **Owner rules captured on first statement** (UserPromptSubmit / OMP input, main sessions,
+  deterministic cues) as `brain review` proposals; Claude Code auto-memory listed read-only for
+  `brain accept` (35 live entries; never written).
+- **Content trust**: `evidence_sha` (file hashes, `(evidence changed)`), `tested_sha` (an edited
+  fix stops counting as tested); absent hashes = legacy trusted. Identifier/suffix aliases rescue
+  only corpus-absent terms; docs keep exact-term matching. Eval unchanged, 9 ms/query.
+- **Rollover hint** at 250k context (`projects.json` `rollover`, 0 = off), once per crossing,
+  never for subagents. compactbench `v5-rollover` 4 + 4: −47.5 % cost per finished task, goal kept
+  4/4 both arms; the trial scripted compliance with the hint.

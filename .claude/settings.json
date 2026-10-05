@@ -18,6 +18,26 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" hook claude-code 2>/dev/null || echo \"{}\""
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" hook claude-code 2>/dev/null || echo \"{}\""
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$",

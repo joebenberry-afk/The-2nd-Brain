@@ -12,7 +12,39 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nowIso } from "./util.ts";
 import { scrub } from "./scrub.ts";
-import type { Note } from "./notes.ts";
+import { idQuery, type Note } from "./notes.ts";
+
+/** Per-note uses across builds; each retained telemetry file is read once. */
+export function noteUsage(home: string, days = 30, now = new Date()): Map<string, { recalled: number; opened: number; carded: number; fired: number; last: string }> {
+  const since = now.getTime() - days * 86_400_000;
+  const usage = new Map<string, { recalled: number; opened: number; carded: number; fired: number; last: string }>();
+  for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
+    let text: string;
+    try { text = readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n")) {
+      try {
+        const row = JSON.parse(line) as { at?: unknown; kind?: unknown; query?: unknown; ids?: unknown; id?: unknown } | null;
+        if (!row || typeof row.at !== "string") continue;
+        const at = Date.parse(row.at);
+        if (!(at >= since && at <= now.getTime())) continue;
+        const ids = row.kind === "fix" && typeof row.id === "string" ? [row.id]
+          : (row.kind === "recall" || row.kind === "card") && Array.isArray(row.ids) ? row.ids.filter((id): id is string => typeof id === "string") : [];
+        const opened = row.kind === "recall" && ids.length === 1 && typeof row.query === "string" && idQuery(row.query).toLowerCase() === ids[0]!.toLowerCase();
+        for (const id of new Set(ids)) {
+          if (!id || id.startsWith("doc:")) continue;
+          const counts = usage.get(id) ?? { recalled: 0, opened: 0, carded: 0, fired: 0, last: "" };
+          if (row.kind === "fix") counts.fired++;
+          else if (row.kind === "card") counts.carded++;
+          else if (opened) counts.opened++;
+          else counts.recalled++;
+          if (!counts.last || at > Date.parse(counts.last)) counts.last = row.at;
+          usage.set(id, counts);
+        }
+      } catch { /* torn or malformed local telemetry is skipped */ }
+    }
+  }
+  return usage;
+}
 
 export type UseKind = "card" | "fix" | "fixout" | "recall" | "note" | "state" | "error";
 

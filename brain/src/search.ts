@@ -1,6 +1,6 @@
 /** Full-text search over notes with BM25 ranking (faithful port of V3 SQLite FTS5). */
 import { resolve } from "node:path";
-import { findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
+import { changedEvidence, testedCurrent, expired, findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
@@ -114,21 +114,32 @@ export function fold(text: string): string {
   return text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
-/**
- * Extract tokens from text: 3+ alphanumeric, lowercased, no stopwords, duplicates removed. With
- * `dotted`, a file name or version ("LOOP.md", "18.4.1", "ctx.agent.kind") stays one token.
- */
-export function tokens(text: string, dotted = false): string[] {
+/** Original terms first, then identifier parts and light suffix aliases. Dotted names remain atomic. */
+export function tokens(text: string, dotted = false, expand = true): string[] {
   const found = fold(text).match(dotted ? DOTTED_OR_WORD : /[\p{L}\p{N}]{3,}/gu) ?? [];
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const token of found) {
-    if (!STOPWORDS.has(token) && !seen.has(token)) {
-      result.push(token);
-      seen.add(token);
-    }
+  const add = (token: string) => {
+    if (token.length >= 3 && !STOPWORDS.has(token) && !seen.has(token)) { result.push(token); seen.add(token); }
+  };
+  for (const token of found) add(token);
+  if (expand) {
+    for (const token of fold(text).match(/[\p{L}\p{N}]+(?:[_\-/\\][\p{L}\p{N}]+)+/gu) ?? []) add(token);
+    // Split before folding: lowercasing first would erase camelCase boundaries.
+    const parts = text.normalize("NFKD").replace(/\p{M}/gu, "").replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/([A-Z])([A-Z][a-z])/g, "$1 $2");
+    for (const token of fold(parts).match(dotted ? DOTTED_OR_WORD : /[\p{L}\p{N}]{3,}/gu) ?? []) add(token);
+    for (const token of [...result]) if (/^[a-z]+$/.test(token)) add(stem(token));
   }
   return result;
+}
+
+function stem(token: string): string {
+  if (!/^[a-z]{5,}$/.test(token)) return token;
+  const suffix = /(?:ing|ed|es|s)$/.exec(token);
+  if (!suffix || /(?:ss|us|is)$/.test(token)) return token;
+  let root = token.slice(0, -suffix[0].length);
+  if (suffix[0] === "ing" || suffix[0] === "ed") root = root.replace(/([b-df-hj-np-tv-z])\1$/, "$1");
+  return root.length >= 3 ? root : token;
 }
 
 const DOTTED_OR_WORD = /[\p{L}\p{N}]+(?:\.[\p{L}\p{N}]+)+|[\p{L}\p{N}]{3,}/gu;
@@ -138,6 +149,7 @@ export interface Hit {
   score: number;
   matched: string[];
   stale?: boolean;
+  changed?: boolean;
   tombstone?: boolean;
 }
 
@@ -154,7 +166,7 @@ export const RELATIVE_FLOOR = 0.5;
 
 /** FTS5 unicode61-style tokens: NFKD, marks removed, lower-cased runs of letters and digits. */
 function scoreTokenize(text: string): string[] {
-  return text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return fold(text).match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
 /**
@@ -183,13 +195,24 @@ export interface Scored {
   candidates: { note: Note; score: number; matched: string[] }[];
 }
 
+const ALIAS_CACHE = new Map<string, Set<string>>();
+function tokenAliases(text: string): Set<string> {
+  let aliases = ALIAS_CACHE.get(text);
+  if (!aliases) {
+    if (ALIAS_CACHE.size >= TOKEN_CACHE_MAX) ALIAS_CACHE.clear();
+    aliases = new Set(tokens(text));
+    ALIAS_CACHE.set(text, aliases);
+  }
+  return aliases;
+}
+
 /** BM25 over the whole corpus (IDF is corpus-wide, like the V3 index): the expensive half of recall. */
 export function scoreQuery(notes: Note[], query: string): Scored {
   // The match rule sees file names and versions whole: "LOOP.md" is not any note about a loop.
-  const q = tokens(query, true);
+  const q = tokens(query, true, false);
   // A query of only short dotted tokens ("18.3.5", "fs.rm") still searches: its parts find
   // candidates, and the match rule still needs the whole dotted token.
-  const words = tokens(query);
+  const words = tokens(query, false, false);
   const terms = words.length ? words : [...new Set(q.flatMap((t) => t.split(".")).filter(Boolean))];
   if (!terms.length) return { q, information: new Map(), candidates: [] };
 
@@ -221,11 +244,27 @@ export function scoreQuery(notes: Note[], query: string): Scored {
     D.push(cols.reduce((sum, t) => sum + t.length, 0));
     counts.push(
       terms.map((term, ti) => {
-        const perCol = cols.map((col) => col.filter((token) => token.startsWith(term)).length);
+        const perCol = cols.map(col => col.filter(token => token.startsWith(term)).length);
         if (perCol.some((c) => c > 0)) present[ti] = (present[ti] ?? 0) + 1;
         return perCol;
       }),
     );
+  }
+  // Aliases only rescue terms absent from the exact corpus. Existing exact matches keep their
+  // ranking and precision; identifier/suffix expansion never adds a runner-up to a known term.
+  const aliasTerms = new Set(terms.filter((_term, ti) => present[ti] === 0));
+  if (aliasTerms.size) {
+    for (let ri = 0; ri < rows.length; ri++) {
+      const row = rows[ri]!;
+      const aliases = [row.id, row.title, row.terms, row.body].map(tokenAliases);
+      terms.forEach((term, ti) => {
+        if (!aliasTerms.has(term)) return;
+        const root = stem(term);
+        const perCol = aliases.map(col => col.has(root) ? 0.2 : 0);
+        counts[ri]![ti] = perCol;
+        if (perCol.some(count => count > 0)) present[ti] = (present[ti] ?? 0) + 1;
+      });
+    }
   }
 
   const N = rows.length;
@@ -269,7 +308,8 @@ export function scoreQuery(notes: Note[], query: string): Scored {
   const matchedCandidates = candidates.map(({ row, score }) => {
     const text = fold(`${row.title} ${row.terms} ${row.body}`);
     const words = [...(text.match(DOTTED_OR_WORD) ?? []), ...(text.match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
-    return { note: row.note, score, matched: q.filter(term => words.some(word => word.startsWith(term))) };
+    const aliases = aliasTerms.size ? tokenAliases(`${row.title} ${row.terms} ${row.body}`) : undefined;
+    return { note: row.note, score, matched: q.filter(term => words.some(word => word.startsWith(term)) || (aliasTerms.has(term) && aliases?.has(stem(term)))) };
   });
   // Smoothed IDF includes absent query terms: unknown subjects are not free matches.
   const information = new Map(q.map(term => [term, 1 + Math.log((N + 1) /
@@ -280,7 +320,7 @@ export function scoreQuery(notes: Note[], query: string): Scored {
 /** The cheap half of recall: visibility, history, the match rule, the relative floor, the limit. */
 function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
   // The project's own name says nothing inside its scope: "Absolute Laya …" matched every Laya note.
-  const scope = new Set(opts.project ? tokens(opts.project.id) : []);
+  const scope = new Set(opts.project ? tokens(opts.project.id, false, false) : []);
   const q = scored.q.some((term) => !scope.has(term)) ? scored.q.filter((term) => !scope.has(term)) : scored.q;
   // Keep the two-term minimum, then require a meaningful share of the query information.
   // Short queries need half; longer prompts allow context around the actual question.
@@ -301,8 +341,8 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
     if (q.length >= 5) {
       const head = firstLine(note);
       const headWords = [...(fold(head).match(DOTTED_OR_WORD) ?? []), ...(fold(head).match(/[\p{L}\p{N}]{3,}/gu) ?? [])];
-      const inHead = matched.filter((term) => headWords.some((word) => word.startsWith(term))).length;
-      if (inHead < 2 && inHead * 2 < tokens(head, true).length) continue;
+      const inHead = matched.filter(term => headWords.some(word => word.startsWith(term))).length;
+      if (inHead < 2 && inHead * 2 < tokens(head, true, false).length) continue;
     }
 
     hits.push({ note, score, matched });
@@ -321,14 +361,25 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
 }
 
 /**
- * Evidence resolves against this project's checkout and the Brain home (capture cites its event
- * logs there). A project note is judged only when that checkout is known; another project's note
- * never: its relative paths belong to a checkout we cannot see. Unknown is never "stale".
+ * A note past its `stale_after` is stale everywhere. Evidence resolves against this project's
+ * checkout and the Brain home (capture cites its event logs there). A project note's evidence is
+ * judged only when that checkout is known; another project's never: its relative paths belong to a
+ * checkout we cannot see. Unknown is never "stale".
  */
 export function staleHere(note: Note, project: Project | null, home: string | undefined): boolean {
+  if (expired(note)) return true;
   const root = project?.root ?? undefined;
   if (note.project !== GLOBAL && (note.project !== project?.id || !root)) return false;
-  return staleEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r));
+  return changedEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r)) || staleEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r));
+}
+
+export function changedHere(note: Note, project: Project | null, home?: string, after?: string): boolean {
+  if (note.project !== GLOBAL && (note.project !== project?.id || !project.root)) return false;
+  return changedEvidence(note, [project?.root, project?.docRoot, home].filter((root): root is string => !!root), after);
+}
+
+export function verifiedHere(note: Note, project: Project | null, home?: string): boolean {
+  return testedCurrent(note) && !changedHere(note, project, home, note.testedAt);
 }
 
 function noteHome(note: Note, opts: RecallOptions): string | undefined {
@@ -338,7 +389,10 @@ function noteHome(note: Note, opts: RecallOptions): string | undefined {
 export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
   const hits = matchingHits(scored, opts).slice(0, Math.max(1, Math.min(10, opts.limit ?? 3)));
   // Keep the BM25 shortlist (and its relevance floor), but lead with usable evidence.
-  for (const hit of hits) hit.stale = staleHere(hit.note, opts.project, noteHome(hit.note, opts));
+  for (const hit of hits) {
+    hit.stale = staleHere(hit.note, opts.project, noteHome(hit.note, opts));
+    hit.changed = changedHere(hit.note, opts.project, noteHome(hit.note, opts));
+  }
   return hits.sort((a, b) => Number(a.stale) - Number(b.stale));
 }
 
@@ -351,9 +405,9 @@ export function recall(notes: Note[], query: string, opts: RecallOptions): Hit[]
 /** Render a hit as a single line of at most `max` chars (default 240). */
 export function renderHit(hit: Hit, max = 240): string {
   const { note } = hit;
-  const idAndKind = `${note.id} [${note.kind}${note.tested ? ", tested" : ""}]`;
+  const idAndKind = `${note.id} [${note.kind}${testedCurrent(note) ? ", tested" : ""}]`;
   const retired = note.retired ? ` (retired${hit.tombstone ? "" : " " + note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""})` : "";
-  const marker = retired + (hit.stale ? " (stale evidence)" : "");
+  const marker = retired + (hit.changed ? " (evidence changed)" : "") + (hit.stale && !hit.changed ? (expired(note) ? ` (stale since ${note.staleAfter!.slice(0, 10)})` : " (stale evidence)") : "");
   const title = firstLine(note);
   let rest = hit.tombstone ? "" : restOfBody(note);
   while (title && rest.startsWith(title) && (!rest[title.length] || /[\s:;,.—–-]/.test(rest[title.length]!))) {
@@ -404,8 +458,11 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
     // "note it once you learn it" for a note that exists invites a duplicate: say where it is.
     if (!opts.all && !visibleTo(note, opts.project)) return { text: `no match here; ${note.id} is in ${note.project} (${opts.tools === false ? "--all" : "all: true"})`, hits: 0, ids: [] };
     const retiredMeta = note.retired ? `retired ${note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""}` : "";
-    const meta = [note.kind, note.tested ? "tested" : "", retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
-    return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]\n${note.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [note.id] };
+    const tested = note.tested ? ["tested", note.testedBy && `by ${note.testedBy}`, note.testedAt?.slice(0, 10)].filter(Boolean).join(" ") : "";
+    const staleAfter = note.staleAfter ? `${expired(note) ? "stale since" : "stale after"} ${note.staleAfter}` : "";
+    const meta = [note.kind, tested, staleAfter, retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
+    const trust = (note.tested && !testedCurrent(note) ? " (edited since tested)" : "") + (changedHere(note, opts.project, noteHome(note, opts)) ? " (evidence changed)" : "");
+    return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]${trust}\n${note.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [note.id] };
   }
   if (/^(?:n|mem)-[0-9a-f]{6,}$/i.test(id)) return { text: `no note ${id}`, hits: 0, ids: [] };
   // Search summaries stay within the three-line budget; explicit id reads above retain history.

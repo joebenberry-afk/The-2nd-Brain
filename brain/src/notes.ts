@@ -10,6 +10,7 @@
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, win32 } from "node:path";
+import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
 import { nowIso, randomId, retrying, slug, tagList, writeAtomic } from "./util.ts";
 
@@ -31,10 +32,20 @@ export interface Note {
   /** Error patterns this note fixes; a "re:" prefix means a case-insensitive regex. */
   errors: string[];
   evidence: string[];
+  /** File path=12hex snapshots; absent on legacy notes. */
+  evidenceSha?: string[];
   /** Verified to work; only tested notes are pushed when a tool fails. */
   tested: boolean;
+  /** Who verified it (see TESTERS); unset on notes tested before it was recorded. */
+  testedBy?: string;
+  /** ISO time it was verified. */
+  testedAt?: string;
+  /** Normalized body and error patterns when tested; absent means legacy trusted. */
+  testedSha?: string;
   /** The one host whose tools produce this note's errors ("omp" | "claude-code"); unset, every host. */
   host?: string;
+  /** Date or ISO instant from which the note is out of date (OKF `stale_after`). */
+  staleAfter?: string;
   replaces?: string;
   replacedBy?: string;
   /** ISO time the note stopped being current. */
@@ -47,8 +58,46 @@ export interface Note {
 
 export class NoteError extends Error {}
 
-const LIST_KEYS = new Set(["tags", "errors", "evidence"]);
-const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "tested", "host", "replaces", "replaced_by", "retired"];
+const LIST_KEYS = new Set(["tags", "errors", "evidence", "evidence_sha"]);
+const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "evidence_sha", "tested", "tested_by", "tested_at", "tested_sha", "host", "stale_after", "replaces", "replaced_by", "retired"];
+
+/**
+ * Who verified a note, lowest trust first: `convert` (a V3 grade), `agent` (its own claim),
+ * `capture` (a failed command that later passed), `owner` (`brain tested <id>`).
+ */
+export const TESTERS = ["convert", "agent", "capture", "owner"] as const;
+export type Tester = (typeof TESTERS)[number];
+
+/** Why a `stale_after` value cannot be used, or null: a date, or an ISO instant with an offset. */
+export function staleAfterProblem(value: string): string | null {
+  const shape = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(value);
+  const day = Date.parse(`${value.slice(0, 10)}T00:00:00Z`);
+  if (!shape || Number.isNaN(day) || Number.isNaN(Date.parse(value)) || new Date(day).toISOString().slice(0, 10) !== value.slice(0, 10)) {
+    return `stale_after ${JSON.stringify(value)} is not a date (YYYY-MM-DD) or an ISO time with an offset`;
+  }
+  return null;
+}
+
+/** True from the note's `stale_after` instant on (a date means its start, UTC); a bad value never expires. */
+export function expired(note: Pick<Note, "staleAfter">, now = Date.now()): boolean {
+  if (!note.staleAfter || staleAfterProblem(note.staleAfter)) return false;
+  return now >= Date.parse(note.staleAfter.length === 10 ? `${note.staleAfter}T00:00:00Z` : note.staleAfter);
+}
+
+/** The note as verified by `by` now. */
+export function markTested(note: Note, by: Tester, roots: string[] = []): Note {
+  return { ...note, tested: true, testedBy: by, testedAt: nowIso(), testedSha: testedHash(note), evidenceSha: evidenceHashes(note.evidence, roots) };
+}
+
+/** Whitespace is incidental; error-pattern edits invalidate verification too. */
+export function testedHash(note: Pick<Note, "body" | "errors">): string {
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+  return createHash("sha256").update(JSON.stringify([normalize(note.body), note.errors.map(normalize)])).digest("hex").slice(0, 12);
+}
+
+export function testedCurrent(note: Note): boolean {
+  return note.tested && (!note.testedSha || note.testedSha === testedHash(note));
+}
 
 /** The full first non-empty body line, without leading "#". */
 export function firstLine(note: Pick<Note, "body">): string {
@@ -257,9 +306,14 @@ export function parseNote(text: string, path: string, project: string, isPrivate
     tags: tagList(asList(fields.get("tags"))),
     errors: asList(fields.get("errors")),
     evidence: asList(fields.get("evidence")),
+    ...(fields.has("evidence_sha") ? { evidenceSha: asList(fields.get("evidence_sha")) } : {}),
     tested: asScalar(fields.get("tested")) === "true",
+    testedBy: asScalar(fields.get("tested_by")),
+    testedAt: asScalar(fields.get("tested_at")),
+    ...(asScalar(fields.get("tested_sha")) ? { testedSha: asScalar(fields.get("tested_sha")) } : {}),
     // Hand-written: "OMP" still means omp. `brain check` reports a value that is no host.
     host: asScalar(fields.get("host"))?.trim().toLowerCase() || undefined,
+    staleAfter: asScalar(fields.get("stale_after")),
     replaces: asScalar(fields.get("replaces")),
     replacedBy: asScalar(fields.get("replaced_by")),
     retired: asScalar(fields.get("retired")),
@@ -278,8 +332,13 @@ export function formatNote(note: Note): string {
     tags: note.tags,
     errors: note.errors,
     evidence: note.evidence,
+    evidence_sha: note.evidenceSha ?? [],
     tested: note.tested ? "true" : undefined,
+    tested_by: note.tested ? note.testedBy : undefined,
+    tested_at: note.tested ? note.testedAt : undefined,
+    tested_sha: note.tested ? note.testedSha : undefined,
     host: note.host,
+    stale_after: note.staleAfter,
     replaces: note.replaces,
     replaced_by: note.replacedBy,
     retired: note.retired,
@@ -352,7 +411,7 @@ function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Not
       current.set(path, cached);
       // Callers may edit returned notes before saving; those edits must not alter cached truth.
       const note = cached.note;
-      out.push({ ...note, tags: [...note.tags], errors: [...note.errors], evidence: [...note.evidence] });
+      out.push({ ...note, tags: [...note.tags], errors: [...note.errors], evidence: [...note.evidence], ...(note.evidenceSha ? { evidenceSha: [...note.evidenceSha] } : {}) });
     } catch (error) {
       errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -447,7 +506,12 @@ export interface NewNote {
   tags?: string[];
   errors?: string[];
   evidence?: string[];
+  /** Known checkout roots for resolving evidence at write time; never persisted. */
+  evidenceRoots?: string[];
   tested?: boolean;
+  /** Recorded when `tested`; omitted, the verifier stays unrecorded. */
+  testedBy?: Tester;
+  staleAfter?: string;
   source?: string;
   private?: boolean;
   replaces?: string;
@@ -546,12 +610,19 @@ function checkErrors(errors: string[]): void {
   }
 }
 
+function checkStaleAfter(value: string | undefined): void {
+  const problem = value === undefined ? null : staleAfterProblem(value);
+  if (problem) throw new NoteError(problem);
+}
+
 /** Create and save a new note. `text` becomes the body (first line = headline); secrets are masked. */
 export function createNote(home: string, input: NewNote): Note {
   const clean = (s: string) => scrub(s, { longRuns: false }).text;
   const body = clean(input.text.trim());
   if (!body) throw new NoteError("empty note");
   checkErrors(input.errors ?? []);
+  checkStaleAfter(input.staleAfter);
+  const tested = input.tested ?? false;
   const note: Note = {
     id: randomId("n"),
     kind: input.kind ?? "note",
@@ -562,30 +633,41 @@ export function createNote(home: string, input: NewNote): Note {
     tags: tagList((input.tags ?? []).map(clean)),
     errors: (input.errors ?? []).map(clean),
     evidence: (input.evidence ?? []).map(clean),
-    tested: input.tested ?? false,
+    tested,
+    testedBy: tested ? input.testedBy : undefined,
+    testedAt: tested && input.testedBy ? nowIso() : undefined,
+    staleAfter: input.staleAfter,
     replaces: input.replaces,
     body,
     path: "",
   };
-  return saveNote(home, note);
+  const roots = [...(input.evidenceRoots ?? []), home];
+  const stamped = tested ? { ...note, testedSha: testedHash(note) } : note;
+  const hashes = evidenceHashes(note.evidence, roots);
+  return saveNote(home, { ...stamped, ...(hashes.length ? { evidenceSha: hashes } : {}) });
 }
 
 /**
- * Upgrade metadata only, never the body: an explicit kind wins, tags, errors and evidence are
- * added, tested sticks. Callers must reject different bodies first. Null when nothing changed.
+ * Upgrade metadata only, never the body: an explicit kind and stale_after win, tags, errors and
+ * evidence are added, tested sticks with its first verifier. Callers must reject different bodies
+ * first. Null when nothing changed.
  */
 export function upgradeNote(home: string, note: Note, input: Omit<NewNote, "text" | "project">): Note | null {
   checkErrors(input.errors ?? []);
+  checkStaleAfter(input.staleAfter);
   const clean = (s: string) => scrub(s, { longRuns: false }).text;
+  const heldHashes = new Set((note.evidenceSha ?? []).map(entry => entry.slice(0, entry.lastIndexOf("="))));
   const merged: Note = {
     ...note,
     kind: input.kind ?? note.kind,
     tags: tagList([...note.tags, ...(input.tags ?? [])].map(clean)),
     errors: [...new Set([...note.errors, ...(input.errors ?? []).map(clean)])],
     evidence: [...new Set([...note.evidence, ...(input.evidence ?? [])].map(clean))],
-    tested: note.tested || input.tested === true,
+    evidenceSha: [...(note.evidenceSha ?? []), ...evidenceHashes((input.evidence ?? []).map(clean), [...(input.evidenceRoots ?? []), home]).filter(entry => !heldHashes.has(entry.slice(0, entry.lastIndexOf("="))))],
+    staleAfter: input.staleAfter ?? note.staleAfter,
   };
-  return formatNote(merged) === formatNote(note) ? null : saveNote(home, merged);
+  const upgraded = !note.tested && input.tested === true ? (input.testedBy ? markTested(merged, input.testedBy, [...(input.evidenceRoots ?? []), home]) : { ...merged, tested: true, testedSha: testedHash(merged) }) : merged;
+  return formatNote(upgraded) === formatNote(note) ? null : saveNote(home, upgraded);
 }
 
 /** Retire a note (history kept). With `by`, the replacement is linked both ways. */
@@ -606,8 +688,8 @@ export function retireNote(home: string, id: string, by?: string): Note {
 
 /**
  * An active note with the same headline (ignoring case and spacing) that the writer can already
- * see: for a project note, the project's own notes and the global notes visible to it (untagged,
- * or sharing one of `tags`); for a global note, the untagged global notes.
+ * see: its own notes and global notes with no scoping tags, or a matching project tag.
+ * `brief` is a behavior tag, not a project scope.
  * Private requests match only private notes in the same project, never a public/global fallback.
  */
 export function findSameHeadline(notes: Note[], text: string, project: string, tags: string[] = [], isPrivate = false): Note | undefined {
@@ -617,8 +699,8 @@ export function findSameHeadline(notes: Note[], text: string, project: string, t
   const sees = (n: Note): boolean => {
     if (isPrivate) return n.private && n.project === project;
     if (n.project !== GLOBAL) return project !== GLOBAL && n.project === project;
-    if (!n.tags.length) return true;
-    return project !== GLOBAL && n.tags.some((t) => tags.includes(t));
+    if (n.tags.every((t) => t === "brief")) return true;
+    return project !== GLOBAL && n.tags.some((t) => t !== "brief" && tags.includes(t));
   };
   return notes.find((n) => !n.retired && sees(n) && key(firstLine(n)) === wanted);
 }
@@ -636,24 +718,62 @@ export function staleEvidence(note: Note, roots: string[]): boolean {
   const now = Date.now();
   const cached = EVIDENCE_CACHE.get(key);
   if (cached && now - cached.at < EVIDENCE_TTL_MS) return cached.stale;
-  const paths: string[] = [];
-  for (const entry of note.evidence) {
-    // Old evidence often carries a line number (`:N:C`, `#LN`, `(N,C)`), a symbol or test selector,
-    // or a commit annotation. None is part of its filename; a symbol counts only after a `.ext`,
-    // so `commit:abc` stays a scheme. Other schemes (events:, commit:, URLs) are not file evidence.
-    const path = entry.trim().replace(/\s+\(.*\)$/, "").replace(/@[a-f\d]{7,40}$/i, "")
-      .replace(/::.*$|(?::\d+){1,2}(?:-\d+)?$|#L\d+(?:-L?\d+)?$|(?<=\.[a-z\d]{1,16})(?:\(\d+(?:,\d+)?\)|:[A-Za-z_$][\w$.]*)$/i, "");
-    if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) continue;
-    // A parent escape or a glob names no single file: unknown, never missing.
-    if (path.split(/[\\/]/).includes("..") || /[*?[\]{}]/.test(path)) continue;
-    const absolute = isAbsolute(path) || win32.isAbsolute(path);
-    const filename = /(?:^|[\\/])[^\\/]+\.[a-z\d]{1,16}$/i.test(path);
-    if (absolute || filename || /^[^\s]+[\\/][^\s]+$/.test(path) || /^(?:README|LICENSE|Makefile|Dockerfile)$/i.test(path)) paths.push(path);
-  }
+  const paths = note.evidence.map(evidencePath).filter((path): path is string => !!path);
   const stale = paths.length > 0 && paths.every((path) => {
     if (isAbsolute(path) || win32.isAbsolute(path)) return !existsSync(path);
     return roots.length > 0 && roots.every((root) => !existsSync(resolve(root, path.replace(/\\/g, "/"))));
   });
   EVIDENCE_CACHE.set(key, { stale, at: now });
   return stale;
+}
+
+/** A single safe file reference, stripped of evidence annotations. */
+function evidencePath(entry: string): string | undefined {
+  const path = entry.trim().replace(/\s+\(.*\)$/, "").replace(/@[a-f\d]{7,40}$/i, "")
+    .replace(/::.*$|(?::\d+){1,2}(?:-\d+)?$|#L\d+(?:-L?\d+)?$|(?<=\.[a-z\d]{1,16})(?:\(\d+(?:,\d+)?\)|:[A-Za-z_$][\w$.]*)$/i, "");
+  if (/^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) return undefined;
+  if (path.split(/[\\/]/).includes("..") || /[*?[\]{}]/.test(path)) return undefined;
+  return isAbsolute(path) || win32.isAbsolute(path) || /(?:^|[\\/])[^\\/]+\.[a-z\d]{1,16}$/i.test(path) || /^[^\s]+[\\/][^\s]+$/.test(path) || /^(?:README|LICENSE|Makefile|Dockerfile)$/i.test(path) ? path : undefined;
+}
+
+const FILE_HASH_CACHE = new Map<string, { signature: string; sha: string; mtime: number }>();
+const CRLF = Buffer.from("\r\n");
+function evidenceFile(path: string, roots: string[]): { sha: string; mtime: number } | undefined {
+  const files = isAbsolute(path) || win32.isAbsolute(path) ? [path] : roots.map(root => resolve(root, path.replace(/\\/g, "/")));
+  for (const file of files) {
+    try {
+      const stat = statSync(file, { bigint: true });
+      if (!stat.isFile()) continue;
+      const signature = `${stat.mtimeNs}:${stat.size}`;
+      const cached = FILE_HASH_CACHE.get(file);
+      if (cached?.signature === signature) return cached;
+      const bytes = readFileSync(file), hash = createHash("sha256");
+      let start = 0, end = bytes.indexOf(CRLF);
+      while (end >= 0) { hash.update(bytes.subarray(start, end)).update("\n"); start = end + 2; end = bytes.indexOf(CRLF, start); }
+      hash.update(bytes.subarray(start));
+      const value = { signature, sha: hash.digest("hex").slice(0, 12), mtime: Number(stat.mtimeNs) / 1_000_000 };
+      if (FILE_HASH_CACHE.size >= 2000) FILE_HASH_CACHE.clear();
+      FILE_HASH_CACHE.set(file, value);
+      return value;
+    } catch { /* Missing or unreadable evidence never prevents a note write or host session. */ }
+  }
+  return undefined;
+}
+
+export function evidenceHashes(evidence: string[], roots: string[]): string[] {
+  return [...new Set(evidence.flatMap(entry => {
+    const path = evidencePath(entry), file = path && evidenceFile(path, roots);
+    return path && file ? [path + "=" + file.sha] : [];
+  }))];
+}
+
+/** With after, only a changed file modified after verification invalidates a known fix. */
+export function changedEvidence(note: Note, roots: string[], after?: string): boolean {
+  const since = after ? Date.parse(after) : undefined;
+  return (note.evidenceSha ?? []).some(entry => {
+    const match = /^(.*)=([a-f\d]{12})$/i.exec(entry);
+    const path = match && evidencePath(match[1]!);
+    const file = path && evidenceFile(path, roots);
+    return !!file && file.sha !== match![2]!.toLowerCase() && (since === undefined || Number.isNaN(since) || file.mtime > since);
+  });
 }

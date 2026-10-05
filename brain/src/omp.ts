@@ -8,11 +8,12 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { loadNotes } from "./notes.ts";
 import { resolveProject } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
-import { appendEvent, errorSignature, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
-import { LEAN_LINE, renderCard } from "./card.ts";
+import { appendEvent, captureUserRules, errorSignature, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
+import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
 import { logUse } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
 import { writeAuto } from "./work.ts";
+import { rolloverHint } from "./rollover.ts";
 
 export const CARD_TYPE = "brain.card";
 const LEAN_TYPE = "brain.lean";
@@ -21,6 +22,7 @@ const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename
 export interface HostLike {
   on(event: string, handler: (event: unknown, ctx: unknown) => unknown): void;
   registerTool?: (tool: unknown) => void;
+  sendMessage?: (message: { customType: string; content: string; display: boolean }, options: { triggerTurn: boolean; deliverAs: "nextTurn" }) => void;
   typebox?: unknown;
   /** Per session: OMP binds each child session to its own API, so this changes only that child. */
   getActiveTools?: () => string[];
@@ -32,6 +34,7 @@ type Json = Record<string, unknown>;
 interface SessionState {
   carded: boolean;
   edited: string[];
+  parentEdits?: string[];
   failure?: string;
   /** The command (or tool) that failed; its next success clears the failure. */
   failureKey?: string;
@@ -45,6 +48,9 @@ interface SessionState {
   /** A compaction dropped the card: the next prompt carries the lean line again. */
   leanDue?: boolean;
 }
+
+/** Shared by rebound extension instances; entries are removed when their session shuts down. */
+const liveSessions = new Map<string, SessionState>();
 
 function asObject(value: unknown): Json | undefined {
   return value !== null && typeof value === "object" ? (value as Json) : undefined;
@@ -325,6 +331,23 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     }
     return state;
   }
+  // Extension factories are rebound for children; share live references, never project auto state.
+  function rememberSession(ctx: unknown, state: SessionState): void {
+    const id = asObject(asObject(ctx)?.agent)?.id;
+    const file = call(sessionManagerOf(ctx), "getSessionFile");
+    for (const alias of [sessionKey(ctx), file, id]) if (typeof alias === "string" && alias) liveSessions.set(home + "\0" + alias, state);
+  }
+  function parentEdits(ctx: unknown): string[] | undefined {
+    const agent = asObject(asObject(ctx)?.agent);
+    const header = asObject(call(sessionManagerOf(ctx), "getHeader"));
+    for (const alias of [header?.parentSession, agent?.parentId]) {
+      if (typeof alias !== "string" || !alias) continue;
+      const parent = liveSessions.get(home + "\0" + alias);
+      if (parent) return parent.edited.slice(-8);
+    }
+    return undefined;
+  }
+
 
   // Tools: one argument each; descriptions stay short because they cost tokens in every context.
   let toolsOn = false;
@@ -353,7 +376,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             const { params, cwd, ctx } = toolArgs(args, required);
             const session = sessionKey(ctx);
             const sub = isSubagent(ctx);
-            const result = await definition.run(params, { home, cwd, env, session, sub });
+            const result = await definition.run(params, { home, cwd, env, session, sub, edited: getSession(session).edited });
             if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, judged: result.judged, dropped: result.dropped, via: "tool" });
             return { content: [{ type: "text", text: result.text }], details: {} };
           } catch (error) {
@@ -364,12 +387,24 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     }
   }
 
+  // Observe only actual owner input, never extension continuations or child task instructions.
+  on("input", (event, ctx) => {
+    try {
+      const input = asObject(event);
+      if (isSubagent(ctx) || input?.source === "extension") return undefined;
+      const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
+      captureUserRules(home, input?.text, project);
+    } catch (error) { failed("input", error); }
+    return undefined;
+  });
+
   // Handle before_agent_start
   on("before_agent_start", (event, ctx) => {
     try {
       const started = performance.now();
       const key = sessionKey(ctx);
       const state = getSession(key);
+      rememberSession(ctx, state);
       const eventObj = asObject(event);
 
       // Remember the prompt as the last ask (whitespace-collapsed, 200 chars)
@@ -397,11 +432,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             }
           }, 0);
         }
-        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt: typeof prompt === "string" ? prompt : undefined });
+        const cardContent = renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt: typeof prompt === "string" ? prompt : undefined, parentEdits: subagent ? parentEdits(ctx) ?? state.parentEdits : undefined });
 
         if (cardContent) {
           state.carded = true;
-          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key, sub: subagent });
+          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key, sub: subagent, ids: cardIds(cardContent) });
           return buildCardMessage(cardContent);
         }
         state.carded = true;
@@ -440,6 +475,16 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       failed("context", error);
       return undefined;
     }
+  });
+
+  on("turn_end", (_event, ctx) => {
+    try {
+      if (isSubagent(ctx) || !pi.sendMessage) return;
+      const usage = asObject(call(asObject(ctx), "getContextUsage"));
+      const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
+      const hint = rolloverHint(home, project.id, sessionKey(ctx), usage?.tokens);
+      if (hint) pi.sendMessage({ customType: "brain.rollover", content: hint, display: false }, { triggerTurn: false, deliverAs: "nextTurn" });
+    } catch (error) { failed("turn_end", error); }
   });
 
   /** Save this session's edits, last failure and last ask into the project's working state. */
@@ -516,6 +561,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const started = performance.now();
       const key = sessionKey(ctx);
       const state = getSession(key);
+      rememberSession(ctx, state);
       const eventObj = asObject(event);
       const sessionCwd = cwdOf(ctx) ?? process.cwd();
 
@@ -600,23 +646,22 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     }
   });
 
-  // A child pays every resident schema on every request: keep only recall, which children use.
-  // Their notes went unused and brain_state is refused for them. session_start is awaited
-  // before a child's first prompt, and the child's API changes only the child's tool set.
-  if (toolsOn) {
-    on("session_start", async (_event, ctx) => {
-      try {
-        if (!isSubagent(ctx) || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return undefined;
-        const active = pi.getActiveTools();
-        const keep = active.filter((name) => name !== "brain_note" && name !== "brain_state");
-        if (keep.length !== active.length) await pi.setActiveTools(keep);
-      } catch (error) {
-        failed("session_start", error);
-        // the child keeps every tool; nothing else changes
-      }
-      return undefined;
-    });
-  }
+  // session_start has no prompt. Capture live parent paths here; before_agent_start supplies the brief.
+  on("session_start", async (_event, ctx) => {
+    try {
+      const state = getSession(sessionKey(ctx));
+      rememberSession(ctx, state);
+      if (!isSubagent(ctx)) return undefined;
+      state.parentEdits = parentEdits(ctx);
+      if (!toolsOn || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return undefined;
+      const active = pi.getActiveTools();
+      const keep = active.filter((name) => name !== "brain_note" && name !== "brain_state");
+      if (keep.length !== active.length) await pi.setActiveTools(keep);
+    } catch (error) {
+      failed("session_start", error);
+    }
+    return undefined;
+  });
 
   // Handle session_shutdown
   on("session_shutdown", (_event, ctx) => {
@@ -626,6 +671,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     } catch (error) {
       failed("session_shutdown", error);
       // never block the host's exit
+    } finally {
+      const state = sessions.get(sessionKey(ctx));
+      for (const [alias, live] of liveSessions) if (live === state) liveSessions.delete(alias);
     }
     return undefined;
   });

@@ -448,7 +448,7 @@ it("review displays each full scrubbed proposal body before acceptance", async (
   mkdirSync(join(home, "state", "inbox"), { recursive: true });
   writeFileSync(join(home, "state", "inbox", "p-review.json"), JSON.stringify({ id: "p-review", at: new Date().toISOString(), project: "global", kind: "gotcha", text: "Use the repair\n\nActual command: npm test -- --run\n\npassword=SyntheticPassword\n\nError: package unavailable", tested: false, errors: [], evidence: [], source: "capture" }));
   const out: string[] = [];
-  expect(await main(["review"], { env: { SECOND_BRAIN_HOME: home }, cwd: home, out: (s) => out.push(s), err: (s) => out.push(s) })).toBe(0);
+  expect(await main(["review"], { env: { SECOND_BRAIN_HOME: home, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR }, cwd: home, out: (s) => out.push(s), err: (s) => out.push(s) })).toBe(0);
   const text = out.join("\n");
   expect(text).toContain("Actual command: npm test -- --run");
   expect(text).toContain("Error: package unavailable");
@@ -463,7 +463,7 @@ it("review lists this project's and global proposals, and counts the rest (--all
   }
   const review = async (...args: string[]) => {
     const out: string[] = [];
-    await main(["review", ...args], { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: home, out: (s) => out.push(s), err: (s) => out.push(s) });
+    await main(["review", ...args], { env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo", CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR }, cwd: home, out: (s) => out.push(s), err: (s) => out.push(s) });
     return out.join("\n");
   };
   const scoped = await review();

@@ -4,22 +4,24 @@
  */
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { acceptProposal, appendEvent, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, hostNoise, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, scratchPath, scrubCut, toolEventFrom, unmatchedErrors, untag } from "./capture.ts";
-import { LEAN_LINE, renderCard } from "./card.ts";
+import { acceptProposal, appendEvent, autoEvidence, captureUserRules, dismissError, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, hostNoise, listClaudeMemory, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, scrubCut, sessionEdits, toolEventFrom, unmatchedErrors, untag } from "./capture.ts";
+import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
-import { projectDocs } from "./docs.ts";
-import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, saveNote, upgradeNote, type Kind } from "./notes.ts";
+import { projectDocs, suggestDocs } from "./docs.ts";
+import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, markTested, retireNote, saveNote, staleAfterProblem, TESTERS, upgradeNote, type Kind } from "./notes.ts";
+import { exportOkf, OKF_VERSION } from "./okf.ts";
 import { addProjectDoc, docFile, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { runMcp } from "./mcp.ts";
-import { judgedAnswer, typesafeJudge } from "./judge.ts";
+import { judgedAnswer, typesafeJudge, typesafePairJudge } from "./judge.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
-import { pausedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
+import { noteUsage, pausedFixes, logUse, stats, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
+import { noteHint, tidyReport } from "./tidy.ts";
+import { rolloverHint } from "./rollover.ts";
 
 export interface Io {
   out: (text: string) => void;
@@ -35,14 +37,17 @@ const USAGE = `brain — agent memory that survives compaction (V4)
 
   brain card                                   start card for this directory's project
   brain recall <query…|note id> [--all] [--history] [-n 1-3]
-  brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--global|--private]
+  brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--stale-after DATE] [--global|--private]
   brain fix <error text…>                      tested known fix, or silence
   brain state [<text…>]                        show or replace the working state
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
   brain review [--all] · accept <pid>… · reject <pid>…
-  brain project docs add <path> · project docs list
+  brain dismiss <signature…>                   ignore a recurring unmatched error
+  brain project docs add <path> · project docs list · project docs suggest [-n N]
   brain sync [--no-push] [-m <message>]
   brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
+  brain tidy [--all] [--days N]                 read-only duplicates, contradictions and unused notes
+  brain export <dir>                           public notes as an OKF ${OKF_VERSION} bundle (one way)
   brain hook claude-code                       Claude Code hook (JSON on stdin)
   brain hook agents-md                         print the managed agent instructions
   brain mcp                                    MCP server on stdio (brain_recall, brain_note, brain_state)
@@ -59,6 +64,7 @@ const OPTIONS = {
   tag: { type: "string", multiple: true },
   evidence: { type: "string", multiple: true },
   tested: { type: "boolean" },
+  "stale-after": { type: "string" },
   global: { type: "boolean" },
   private: { type: "boolean" },
   all: { type: "boolean" },
@@ -124,10 +130,13 @@ function fixesToReview(c: Ctx): number {
 const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   project(c) {
     const [kind, action, path, ...extra] = c.args;
-    if (kind !== "docs" || extra.length || (action !== "add" && action !== "list") || (action === "list" && path)) throw new UsageError("use brain project docs add <path> or brain project docs list");
+    if (kind !== "docs" || extra.length || !["add", "list", "suggest"].includes(action ?? "") || (action !== "add" && path)) throw new UsageError("use brain project docs add <path>, brain project docs list or brain project docs suggest [-n N]");
     if (action === "add") {
       const added = addProjectDoc(c.home, c.project, need(path, "a repo-relative Markdown path"));
       c.io.out(added ? `added ${path}` : `already listed: ${path}`);
+    } else if (action === "suggest") {
+      const suggestions = suggestDocs(c.home, c.project, { limit: positiveInt(c.opts.limit, 5) });
+      c.io.out(suggestions.length ? suggestions.map(s => `${s.queries} queries · ${s.reads} full reads · ${s.path}  → brain project docs add ${s.path}`).join("\n") : "no suggestions");
     } else {
       const docs = loadProjects(c.home)[c.project.id]?.docs;
       const shown = (d: string) => docFile(c.project, d) ? d : `${d} (missing under ${c.project.docRoot ?? c.project.root ?? "no root"})`;
@@ -140,7 +149,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const card = renderCard(c.home, loadNotes(c.home).notes, c.project, { tools: false, host: "claude-code" });
     if (card) {
       c.io.out(card);
-      use(c, "card", card);
+      use(c, "card", card, undefined, undefined, undefined, cardIds(card));
     }
     return 0;
   },
@@ -168,7 +177,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     return 0;
   },
 
-  note(c) {
+  async note(c) {
     const text = need(c.args.join(" "), "note text");
     const kind = c.opts.kind ?? "note";
     if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
@@ -189,7 +198,10 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
         tags: c.opts.tag,
         errors: c.opts.error,
         evidence: c.opts.evidence,
+        evidenceRoots: [c.project.root, c.project.docRoot].filter((root): root is string => !!root),
         tested,
+        testedBy: "agent",
+        staleAfter: c.opts["stale-after"],
       });
       c.io.out(`${changed ? "updated" : "already noted"} ${same.id}${untested}`);
       use(c, "note", text);
@@ -201,12 +213,15 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       kind: kind as Kind,
       tags: c.opts.tag ?? [],
       errors: c.opts.error ?? [],
-      evidence: c.opts.evidence ?? [],
+      evidence: c.opts.evidence ?? autoEvidence(text, c.project.root, c.project.root ? sessionEdits(c.home, c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID ?? "", c.project.root) : []),
+      evidenceRoots: [c.project.root, c.project.docRoot].filter((root): root is string => !!root),
       tested,
+      testedBy: "agent",
+      staleAfter: c.opts["stale-after"],
       private: c.opts.private === true,
       source: "agent",
     });
-    c.io.out(`saved ${note.id}${untested}`);
+    c.io.out(`saved ${note.id}${untested}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env))}`);
     use(c, "note", text);
     return 0;
   },
@@ -241,7 +256,8 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const id = need(c.args[0], "a note id");
     const note = findNote(loadNotes(c.home).notes, id);
     if (!note) throw new Error(`no note ${id}`);
-    saveNote(c.home, { ...note, tested: true });
+    const project = note.project === GLOBAL ? c.project : projectById(c.home, note.project, c.io.cwd);
+    saveNote(c.home, markTested(note, "owner", [project.root, project.docRoot, c.home].filter((root): root is string => !!root)));
     c.io.out(`tested ${note.id}`);
     return 0;
   },
@@ -271,31 +287,51 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const root = gitRoot(c.io.cwd);
     if (root) scanCommits(c.home, root, c.project.id, notes);
     // This project's and global proposals, as the card counts them; --all lists every project's.
-    const all = listProposals(c.home);
+    const all = [...listProposals(c.home), ...listClaudeMemory(c.home, notes, { env: c.io.env, project: c.project })];
     const pending = c.opts.all === true ? all : all.filter((p) => p.project === c.project.id || p.project === GLOBAL);
     const more = all.length > pending.length ? `+${all.length - pending.length} in other projects (brain review --all)` : "";
     const reviewFixes = fixesToReview(c);
-    if (!pending.length) {
-      if (!reviewFixes) c.io.out(more ? `nothing to review here; ${more}` : "nothing to review");
-      else if (more) c.io.out(more);
+    const errors = unmatchedErrors(c.home, notes, { days: 14, project: c.opts.all === true ? undefined : c.project.id, global: true }).slice(0, 5);
+    if (!pending.length && !reviewFixes && !errors.length) {
+      c.io.out(more ? `nothing to review here; ${more}` : "nothing to review");
       return 0;
     }
-    for (const p of pending) c.io.out(`${p.id} [${p.kind}${p.tested ? ", tested" : ""}] (${p.project})\n${scrub(p.text).text.slice(0, 800)}`);
-    c.io.out("accept: brain accept <pid>… · reject: brain reject <pid>…");
+    // Bounded: an agent reads this output; -n shows more.
+    const shown = pending.slice(0, positiveInt(c.opts.limit, 15));
+    for (const p of shown) c.io.out(`${p.id} [${p.kind}${p.tested ? ", tested" : ""}${p.source === "user" || p.source === "claude-memory" ? `, ${p.source}` : ""}] (${p.project})\n${scrub(p.text).text.slice(0, 300)}`);
+    if (pending.length > shown.length) c.io.out(`+${pending.length - shown.length} more proposals (brain review${c.opts.all === true ? " --all" : ""} -n ${pending.length})`);
+    if (pending.length) c.io.out("accept: brain accept <pid>… · reject: brain reject <pid>…");
+    if (errors.length) c.io.out("Unmatched errors (last 14 days):");
+    for (const error of errors) {
+      c.io.out(`${error.count} × ${error.signature}`);
+      if (error.tool || error.then) c.io.out("  " + [error.tool ? `last: ${error.tool}` : "", error.then ? `then: ${error.then}` : ""].filter(Boolean).join(" · "));
+      // Double-quoted shell arguments must also escape substitution syntax in error text.
+      const pattern = error.pattern ? JSON.stringify(error.pattern).replace(/[$`]/g, "\\$&") : "";
+      const signature = JSON.stringify(error.signature).replace(/[$`]/g, "\\$&");
+      const fix = pattern ? `fix: brain note "<what to do>" --kind gotcha --error ${pattern}  ·  ` : "";
+      c.io.out(`  ${fix}ignore: brain dismiss ${signature}`);
+    }
     if (more) c.io.out(more);
+    return 0;
+  },
+
+  dismiss(c) {
+    const signature = need(c.args.join(" "), "error signature");
+    dismissError(c.home, signature);
+    c.io.out(`dismissed ${signature}`);
     return 0;
   },
 
   accept(c) {
     if (!c.args.length) throw new UsageError("proposal ids are required");
-    for (const pid of c.args) c.io.out(`accepted ${pid} → ${acceptProposal(c.home, pid).id}`);
+    for (const pid of c.args) c.io.out(`accepted ${pid} → ${acceptProposal(c.home, pid, { env: c.io.env, project: c.project }).id}`);
     return 0;
   },
 
   reject(c) {
     if (!c.args.length) throw new UsageError("proposal ids are required");
     for (const pid of c.args) {
-      rejectProposal(c.home, pid);
+      rejectProposal(c.home, pid, { env: c.io.env, project: c.project });
       c.io.out(`rejected ${pid}`);
     }
     return 0;
@@ -303,6 +339,26 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
 
   sync(c) {
     c.io.out(sync(c.home, { message: c.opts.message, push: c.opts["no-push"] !== true }).message);
+    return 0;
+  },
+
+  async tidy(c) {
+    const days = positiveInt(c.opts.days, 30);
+    const judge = typesafePairJudge(c.io.env);
+    const report = await tidyReport(c.home, loadNotes(c.home).notes, c.project, { days, all: c.opts.all === true, judge });
+    let shown = false;
+    for (const [title, pairs] of [["Duplicates", report.duplicates], ["Contradictions", report.contradictions], ["Similar (no judge)", report.similar]] as const) {
+      if (!pairs.length) continue;
+      shown = true;
+      c.io.out(title);
+      for (const { a, b } of pairs) c.io.out("  " + a.id + " ⇄ " + b.id + "  " + headline(a) + " | " + headline(b) + (title === "Similar (no judge)" ? "" : " · brain retire " + a.id + " --by " + b.id));
+    }
+    if (report.unused.length) {
+      shown = true;
+      c.io.out("Unused " + days + "d");
+      for (const note of report.unused) c.io.out("  " + note.id + "  " + headline(note) + " · brain retire " + note.id);
+    }
+    if (!shown) c.io.out("nothing to tidy");
     return 0;
   },
 
@@ -314,6 +370,10 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
     c.io.out(`recall: ${s.recallQueries.logged} queries logged, ${s.recallQueries.silent} silent`);
+    const active = loadNotes(c.home).notes.filter(note => !note.retired);
+    const usage = noteUsage(c.home, s.days);
+    const used = active.filter(note => usage.has(note.id)).length;
+    c.io.out(`notes used (${s.days}d): ${used} of ${active.length} active · never: ${active.length - used} (brain tidy)`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
@@ -335,6 +395,11 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const { notes, errors: noteErrors } = loadNotes(c.home);
     const errors = [...noteErrors, ...configErrors(c.home)];
     for (const n of notes) if (n.host && n.host !== "omp" && n.host !== "claude-code") errors.push(`${n.path}: host ${JSON.stringify(n.host)} is not omp or claude-code; the fix fires on no host`);
+    for (const n of notes) {
+      const problem = n.staleAfter ? staleAfterProblem(n.staleAfter) : null;
+      if (problem) errors.push(`${n.path}: ${problem}; the note never goes stale`);
+      if (n.testedBy && !(TESTERS as readonly string[]).includes(n.testedBy)) errors.push(`${n.path}: tested_by ${JSON.stringify(n.testedBy)} is not ${TESTERS.join(", ")}`);
+    }
     const active = notes.filter((n) => !n.retired).length;
     c.io.out(`notes: ${notes.length} (${active} active) · projects: ${Object.keys(loadProjects(c.home)).length}`);
     for (const e of errors) c.io.err(e);
@@ -346,6 +411,13 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     c.io.out(`written ${report.written}, skipped ${report.skipped}, projects ${report.projects}${c.opts["dry-run"] ? " (dry run)" : ""}`);
     for (const e of report.errors) c.io.err(e);
     return report.errors.length ? 1 : 0;
+  },
+
+  export(c) {
+    if (c.args.length !== 1) throw new UsageError("use brain export <dir>");
+    const report = exportOkf(c.home, loadNotes(c.home).notes, resolve(c.io.cwd, c.args[0]!));
+    c.io.out(`exported ${report.concepts} notes in ${report.projects} folders (OKF ${OKF_VERSION})${report.private ? `; ${report.private} private left out` : ""}`);
+    return 0;
   },
 };
 
@@ -459,35 +531,16 @@ const HARNESS_ASK = /^\s*(?:<(?:task-notification|command-(?:name|message|args)|
 /** A last-prompt row records a typed slash command bare; its user row is a <command-name> wrapper. */
 const SLASH_COMMAND = /^\s*\/[\w:-]+(?:\s|$)/;
 
-/** Inside `dir`, by path; `relative` compares Windows paths case-insensitively. */
-function within(dir: string, path: string): boolean {
-  const rel = relative(dir, path);
-  return !!rel && !rel.startsWith("..") && !isAbsolute(rel);
-}
 
 /** Reuse the append-only capture log: concurrent tool hooks cannot overwrite each other's edits. */
 function saveHookAuto(home: string, project: Project, session: string, transcript: unknown, scratchpad: unknown): void {
-  const fields: AutoFields = {};
-  // Claude Code's own files (the session scratchpad, ~/.claude memory, temp roots) are not project edits.
-  const own = [join(homedir(), ".claude"), ...(typeof scratchpad === "string" && scratchpad ? [resolve(scratchpad)] : [])];
+  const edited = sessionEdits(home, session, project.root, typeof scratchpad === "string" && scratchpad ? [scratchpad] : []);
+  const fields: AutoFields = { edited: edited.length ? edited : undefined };
   try {
     let failureKey: string | undefined;
     for (const line of hookTail(join(eventsDir(home), safeSession(session) + ".jsonl"), EVENT_CAP_BYTES + 8192)) {
       const event = parseEvent(line);
       if (!event || event.session !== session) continue;
-      if (event.ok && /^(Edit|Write|MultiEdit)$/.test(event.tool) && event.path) {
-        const absolute = resolve(event.cwd, event.path);
-        const root = project.root ?? event.cwd;
-        const inside = within(root, absolute);
-        // A root at or above them (a session started in ~) contains Claude Code's own directories;
-        // a project rooted inside one keeps its files. scratchPath applies outside the root only:
-        // test roots live under Temp.
-        const ownFile = own.some((dir) => within(dir, absolute) && within(root, dir));
-        if (!ownFile && (inside || !(scratchPath(absolute) || own.some((dir) => within(dir, absolute))))) {
-          const path = (inside ? relative(root, absolute) : absolute).replace(/\\/g, "/");
-          fields.edited = [...(fields.edited ?? []).filter((p) => p !== path), path].slice(-20);
-        }
-      }
       // The last failure stays until the same command (or tool) succeeds; host plumbing (an aborted
       // or cancelled task) says nothing about the project. As OMP does.
       const key = event.command || event.tool;
@@ -577,7 +630,9 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       // A backgrounded Bash launch "succeeds" at once: that says nothing about the command.
       const background = (p.tool_input as { run_in_background?: unknown } | null | undefined)?.run_in_background === true
         || typeof (p.tool_response as { backgroundTaskId?: unknown } | null | undefined)?.backgroundTaskId === "string";
-      if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
+      if (event === "UserPromptSubmit") {
+        captureUserRules(home, p.prompt, project, { subagent: sub });
+      } else if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
         try { rmSync(fixDir, { recursive: true, force: true }); }
         catch { /* pending telemetry cleanup must not suppress the card */ }
         // Compaction drops the card: its state is not repeated (§8 P4), but the lean rule is behaviour
@@ -592,8 +647,17 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           const card = renderCard(home, notes, project, { tools: false, subagent: sub, host: "claude-code" });
           if (card) {
             output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
-            logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub });
+            logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub, ids: cardIds(card) });
           }
+        }
+      } else if (event === "SubagentStart") {
+        // The documented hook exposes identity, not the brief: registered docs only.
+        const { notes } = loadNotes(home);
+        const parentEdits = session ? sessionEdits(home, session, project.root) : [];
+        const card = renderCard(home, notes, project, { tools: false, subagent: true, host: "claude-code", parentEdits });
+        if (card) {
+          output = { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: card } };
+          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub: true, ids: cardIds(card) });
         }
       } else if ((event === "PostToolUse" && !background) || (event === "PostToolUseFailure" && p.is_interrupt !== true)) {
         const fields = toolEventFrom(p.tool_name, p.tool_input, event === "PostToolUseFailure", p.error);
@@ -635,6 +699,22 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         try { rmSync(fixDir, { recursive: true, force: true }); }
         catch { /* pending telemetry cleanup must not suppress auto-save */ }
         if (!sub) saveHookAuto(home, project, session, p.transcript_path, p.scratchpad_dir);
+      }
+      if (!sub && session && (event === "PostToolUse" || event === "Stop") && typeof p.transcript_path === "string") {
+        try {
+          for (const line of hookTail(p.transcript_path, 262_144).reverse()) {
+            let row: { type?: string; isSidechain?: boolean; message?: { usage?: Record<string, unknown> } };
+            try { row = JSON.parse(line); } catch { continue; }
+            if (row?.type !== "assistant" || row.isSidechain) continue;
+            const usage = row.message?.usage;
+            if (!usage || typeof usage.input_tokens !== "number") continue;
+            const parts = [usage.input_tokens, usage.cache_read_input_tokens ?? 0, usage.cache_creation_input_tokens ?? 0];
+            if (!parts.every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)) break;
+            const hint = rolloverHint(home, project.id, session, (parts as number[]).reduce((sum, value) => sum + value, 0));
+            if (hint) output = event === "Stop" ? { systemMessage: hint } : { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: hint } };
+            break;
+          }
+        } catch { /* asynchronously written transcripts are optional evidence */ }
       }
     }
   } catch (error) {
