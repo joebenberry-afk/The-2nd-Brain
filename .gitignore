@@ -2,6 +2,7 @@
 
 node_modules/
 .coverage
+.repowise/
 
 # Local-only: event logs, capture cursors, the cloud `brain` shim
 state/

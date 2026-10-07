@@ -32,7 +32,7 @@ node bin/brain.mjs check        # or `brain check` once installed
 ```
 
 <!-- The-Second-Brain:begin id=second-brain -->
-Use `brain recall "<query>"` before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command; the repo wins on conflict.
+Use `brain recall "<query>"` before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command, in the same turn as your first search (a recall alone costs a turn); the repo wins on conflict.
 Use `brain note "<text>"` for what the repo cannot tell you: a decision and its why, an environment gotcha with its error line, what failed before, an owner preference.
 Use `brain state "Goal: … Next: …"` when the goal or next step changes.
 Use `brain fix "<error>"` after an unexplained failure (tested known fix, or silence).
