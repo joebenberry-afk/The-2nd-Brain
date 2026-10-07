@@ -1,5 +1,5 @@
 ---
-at: 2026-10-05T04:22:27Z
+at: 2026-10-07T06:42:37Z
 ---
 
-Goal: token efficiency. Done: 3 gotchas tested; child card benchmarked 12+12 and kept by owner (plan §8.7). Next: rollover threshold trial (150k/200k vs 250k, compactbench), then silent-recall retry chains (recallq).
+Goal: token efficiency. Done: brain stats now prints system prompt block sizes (OMP snapshot, fills on next main session's first prompt). Next: 10-12 verdict using only post-10-06 sessions for rollover; use system prompt line to decide tui.autoGraph off.
