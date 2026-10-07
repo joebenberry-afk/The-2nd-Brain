@@ -10,6 +10,7 @@ import { resolveProject } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
 import { appendEvent, captureUserRules, errorSignature, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
+import { pathHint } from "./paths.ts";
 import { logUse, saveToolSchemas } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
 import { writeAuto } from "./work.ts";
@@ -196,6 +197,21 @@ export function toolArgs(args: unknown[], key: string): { params: Json; cwd: str
   const params = second && key in second ? second : (args.map(asObject).find((a) => a !== undefined && key in a) ?? second ?? {});
   const ctx = [...args].reverse().find((a) => typeof asObject(a)?.cwd === "string");
   return { params, cwd: cwdOf(ctx) ?? process.cwd(), ctx };
+}
+
+/** Tools whose calls routinely outlive an eval cell's 30 s default. */
+const SLOW_EVAL_CALL = /\btool\.(?:task|wait|find|web_search)\s*\(|\btool\.read\s*\(\s*\{[^}]*https?:\/\/|\b(?:agent|workpool)\s*\(/;
+const BASH_TIMEOUT = /\btool\.bash\s*\([^;]{0,600}?\btimeout\s*:\s*(\d+)/g;
+
+/**
+ * An OMP JS eval cell that awaits slow tools yet sets no `timeout` of its own: the host force-kills
+ * it at 30 s and every kernel variable is lost. Python cells are never flagged.
+ */
+export function slowEvalCell(language: unknown, code: unknown, timeout: unknown): boolean {
+  if (language !== "js" && language !== "javascript") return false;
+  if (typeof code !== "string" || (timeout !== undefined && timeout !== null)) return false;
+  if (SLOW_EVAL_CALL.test(code)) return true;
+  return [...code.matchAll(BASH_TIMEOUT)].some((m) => Number(m[1]) > 30);
 }
 
 /**
@@ -432,19 +448,20 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             } catch (error) {
               failed("scanEvents", error);
             }
-            // What every request pays in tool schemas, for `brain stats` to set against actual use.
-            // At the first prompt, not session_start: MCP servers have connected by then. The host's
-            // enabled list includes tools mounted under xd://, which ship a route line, not a schema;
-            // the system prompt names those routes, so they are left out.
+            // What every request pays in tool schemas and system prompt, for `brain stats` to set
+            // against actual use. At the first prompt, not session_start: MCP servers have connected
+            // by then. The host's enabled list includes tools mounted under xd://, which ship a route
+            // line, not a schema; the system prompt names those routes, so they are left out.
             try {
               if (typeof pi.getActiveTools === "function" && typeof pi.getAllTools === "function") {
                 const enabled = new Set(pi.getActiveTools());
-                const system = Array.isArray(eventObj?.systemPrompt) ? eventObj.systemPrompt.join("\n") : "";
+                const blocks: string[] = Array.isArray(eventObj?.systemPrompt) ? eventObj.systemPrompt.filter((b: unknown): b is string => typeof b === "string") : [];
+                const system = blocks.join("\n");
                 saveToolSchemas(home, pi.getAllTools().filter(tool => enabled.has(tool.name) && !system.includes(`xd://${tool.name}`)).map(tool => ({
                   name: tool.name,
                   source: tool.sourceInfo?.source ?? "unknown",
                   tokens: estimateTokens(tool.name + tool.description + JSON.stringify(tool.parameters ?? {})),
-                })));
+                })), undefined, blocks.map(estimateTokens));
               }
             } catch (error) {
               failed("toolSchemas", error);
@@ -641,6 +658,13 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           (state.pendingFixes ??= new Map()).set(failureKey, { id: fix.id, project: project.id });
           return { content: resultContent };
         }
+        const hint = pathHint(fields.tool, fields.path, fields.error, cwd);
+        if (hint) {
+          const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
+          logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "pathhint" });
+          (state.pendingFixes ??= new Map()).set(failureKey, { id: "pathhint", project: project.id });
+          return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
+        }
       }
 
       // `'\b'` inside a plain JS string in an eval script is a backspace, so a grep for a word
@@ -657,6 +681,18 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         const project = resolveProject(home, cwd, env).id;
         logUse(home, { kind: "fix", project, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "rawhint" });
         (state.pendingFixes ??= new Map()).set(failureKey, { id: "rawhint", project });
+        return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
+      }
+
+      // The cell dies at 30 s unless the eval call sets `timeout`; a kill resets every variable.
+      // A failed result whose fix already fired returned above, so the text is never doubled.
+      if (toolName === "eval" && slowEvalCell(language, code, asObject(input)?.timeout) && !(state.fixed ??= new Set()).has("evaltimeout")) {
+        state.fixed.add("evaltimeout");
+        const hint = "Brain: this eval cell can be force-killed at 30 s, losing its variables; pass eval `timeout` (seconds).";
+        const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
+        const project = resolveProject(home, cwd, env).id;
+        logUse(home, { kind: "fix", project, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "evaltimeout" });
+        (state.pendingFixes ??= new Map()).set(failureKey, { id: "evaltimeout", project });
         return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
       }
 

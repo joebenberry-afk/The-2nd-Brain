@@ -437,11 +437,19 @@ describe("telemetry session roles and rotation", () => {
     const event = (tool: string, at: string) => JSON.stringify({ v: 1, at, session: "s", cwd: home, tool, ok: true });
     // mcp__big was last called 8 days ago: outside a 7-day window, inside a 30-day one.
     writeFileSync(join(home, "state", "events", "s.jsonl"), [event("read", "2026-09-27T11:00:00Z"), event("mcp__big", "2026-09-19T12:00:00Z")].join("\n") + "\n");
-    expect(toolSchemaUse(home, 7, NOW)).toEqual({ at: NOW.toISOString().replace(/\.\d+Z$/, "Z"), tools: 3, tokens: 1300, unused: [
+    expect(toolSchemaUse(home, 7, NOW)).toEqual({ at: NOW.toISOString().replace(/\.\d+Z$/, "Z"), tools: 3, tokens: 1300, system: [], unused: [
       { name: "mcp__big", source: "mcp", tokens: 900 },
       { name: "mcp__small", source: "mcp", tokens: 100 },
     ] });
     expect(toolSchemaUse(home, 30, NOW)?.unused.map(tool => tool.name)).toEqual(["mcp__small"]);
+  });
+
+  it("keeps system prompt block sizes beside the tool schemas; older snapshots read as none", () => {
+    const home = tmp();
+    saveToolSchemas(home, [], NOW, [1200, 40, 3500]);
+    expect(toolSchemaUse(home, 7, NOW)?.system).toEqual([1200, 40, 3500]);
+    writeFileSync(join(home, "state", "tool-schemas-omp.json"), JSON.stringify({ at: "2026-10-01T00:00:00Z", tools: [] }) + "\n");
+    expect(toolSchemaUse(home, 7, NOW)?.system).toEqual([]);
   });
 
   it("rotates a full file to telemetry.1.jsonl", () => {

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { LEAN_LINE } from "../src/card.ts";
-import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, type HostLike } from "../src/omp.ts";
+import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, slowEvalCell, type HostLike } from "../src/omp.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
 import { readWork, writeWork } from "../src/work.ts";
@@ -816,6 +816,16 @@ describe("OMP extension under a hostile or limited host", () => {
     expect(hasBackspaceEscape("const p = `\\b${word}\\b`")).toBe(true);
     expect(hasBackspaceEscape("const p = String.raw`\\b${word}\\b`")).toBe(false);
     expect(hasBackspaceEscape("const n = a / b; const s = '\\b'")).toBe(true);
+  });
+
+  it("flags a JS eval cell that awaits slow tools without a timeout, nothing else", () => {
+    expect(slowEvalCell("js", "const r = await tool.task({ tasks })", undefined)).toBe(true);
+    expect(slowEvalCell("js", "await tool.bash({ command: 'make', timeout: 300 })", undefined)).toBe(true);
+    expect(slowEvalCell("js", "await tool.read({ path: 'https://example.com/a' })", undefined)).toBe(true);
+    expect(slowEvalCell("js", "const r = await tool.task({ tasks })", 300)).toBe(false);
+    expect(slowEvalCell("py", "r = await tool.task({ tasks })", undefined)).toBe(false);
+    expect(slowEvalCell("js", "await tool.bash({ command: 'ls', timeout: 20 })", undefined)).toBe(false);
+    expect(slowEvalCell("js", "await tool.read({ path: 'src/a.ts' }); await tool.grep({ pattern: 'x' })", undefined)).toBe(false);
   });
 
   it("appends the backspace hint to an eval whose quoted pattern holds \\b, then only a pointer", () => {

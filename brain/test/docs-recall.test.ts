@@ -60,6 +60,20 @@ it("prefers more distinct section terms before heading matches or repetitions", 
   expect(docAnswer(home, project, "thermal sampler")?.text).toBe("PLAN.md › Thermal sampler (line 1)");
 });
 
+it("answers a named section number ahead of word overlap, ignores version strings, and disambiguates by remaining words", () => {
+  const { home, project, doc } = setup(["plan-v4.md", "plan-v5.md"]);
+  doc("plan-v4.md", "## 1.5 Budget\nSpend cap.\n\n### 3.2 Rules\nBinding rules.\n\n## 6. Kill rules\nDelete it.\n");
+  doc("plan-v5.md", "## 3.2 Recall judged\nReal queries.\n\n## 8.8 Token pass\nRollover budget kill.\n");
+  expect(docAnswer(home, project, "speed latency token plan §8.8")?.text).toBe("plan-v5.md › 8.8 Token pass (line 4)");
+  expect(docAnswer(home, project, "kill rules section 6")?.text).toBe("plan-v4.md › 6. Kill rules (line 7)");
+  expect(docAnswer(home, project, "3.2 rules")?.text).toBe("plan-v4.md › 3.2 Rules (line 4)");
+  expect(docAnswer(home, project, "see 3.2 recall")?.text).toBe("plan-v5.md › 3.2 Recall judged (line 1)");
+  expect(docAnswer(home, project, "plan §3.2")?.text).toMatch(/^plan-v\d\.md › 3\.2 /);
+  for (const query of ["node 26.7.0 budget", "speedup 1.5x budget", "bump to v1.5 budget"]) {
+    expect(docAnswer(home, project, query)?.text ?? "").not.toContain("1.5 Budget");
+  }
+});
+
 it("project docs suggest ranks two distinct silent queries above one and skips registered docs", async () => {
   const { home, project, config, doc, query, run } = setup(["REGISTERED.md"]);
   doc("REGISTERED.md", "## Runtime\nThermal sampler. Quartz migration.\n");

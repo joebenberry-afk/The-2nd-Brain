@@ -135,10 +135,21 @@ export function writeWork(home: string, project: string, text: string): Work {
   return { ...readWork(home, project)!, ...(over ? { cutFrom: trimmed.length } : {}) };
 }
 
+/**
+ * A section named without its file ("plan §8.8") sends the next session searching for it; a
+ * See: anchor or any path in the text does not. Returns the reference to name in the warning.
+ */
+function unanchoredSection(text: string): string | undefined {
+  if (/^See:/m.test(text) || /\w\/\w|[\w-]+\.[a-z][a-z0-9]{0,4}\b/i.test(text)) return undefined;
+  return text.match(/§\s*\d+(?:\.\d+)*|\bsection\s+\d+(?:\.\d+)*/i)?.[0];
+}
+
 /** Acknowledge the stored plan without predicting what the host keeps in context. */
 export function stateSaved(work: Work): string {
   const cut = work.cutFrom ? `; cut from ${work.cutFrom} chars to fit ${WORK_BUDGET} tokens — keep Goal/Next short` : "";
-  return `state saved (${estimateTokens(work.text)} tokens)${cut}`;
+  const section = unanchoredSection(work.text);
+  const anchor = section ? `; "${section}" names no file — add See: path#heading so the next session need not search for it` : "";
+  return `state saved (${estimateTokens(work.text)} tokens)${cut}${anchor}`;
 }
 
 /**

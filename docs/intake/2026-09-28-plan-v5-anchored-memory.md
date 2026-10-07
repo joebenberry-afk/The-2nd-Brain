@@ -332,8 +332,8 @@ external memory systems (agent://ext-survey). Built:
   `v5-rollover-150k` 4+4 at 157k seeded, 16/16 and goal 4/4 per arm, $0.928 → $0.525 per
   finished task (−43.4 %); the handoff turn ($0.32) pays back within one task. Real main
   sessions, 14 days: 45 of 68 crossed 150k, 34 crossed 250k, and $910 of $1,542 main spend came
-  after the 150k crossing. No real session has received the hint yet (shipped 10-04; the only
-  crossing ran an older extension), so live compliance is still unmeasured.
+  after the 150k crossing. First live hint 2026-10-06 (OMP main session, 152k): the agent had
+  already saved state with a See: line and relayed the hint to the owner in its reply.
 - **Silent-recall chains: no change.** Of 86 recalls that followed a silent one within 3 min,
   60 were a different topic, 9 a rephrasing, 17 the identical query: about one wasted turn a
   day, below what agentbench resolves.
@@ -342,3 +342,58 @@ external memory systems (agent://ext-survey). Built:
   mounts MCP tools under `xd://`, so the old "11 unused jev schemas ≈ 4.8k" no longer applies.
 - **Notes:** three global gotchas confirmed tested (112 failures in 14 days); one ESM duplicate
   retired. The V3 `mem-*` notes `brain tidy` lists as unused stay: the frozen eval expects them.
+- **Recall batched with the first search (2026-10-06).** Card footer, `brain_recall` description
+  and the AGENTS.md block now say a recall alone costs a turn. Recall hit rate was 17 % (5 of 6
+  silent in 7 days). agentbench `speed-pass-recall-batching`, same batch, 3 reps, control arm
+  `on+oldrecall` (removed after the run): rename/fix/find 6.8 vs 7.1 turns, though the control
+  used 6 % fewer tokens and 13 % less cost; `find` 3 turns in 3/3 vs 4 in 3/3; recallq 8.3 vs 10.3
+  turns, −20 % tokens. Kept for the turn count; tokens are mixed and n = 3 is not robust.
+- **`brain state` warns on a file-less section** ("plan §8.8" with no path or See: line): that
+  state cost the next session two turns searching the wrong plan.
+- **Error fixes:** `n-8145fedb93` (BasicUpscaler git root is the inner folder), `n-64be719a88`
+  (scratch .mts via unquoted heredoc gets corrupted), global `n-d118aff0ec` (JS eval 30 s kill;
+  owner-tested). `triggerUncaughtException(` dismissed: any node crash.
+- **Recall by section number (2026-10-06).** `recall "… plan 8.8"` was silent because docs match
+  words only. A query naming `§8.8` / `section 6` / a bare two-part `8.8` now matches headings
+  starting with that number and beats word overlap; several docs: remaining words, then path
+  words (`v5`, `plan`) pick. `26.7.0`, `1.5x`, `v1.5` never match. Smoke: the original query now
+  returns plan-v5 `8.8 Token-efficiency pass (line 329)`; `§3.2 rules` returns plan-v4 `3.2 Rules`.
+- **Closest path on a missing-path failure (2026-10-06)** (`brain/src/paths.ts`, OMP tool_result
+  and Claude Code PostToolUseFailure, after a matching fix note, ≤ 80 tokens, telemetry id
+  `pathhint`). 132 read/edit/grep/glob "not found" failures in 14 days took a median 2 more calls
+  to recover. Up to three paths with the same name, extension-swapped stem or a 1–2-letter typo,
+  at most three folders off the missing path's; else the deepest existing folder's entries.
+  Replay on those 132: a hint for 67, e.g. `collector/src/SparkingZeroAdapter.cpp` →
+  `runtime/sparking_zero/SparkingZeroAdapter.cpp`; ~0.2 s when the file list is not cached (60 s
+  cache in OMP). Live verdict: `fix outcomes: pathhint` in `brain stats`.
+- **`docs/intake/2026-09-27-plan-v4-agent-experience.md` registered** (22 recall queries, 9 full
+  reads in 14 days unregistered).
+- **Asks by week in `brain stats` (2026-10-06)** (`brain/src/asks.ts`): per owner prompt in a main
+  session, model turns until the next prompt and wall time, weekly medians from the hosts' own
+  files (OMP `~/.omp/agent/sessions/<dir>/*.jsonl`, Claude Code `~/.claude/projects/<dir>/*.jsonl`;
+  subagent folders, `isSidechain`, SDK runs, injected and task-notification messages left out; the
+  project is the one `resolveProject` gives the session's cwd, `--all` for every project). The
+  baseline exists retrospectively, nothing new is logged; ≥ 4 UTC weeks, `--days` widens it (max
+  12); stats +0.6 s (2.6 → 3.2 s). First readings, second-brain, turns median (p75) · wall median:
+  w09-14 12 (34) · 3.0 min; w09-21 11.5 (38) · 2.8 min; w09-28 5.5 (17) · 0.9 min; w10-05 (to
+  date, 14 asks) 11 (33) · 1.7 min. Judge a change by weeks after it against the weeks before.
+- **agentbench mixes recallq with other tasks (2026-10-06)** (`brain/scripts/agentbench.ts`):
+  `planPasses` runs the other tasks as one pass and recallq (Brain-enabled conditions only) as a
+  second, same invocation and label, one summary each; recallq never shares a home. Checked with
+  `--plan` (no model calls): `--conditions off,on,on+x --tasks rename,fix,find,recallq` → passes
+  `[rename,fix,find · off,on,on+x]` and `[recallq · on,on+x]`.
+- **Asks end at the first idle gap (2026-10-06)** (`brain/src/asks.ts`): an ask's span stops at the
+  last assistant entry before a >5 min gap between consecutive assistant/tool-result entries; later
+  turns (background wake-ups) count for nothing. Smoke `stats --days 30` wall median before → after:
+  w09-07 41.6 → 7.9 min (turns 30 → 9.5); w09-14 3.0 → 2.5; w09-21 2.8 → 2.0; w09-28 0.9 → 0.9;
+  w10-05 1.2 → 1.1. Earlier weeks' readings above used the old definition.
+- **Eval-timeout hint before the kill (2026-10-06)** (`slowEvalCell`, OMP tool_result, id `evaltimeout`,
+  once per session): a JS eval with `tool.task/wait/find/web_search`, an http(s) `tool.read`,
+  `agent(`/`workpool(` or `tool.bash` timeout > 30 and no eval `timeout` gets one line. Replay, 14
+  days (events hold no language/timeout, so every cell counts as JS, none as timed): 692 of 5,386
+  eval cells flagged; 31 of 40 force-kills flagged, 38 of 40 after an earlier flagged cell in-session.
+- **Silent recalls mined in `brain review` (2026-10-06)** (`brain/src/silent.ts`): for each silent recall
+  in 14 days, the next ≤10 events/10 min of its session name the file read (selectors/URLs/AGENTS.md/
+  CLAUDE.md/registered docs dropped); one file answering ≥2 queries in ≥2 sessions, or a query silent ≥2×,
+  prints ≤4 lines `→ brain project docs add <md>` or `→ brain note "<what answered it>"`. Smoke (this
+  project, 14 examined): 2 queries, 2 sessions, then read `brain/src/notes.ts` → `brain note`; `--all`: 204 examined.

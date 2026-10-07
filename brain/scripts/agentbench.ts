@@ -50,6 +50,7 @@ const { values } = parseArgs({
     thinking: { type: "string", default: "low" },
     label: { type: "string", default: "" },
     timeout: { type: "string", default: "420" },
+    plan: { type: "boolean", default: false },
   },
 });
 
@@ -297,6 +298,28 @@ interface SessionRow extends Run, Score {
 
 const conditions = (values.conditions ?? (values.tasks === "learn" ? "on" : "off,on")).split(",").map((c) => c.trim()).filter(Boolean);
 const taskNames = values.tasks!.split(",").map((t) => t.trim()).filter((t) => TASKS[t]);
+
+/** recallq needs fresh per-run homes and Brain-enabled conditions, so it never shares a pass with other tasks. */
+export function planPasses(tasks: string[], conds: string[]): { tasks: string[]; conditions: string[] }[] {
+  const rest = tasks.filter((t) => t !== "recallq");
+  if (rest.length === tasks.length || !rest.length) return [{ tasks, conditions: conds }];
+  return [{ tasks: rest, conditions: conds }, { tasks: ["recallq"], conditions: conds.filter((c) => c === "on" || c.startsWith("on+")) }];
+}
+const passes = planPasses(taskNames, conditions);
+if (values.plan) {
+  console.log(JSON.stringify(passes));
+  process.exit(0);
+}
+if (passes.length > 1) {
+  // Same invocation and label; each pass is a normal single-mode run with its own summary.
+  for (const pass of passes) {
+    console.log(`\n=== pass: ${pass.tasks.join(",")} (conditions ${pass.conditions.join(",")}) ===`);
+    const args = [...process.execArgv, process.argv[1]!, "--tasks", pass.tasks.join(","), "--conditions", pass.conditions.join(",")];
+    for (const k of ["reps", "concurrency", "model", "thinking", "label", "timeout"] as const) args.push(`--${k}`, String(values[k]));
+    execFileSync(process.execPath, args, { stdio: "inherit" });
+  }
+  process.exit(0);
+}
 const reps = Number(values.reps);
 if (taskNames.includes("learn") && (taskNames.length !== 1 || !conditions.length || conditions.some((c) => !/^(off|on(\+[a-z]+)*)$/.test(c)))) throw new Error("learn runs alone with off, on or on+<experiment> conditions");
 const scratch = mkdtempSync(join(tmpdir(), "agentbench-"));
@@ -307,7 +330,7 @@ const kept = join(HOME, "state", "agentbench", new Date().toISOString().replace(
 const homes = new Map<string, string>();
 const neededIds = new Map<string, string>();
 if (taskNames.includes("recallq")) {
-  assert.equal(taskNames.length, 1, "recallq runs alone with fresh per-run homes");
+  assert.equal(taskNames.length, 1, "recallq pass runs alone with fresh per-run homes");
   assert(conditions.every(c => c === "on" || c.startsWith("on+")), "recallq requires Brain-enabled conditions");
   assert(!/staging|production/i.test(Object.values(FIXTURE).join("\n")), "fixture must not disclose environment mapping");
 }

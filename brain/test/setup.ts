@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, vi } from "vitest";
 
-// CLI children inherit an empty memory root, never the owner's Claude memories.
+// CLI children inherit empty host roots, never the owner's Claude memories or OMP/Claude sessions.
 const claude = mkdtempSync(join(tmpdir(), "brain-empty-claude-"));
+const omp = mkdtempSync(join(tmpdir(), "brain-empty-omp-"));
 process.env.CLAUDE_CONFIG_DIR = claude;
-afterAll(() => rmSync(claude, { recursive: true, force: true }));
+process.env.PI_CODING_AGENT_DIR = omp;
+afterAll(() => { rmSync(claude, { recursive: true, force: true }); rmSync(omp, { recursive: true, force: true }); });
 
 // Never inherit the owner's credentials, including in CLI child processes.
 delete process.env.TYPESAFE_API_KEY;

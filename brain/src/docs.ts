@@ -112,9 +112,27 @@ function bestParagraph(section: Section, terms: string[]): string {
   return best;
 }
 
+/**
+ * Section numbers a query names. Clean references only: anything after § / "section" / "sec." (integers allowed),
+ * or a bare two-part dotted number ("8.8"). A bare number is rejected when glued to word characters before it
+ * ("v1.5", "a/1.5"), followed by letters, "x" or "%" ("1.5x", "2.0%"), or followed by more dot segments
+ * ("26.7.0"), so versions and measurements never hit a "1.5 …" heading.
+ */
+function queryNumbers(query: string): Set<string> {
+  const found = new Set<string>();
+  for (const m of query.matchAll(/(?:§|(?<![\p{L}\p{N}])sec(?:tion)?\.?)\s*(\d+(?:\.\d+)*)(?![\p{L}\p{N}%]|\.\d)/giu)) found.add(m[1]!);
+  for (const m of query.matchAll(/(?<![\p{L}\p{N}._\/\\-])(\d+\.\d+)(?![\p{L}\p{N}%]|\.\d)/gu)) found.add(m[1]!);
+  return found;
+}
+
+/** "8.8 Token…", "6. Kill rules", "3.2" → the leading section number of a heading. */
+const headingNumber = (heading: string) => headingText(heading).trim().match(/^(\d+(?:\.\d+)*)\.?(?=\s|$)/)?.[1];
+
+
 function answerDocs(docs: SearchDoc[], query: string): DocAnswer | undefined {
   const terms = tokens(query, true, false);
-  if (!terms.length) return undefined;
+  const numbers = queryNumbers(query);
+  if (!terms.length && !numbers.size) return undefined;
   // Whole file names, not look-alikes: release_plan.md differs from release-plan.md.
   const queryWords = fold(query).split(/[^\p{L}\p{N}._\-/\\]+/u).map(word => word.replace(/\.+$/, ""));
   const names = queryWords.map(word => word.split(/[\\/]/).filter(Boolean).pop() ?? "");
@@ -122,6 +140,8 @@ function answerDocs(docs: SearchDoc[], query: string): DocAnswer | undefined {
   const namedNames = new Set(named.map(doc => fold(basename(doc.path))));
   const remaining = named.length ? tokens(queryWords.filter((_, i) => !namedNames.has(names[i]!)).join(" "), true, false) : terms;
   let best: { score: number; section: SearchSection; doc: SearchDoc } | undefined;
+  // A named section number beats word overlap; remaining words, then path words, choose among equal numbers.
+  let numbered: { rank: [number, number]; section: SearchSection; doc: SearchDoc } | undefined;
   let outline: DocAnswer | undefined;
   for (const doc of named.length ? named : docs) {
     if (named.length && !outline) {
@@ -129,12 +149,22 @@ function answerDocs(docs: SearchDoc[], query: string): DocAnswer | undefined {
       if (h2.length) outline = { text: cutToTokens(doc.path + ": " + h2.join(" · "), 30), path: doc.path };
     }
     for (const section of doc.headings) {
+      const number = numbers.size ? headingNumber(section.heading) : undefined;
+      if (number && numbers.has(number)) {
+        const matched = remaining.filter(term => section.words.has(term));
+        const rank: [number, number] = [
+          matched.length * (remaining.length + 1) + matched.filter(term => section.headingWords.has(term)).length,
+          remaining.filter(term => doc.pathWords.has(term)).length,
+        ];
+        if (!numbered || rank[0] > numbered.rank[0] || (rank[0] === numbered.rank[0] && rank[1] > numbered.rank[1])) numbered = { rank, section, doc };
+      }
       const score = sectionScore(section, doc, remaining, named.length > 0);
       if (score && (!best || score > best.score)) best = { score, section, doc };
     }
   }
-  if (!best) return outline;
-  const { section, doc } = best;
+  const pick = numbered ?? best;
+  if (!pick) return outline;
+  const { section, doc } = pick;
   return {
     text: doc.path + " › " + section.heading + " (line " + section.line + ")", path: doc.path,
     excerpt: (section.heading + ": " + bestParagraph(section, remaining)).replace(/\s+/g, " ").slice(0, 4000),

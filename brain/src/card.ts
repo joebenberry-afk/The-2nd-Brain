@@ -90,8 +90,8 @@ function footer(tools: boolean, subagent: boolean): string {
   const note = tools ? "brain_note(text)" : '`brain note "<text>"`';
   const state = tools ? "brain_state(text)" : '`brain state "<text>"`';
   // Children keep only recall: their notes went unused (0 of 27) and their state writes are refused.
-  if (subagent) return `${recall} before explore/choose/retry`;
-  return `${recall} before explore/choose/retry · ${note} for what code can't tell · ${state} when goal/next changes`;
+  if (subagent) return `${recall} before explore/choose/retry, batched with other calls`;
+  return `${recall} before explore/choose/retry, batched with other calls · ${note} for what code can't tell · ${state} when goal/next changes`;
 }
 /** Active standing rules in the central project/global visibility scope. */
 export function briefNotes(notes: Note[], project: Project): Note[] {

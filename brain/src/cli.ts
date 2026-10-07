@@ -6,6 +6,7 @@ import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, 
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { collectAsks, formatWeek, hostSessionRoots, weeklyAsks, windowStart } from "./asks.ts";
 import { acceptProposal, appendEvent, autoEvidence, captureUserRules, dismissError, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, hostNoise, listClaudeMemory, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, scrubCut, sessionEdits, toolEventFrom, unmatchedErrors, untag } from "./capture.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
@@ -13,6 +14,8 @@ import { projectDocs, suggestDocs } from "./docs.ts";
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, markTested, retireNote, saveNote, staleAfterProblem, TESTERS, upgradeNote, type Kind } from "./notes.ts";
 import { exportOkf, OKF_VERSION } from "./okf.ts";
 import { addProjectDoc, docFile, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
+import { pathHint } from "./paths.ts";
+import { silentRecallLines } from "./silent.ts";
 import { runMcp } from "./mcp.ts";
 import { judgedAnswer, typesafeJudge, typesafePairJudge } from "./judge.ts";
 import { scrub } from "./scrub.ts";
@@ -54,7 +57,7 @@ const USAGE = `brain — agent memory that survives compaction (V4)
 
 Every command takes --home <dir> and --project <id>. Kinds: ${KINDS.join(", ")}.`;
 
-const AGENTS_BLOCK = "<!-- The-Second-Brain:begin id=second-brain -->\nUse `brain recall \"<query>\"` before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command; the repo wins on conflict.\nUse `brain note \"<text>\"` for what the repo cannot tell you: a decision and its why, an environment gotcha with its error line, what failed before, an owner preference.\nUse `brain state \"Goal: … Next: …\"` when the goal or next step changes.\nUse `brain fix \"<error>\"` after an unexplained failure (tested known fix, or silence).\n<!-- The-Second-Brain:end -->";
+const AGENTS_BLOCK = "<!-- The-Second-Brain:begin id=second-brain -->\nUse `brain recall \"<query>\"` before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command, in the same turn as your first search (a recall alone costs a turn); the repo wins on conflict.\nUse `brain note \"<text>\"` for what the repo cannot tell you: a decision and its why, an environment gotcha with its error line, what failed before, an owner preference.\nUse `brain state \"Goal: … Next: …\"` when the goal or next step changes.\nUse `brain fix \"<error>\"` after an unexplained failure (tested known fix, or silence).\n<!-- The-Second-Brain:end -->";
 
 const OPTIONS = {
   home: { type: "string" },
@@ -292,8 +295,10 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const more = all.length > pending.length ? `+${all.length - pending.length} in other projects (brain review --all)` : "";
     const reviewFixes = fixesToReview(c);
     const errors = unmatchedErrors(c.home, notes, { days: 14, project: c.opts.all === true ? undefined : c.project.id, global: true }).slice(0, 5);
-    if (!pending.length && !reviewFixes && !errors.length) {
+    const silent = silentRecallLines(c.home, c.io.cwd, { project: c.opts.all === true ? undefined : c.project.id });
+    if (!pending.length && !reviewFixes && !errors.length && !silent.recurring) {
       c.io.out(more ? `nothing to review here; ${more}` : "nothing to review");
+      for (const line of silent.lines) c.io.out(line);
       return 0;
     }
     // Bounded: an agent reads this output; -n shows more.
@@ -311,6 +316,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       const fix = pattern ? `fix: brain note "<what to do>" --kind gotcha --error ${pattern}  ·  ` : "";
       c.io.out(`  ${fix}ignore: brain dismiss ${signature}`);
     }
+    for (const line of silent.lines) c.io.out(line);
     if (more) c.io.out(more);
     return 0;
   },
@@ -381,7 +387,19 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       const waste = schemas.unused.reduce((sum, tool) => sum + tool.tokens, 0);
       c.io.out(`tool schemas (OMP, ${schemas.at.slice(0, 10)}): ${schemas.tools} active ≈ ${schemas.tokens} tokens per request · uncalled ${s.days}d: ${schemas.unused.length} ≈ ${waste} tokens`);
       if (schemas.unused.length) c.io.out(`  ${schemas.unused.slice(0, 8).map(tool => `${tool.name} (${tool.source}, ${tool.tokens})`).join(" · ")}${schemas.unused.length > 8 ? " …" : ""}`);
+      if (schemas.system.length) {
+        const total = schemas.system.reduce((sum, n) => sum + n, 0);
+        const largest = schemas.system.map((tokens, i) => ({ i, tokens })).sort((a, b) => b.tokens - a.tokens).slice(0, 3);
+        c.io.out(`system prompt (OMP, ${schemas.at.slice(0, 10)}): ${schemas.system.length} blocks ≈ ${total} tokens per request · largest: ${largest.map(b => `#${b.i + 1} ${b.tokens}`).join(" · ")}`);
+      }
     }
+    // Outcome per owner request, from the hosts' own session files (retrospective, nothing logged).
+    const weeks = Math.min(12, Math.max(4, Math.ceil(s.days / 7)));
+    const now = new Date();
+    const everyone = c.opts.all === true;
+    const asks = collectAsks(hostSessionRoots(c.io.env), windowStart(now, weeks), cwd => everyone || resolveProject(c.home, cwd, {}).id === c.project.id);
+    c.io.out(`asks by week (main sessions, OMP + Claude Code, UTC weeks, ${everyone ? "all projects" : c.project.id}; turns = model requests per prompt; idle >5 min ends an ask):`);
+    for (const row of weeklyAsks(asks, weeks, now)) c.io.out("  " + formatWeek(row));
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
     for (const f of s.fixOutcomes.slice(0, 5)) c.io.out(`fix outcomes: ${f.id} helped ${f.helped}/missed ${f.missed}`);
     fixesToReview(c);
@@ -698,6 +716,15 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
                 writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id }));
                 writeAtomic(shown, "");
               } catch { /* telemetry state must not suppress the fix */ }
+            }
+          }
+          const hint = fix ? "" : pathHint(fields.tool, fields.path, fields.error, cwd);
+          if (hint) {
+            output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: hint } };
+            logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(hint), ms: 0, session: logSession, via: "hook", sub, id: "pathhint" });
+            if (session) {
+              try { writeAtomic(pendingPath, JSON.stringify({ id: "pathhint", project: project.id })); }
+              catch { /* telemetry state must not suppress the hint */ }
             }
           }
         }

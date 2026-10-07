@@ -310,27 +310,29 @@ export interface ToolSchema {
 const TOOL_SCHEMAS = "tool-schemas-omp.json";
 
 /**
- * The newest OMP main session's active tool schemas (agent cost is turns × context: every request
- * re-sends them). Names and sizes only, never descriptions. A rename, so readers never see half a
- * file. Never throws.
+ * The newest OMP main session's active tool schemas and system prompt block sizes (agent cost is
+ * turns × context: every request re-sends both). Names and sizes only, never descriptions or
+ * prompt text. A rename, so readers never see half a file. Never throws.
  */
-export function saveToolSchemas(home: string, tools: ToolSchema[], now: Date = new Date()): void {
+export function saveToolSchemas(home: string, tools: ToolSchema[], now: Date = new Date(), system: number[] = []): void {
   try {
-    writeAtomic(join(home, "state", TOOL_SCHEMAS), JSON.stringify({ at: nowIso(now), tools }) + "\n");
+    writeAtomic(join(home, "state", TOOL_SCHEMAS), JSON.stringify({ at: nowIso(now), tools, system }) + "\n");
   } catch {
     // the snapshot is advisory
   }
 }
 
 /** Active tool schemas next to their calls in the event logs: what each request pays for unused tools. */
-export function toolSchemaUse(home: string, days = 7, now: Date = new Date()): { at: string; tools: number; tokens: number; unused: ToolSchema[] } | null {
-  let snapshot: { at: string; tools: ToolSchema[] };
+export function toolSchemaUse(home: string, days = 7, now: Date = new Date()): { at: string; tools: number; tokens: number; unused: ToolSchema[]; system: number[] } | null {
+  let snapshot: { at: string; tools: ToolSchema[]; system?: unknown };
   try {
     snapshot = JSON.parse(readFileSync(join(home, "state", TOOL_SCHEMAS), "utf8"));
     if (typeof snapshot.at !== "string" || !Array.isArray(snapshot.tools)) return null;
   } catch {
     return null;
   }
+  // Snapshots written before 2026-10-07 carry no system prompt sizes.
+  const system = Array.isArray(snapshot.system) ? snapshot.system.filter((n): n is number => typeof n === "number") : [];
   const since = now.getTime() - days * 86_400_000;
   const called = new Set<string>();
   const dir = join(home, "state", "events");
@@ -349,7 +351,7 @@ export function toolSchemaUse(home: string, days = 7, now: Date = new Date()): {
     }
   }
   const unused = snapshot.tools.filter(tool => !called.has(tool.name)).sort((a, b) => b.tokens - a.tokens);
-  return { at: snapshot.at, tools: snapshot.tools.length, tokens: snapshot.tools.reduce((sum, tool) => sum + tool.tokens, 0), unused };
+  return { at: snapshot.at, tools: snapshot.tools.length, tokens: snapshot.tools.reduce((sum, tool) => sum + tool.tokens, 0), unused, system };
 }
 
 /** Apply outcome demotion since each note was last edited. */

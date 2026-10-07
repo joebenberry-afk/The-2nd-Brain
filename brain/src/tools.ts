@@ -48,7 +48,7 @@ function requireString(value: unknown, name: string): string {
 export const brainTools: BrainTool[] = [
   {
     name: "brain_recall",
-    description: "Before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command: cheaper than re-reading files. A note id returns the full note.",
+    description: "Before exploring unfamiliar ground, choosing a tool/stack, or retrying a failing command; call it in the same batch as your first search or read, since a recall alone costs a full turn. A note id returns the full note.",
     params: { query: { type: "string", description: "a question, keywords, or a note id" }, all: { type: "boolean", description: "search every project", optional: true } },
     async run(params, { home, cwd, env }) {
       const query = requireString(params.query, "query");

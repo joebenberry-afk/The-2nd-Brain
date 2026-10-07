@@ -72,6 +72,16 @@ describe("work", () => {
     expect(stateSaved(writeWork(home, "p", "Goal: short\n" + see))).toMatch(/^state saved \(\d+ tokens\)$/);
   });
 
+  it("stateSaved: a section named without its file asks for a See: anchor; a path or See: line does not", () => {
+    const home = tmp();
+    // The 2026-10-05 state that cost the next session two turns hunting for the right plan.
+    expect(stateSaved(writeWork(home, "p", "Goal: token efficiency. Done: rollover default 150k; plan §8.8. Next: watch the hint."))).toContain('"§8.8" names no file');
+    expect(stateSaved(writeWork(home, "p", "Goal: finish section 4.2 of the plan"))).toContain('"section 4.2" names no file');
+    expect(stateSaved(writeWork(home, "p", "Goal: x. Next: plan §8.8\nSee: docs/plan.md#88-token-efficiency"))).toMatch(/^state saved \(\d+ tokens\)$/);
+    expect(stateSaved(writeWork(home, "p", "Next: docs/intake/plan-v5.md §8.8"))).toMatch(/^state saved \(\d+ tokens\)$/);
+    expect(stateSaved(writeWork(home, "p", "Goal: bump to 8.8 and ship"))).toMatch(/^state saved \(\d+ tokens\)$/);
+  });
+
   it("writeWork: a See: block over half the budget is cut, never Goal and Next", () => {
     const home = tmp();
     const see = "See: " + Array.from({ length: 30 }, (_, i) => `brain/src/module${i}.ts:${i * 10}`).join("; ");
