@@ -5,6 +5,8 @@ at: 2026-08-28T09:50:52.523001+00:00
 source: convert
 evidence:
   - DBSZ Telemetry/SZ-CPU-Lab/.superpowers/sdd/Sparking_Zero_Telemetry_OMP_Resume_Plan/progress.md
+replaced_by: mem-16647236fa3c
+retired: 2026-10-07T06:47:04Z
 ---
 
 TEL-KI-ONLY baseline boundary
