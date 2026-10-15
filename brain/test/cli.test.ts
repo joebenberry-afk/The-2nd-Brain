@@ -848,14 +848,20 @@ describe("claude-code hook lifecycle", () => {
     expect(readdirSync(join(home, "state", "pending-fixes"))).toEqual([]);
   });
 
-  it("cards startup and clear, only the lean line after compact, nothing on resume or an unknown source", async () => {
+  it("cards startup, clear and compact, nothing on resume or an unknown source", async () => {
     const { home, send, telemetry } = hookSetup();
     createNote(home, { project: "demo", text: "Demo decision", kind: "decision" });
     for (const source of ["startup", "clear"]) expect((await send({ hook_event_name: "SessionStart", source })).json.hookSpecificOutput.additionalContext).toContain("Demo decision");
     await send({ hook_event_name: "SessionEnd" });
-    expect((await send({ hook_event_name: "SessionStart", source: "compact" })).json.hookSpecificOutput.additionalContext).toBe(LEAN_LINE);
+    // The compaction summary keeps goal and next, not the notes: the whole card comes back.
+    expect((await send({ hook_event_name: "SessionStart", source: "compact" })).json.hookSpecificOutput.additionalContext).toContain("Demo decision");
     for (const source of ["resume", "other"]) expect((await send({ hook_event_name: "SessionStart", source })).json).toEqual({});
-    expect(telemetry().filter((row) => row.kind === "card")).toHaveLength(2);
+    expect(telemetry().filter((row) => row.kind === "card")).toHaveLength(3);
+  });
+
+  it("leaves the lean rule after a compaction when the card has nothing to say", async () => {
+    const { send } = hookSetup();
+    expect((await send({ hook_event_name: "SessionStart", source: "compact" })).json.hookSpecificOutput.additionalContext).toBe(LEAN_LINE);
   });
 
   it("logs a swallowed hook error to telemetry", async () => {

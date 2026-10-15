@@ -15,6 +15,8 @@ import { readWork, writeWork } from "../src/work.ts";
 import { stats } from "../src/telemetry.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
+/** What before_agent_start returns: a hidden custom message, or nothing. */
+type CardReply = { message: { customType: string; content: string } } | undefined;
 
 let root = "";
 let home = "";
@@ -193,11 +195,11 @@ describe("OMP extension", () => {
     const second = start({ prompt: "again" }, c);
     expect(second).toBeUndefined();
 
-    // Compaction dropped the card: the next prompt carries only the lean line, once.
+    // Compaction dropped the card: while idle, the next prompt brings the whole card back, once.
     handlers.get("session_compact")!({}, c);
-    const lean = start({ prompt: "after compaction" }, c) as any;
-    expect(lean.message.content).toBe(LEAN_LINE);
-    expect(lean.message.customType).not.toBe(CARD_TYPE);
+    const again = start({ prompt: "after compaction" }, c) as CardReply;
+    expect(again?.message.customType).toBe(CARD_TYPE);
+    expect(again?.message.content).toContain("Test note");
     expect(start({ prompt: "later" }, c)).toBeUndefined();
   });
 
@@ -215,6 +217,41 @@ describe("OMP extension", () => {
     branch.push({ type: "compaction", summary: "…" });
     const after = load().handlers.get("before_agent_start")!({ prompt: "continue" }, resumed) as { message?: { customType?: string } } | undefined;
     expect(after?.message?.customType).toBe(CARD_TYPE);
+  });
+
+  it("brings the card back after a compaction on the next tool result, else with the next prompt", () => {
+    createNote(home, { text: "Test note for card", project: "work", kind: "fact" });
+    const fix = createNote(home, { text: "Install the runtime first", project: "work", kind: "gotcha", tested: true, errors: ["runtime mismatch"] });
+    const { handlers } = load();
+    const c = ctx("s-compact");
+    const start = handlers.get("before_agent_start")!;
+    const result = (event: unknown) => handlers.get("tool_result")!(event, c) as { content: { text: string }[] } | undefined;
+    expect((start({ prompt: "first" }, c) as CardReply)?.message.customType).toBe(CARD_TYPE);
+    // OMP compacts inside a long tool loop: the next tool result carries the card after its own text.
+    handlers.get("session_compact")!({}, c);
+    const carried = result({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [{ type: "text", text: "file body" }] });
+    expect(carried?.content[0]?.text).toBe("file body");
+    expect(carried?.content.at(-1)?.text).toMatch(/^\nBrain · work[\s\S]*Test note/);
+    // Delivered once: neither the next result nor the next prompt repeats it.
+    expect(result({ toolName: "read", input: { path: "b.ts" }, isError: false, content: [{ type: "text", text: "other" }] })).toBeUndefined();
+    expect(start({ prompt: "next" }, c)).toBeUndefined();
+    // A failure that also earns a known fix keeps the fix and gains the card.
+    handlers.get("session_compact")!({}, c);
+    const failed = result({ toolName: "bash", input: { command: "build" }, isError: true, content: [{ type: "text", text: "runtime mismatch" }] });
+    expect(failed?.content.map(part => part.text.split("\n").find(Boolean))).toEqual(["runtime mismatch", `Brain: Install the runtime first [${fix.id}]`, "Brain · work — what prior sessions learned; the repo wins on conflict"]);
+    // A compaction no tool result follows (a /compact between prompts): the next prompt carries it.
+    handlers.get("session_compact")!({}, c);
+    expect((start({ prompt: "after" }, c) as CardReply)?.message.customType).toBe(CARD_TYPE);
+  });
+
+  it("returns the lean rule after a compaction when the card has nothing to say", () => {
+    const { handlers } = load();
+    const start = handlers.get("before_agent_start")!;
+    expect(start({}, ctx("s-empty"))).toBeUndefined();
+    handlers.get("session_compact")!({}, ctx("s-empty"));
+    const lean = start({}, ctx("s-empty")) as CardReply;
+    expect(lean?.message.content).toBe(LEAN_LINE);
+    expect(lean?.message.customType).not.toBe(CARD_TYPE);
   });
 
   it("empty home → no card message", () => {
@@ -886,9 +923,10 @@ describe("OMP fix outcomes", () => {
     // The next slow cell is judged on its timeout, a different cell from the one that got the hint.
     expect(cell(slow("two"), 120)).toBeUndefined();
     expect(outcomes()).toEqual([["rawhint", "helped"], ["evaltimeout", "helped"]]);
-    // Hints keep one outcome each; a repeat of the mistake after a new hint is a miss.
+    // Hints keep one outcome each; a repeat of the mistake after a new hint is a miss. After a
+    // compaction the first result also carries the card back, after the hint.
     handlers.get("session_compact")!({}, c);
-    expect(cell(raw("sum"))?.content.at(-1)?.text).toContain("backspace");
+    expect(cell(raw("sum"))?.content.map(part => part.text).join("")).toMatch(/backspace[\s\S]*\nWork lean:/);
     seen();
     expect(cell(raw("max"))?.content.at(-1)?.text).toContain("backspace");
     expect(outcomes().at(-1)).toEqual(["rawhint", "missed"]);

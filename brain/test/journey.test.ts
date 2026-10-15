@@ -56,7 +56,7 @@ it("a failure fixed in one session becomes the known fix and the card of the nex
   day1.fire("tool_result", { toolName: "bash", input: { command: "npm ci && npm test" }, isError: false, content: [{ type: "text", text: "ok" }] }, s1);
   day1.fire("tool_result", { toolName: "edit", input: { path: join(app, "src", "cart.ts") }, isError: false, content: [] }, s1);
 
-  // Compaction saves observations for the next session without changing model context.
+  // Compaction saves observations for the next session (and the next prompt gets the card again).
   day1.fire("session_compact", {}, s1);
   const work = readWork(home, "shop-app");
   expect(work?.text).toContain("Goal: green test suite");

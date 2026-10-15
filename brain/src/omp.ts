@@ -5,7 +5,7 @@
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
 import { isAbsolute, relative, resolve } from "node:path";
-import { loadNotes } from "./notes.ts";
+import { loadNotes, type Note } from "./notes.ts";
 import { folderOnly, resolveProject, type Project } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
 import { appendEvent, captureUserRules, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
@@ -52,8 +52,8 @@ interface SessionState {
   pendingFixes?: Map<string, PendingFix>;
   /** Messages in the last context this session sent; a drop means earlier text may be gone. */
   contextLength?: number;
-  /** A compaction dropped the card: the next prompt carries the lean line again. */
-  leanDue?: boolean;
+  /** A compaction dropped the card: the next tool result or prompt in this session carries it again. */
+  cardDue?: boolean;
 }
 
 /** Shared by rebound extension instances; entries are removed when their session shuts down. */
@@ -452,6 +452,24 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     return undefined;
   });
 
+  /** One session's card: the same at its first prompt and after each compaction. */
+  const sessionCard = (ctx: unknown, state: SessionState, project: Project, notes: Note[], prompt: string | undefined): string => {
+    const subagent = isSubagent(ctx);
+    // agentbench `on+nochild`: the child-card cost trial's control arm (plan §8.7 kill rule).
+    if (subagent && (env.BRAIN_EXPERIMENT ?? "").split(",").includes("nochild")) return "";
+    return renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt, parentEdits: subagent ? parentEdits(ctx) ?? state.parentEdits : undefined });
+  };
+  /**
+   * After a compaction the whole card comes back (owner decision 2026-10-15), not only the lean
+   * line: OMP's summary keeps goal and next (§8 P4) but drops the notes, recurring fixes and plan
+   * anchor. With nothing to say, the lean rule still comes back.
+   */
+  const compactionCard = (ctx: unknown, state: SessionState, project: Project, prompt: string | undefined, started: number): string => {
+    const card = sessionCard(ctx, state, project, loadNotes(home).notes, prompt);
+    if (card) logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: performance.now() - started, session: sessionKey(ctx), sub: isSubagent(ctx), ids: cardIds(card) });
+    return card || LEAN_LINE;
+  };
+
   // Handle before_agent_start
   on("before_agent_start", (event, ctx) => {
     try {
@@ -474,7 +492,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // last compaction: a second one repeats the same lines and echoes this session's own ask.
       if (!state.carded && cardSinceCompaction(ctx)) state.carded = true;
       if (!state.carded) {
-        state.leanDue = false;
+        state.cardDue = false;
         const { notes } = loadNotes(home);
         const subagent = isSubagent(ctx);
         // Only the parent scans earlier sessions; children share its proposals without rescanning.
@@ -507,9 +525,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             }
           }, 0);
         }
-        // agentbench `on+nochild`: the child-card cost trial's control arm (plan §8.7 kill rule).
-        const noChild = subagent && (env.BRAIN_EXPERIMENT ?? "").split(",").includes("nochild");
-        const cardContent = noChild ? "" : renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt: typeof prompt === "string" ? prompt : undefined, parentEdits: subagent ? parentEdits(ctx) ?? state.parentEdits : undefined });
+        const cardContent = sessionCard(ctx, state, project, notes, typeof prompt === "string" ? prompt : undefined);
 
         if (cardContent) {
           state.carded = true;
@@ -519,11 +535,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.carded = true;
         return undefined;
       }
-      // Compaction dropped the card: its state is not repeated (§8 P4), the lean rule is. Its own
-      // type, so a process restarted after compaction still cards in full.
-      if (state.leanDue) {
-        state.leanDue = false;
-        return buildCardMessage(LEAN_LINE, LEAN_TYPE);
+      // A compaction no tool result followed: this prompt brings the card back, ranked by it.
+      if (state.cardDue) {
+        state.cardDue = false;
+        const text = compactionCard(ctx, state, project, typeof prompt === "string" ? prompt : undefined, started);
+        return buildCardMessage(text, text === LEAN_LINE ? LEAN_TYPE : CARD_TYPE);
       }
 
       return undefined;
@@ -617,7 +633,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       saveAuto(ctx);
       state.pendingFixes = state.shownFixes = undefined;
       state.fixed = undefined;
-      state.leanDue = true;
+      // The card comes back where the session goes on: inside a run (OMP compacts mid-loop) on the
+      // first tool result after this, else with the next prompt. Never as a message of its own: one
+      // queued after a run's last step makes OMP start a turn to deliver it, and the Brain never
+      // continues host work (V4 §3.2 rule 4).
+      state.cardDue = true;
 
       return undefined;
     } catch (error) {
@@ -650,7 +670,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   };
 
   // Handle tool_result
-  on("tool_result", (event, ctx) => {
+  const toolResult = (event: unknown, ctx: unknown): { content: unknown[] } | undefined => {
     try {
       const started = performance.now();
       const key = sessionKey(ctx);
@@ -764,6 +784,25 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     } catch (error) {
       failed("tool_result", error);
       return undefined;
+    }
+  };
+  // After a compaction inside a run, the card rides on the first tool result: the model reads it at
+  // its next call, and the Brain queues no message of its own. Inside a tool result it is no
+  // brain.card entry, so a process restarted before the next compaction cards once more.
+  on("tool_result", (event, ctx) => {
+    const result = toolResult(event, ctx);
+    try {
+      const state = getSession(sessionKey(ctx));
+      if (!state.cardDue) return result;
+      state.cardDue = false;
+      const cwd = cwdOf(ctx) ?? process.cwd();
+      const project = state.project ?? inheritedProject(ctx, cwd) ?? resolveProject(home, cwd, env);
+      const original = asObject(event)?.content;
+      const content = result?.content ?? (Array.isArray(original) ? original : typeof original === "string" && original ? [{ type: "text", text: original }] : []);
+      return { content: [...content, { type: "text", text: `\n${compactionCard(ctx, state, project, state.ask, performance.now())}` }] };
+    } catch (error) {
+      failed("tool_result", error);
+      return result;
     }
   });
 

@@ -133,9 +133,9 @@ verified end to end once the owner's Claude login is renewed (the hook already d
 ## 4. What V5 does not do
 
 No embeddings, no database, no code indexing, no new resident tools (still three), no per-prompt
-injection, no second harness adapter beyond the Claude Code hook and MCP. The card stays ≤ 400
-tokens and appears once per session (after compaction only its lean line, ~35 tokens: the state
-part is not repeated, §8 P4; the lean rule is behaviour the rest of the session still needs).
+injection, no second harness adapter beyond the Claude Code hook and MCP. The card stays ≤ 320 (§8.9)
+tokens and appears once per session and again after each compaction (until 2026-10-15 only its
+lean line came back, ~35 tokens: §8 P4 showed goal and next survive without the state; §8.11).
 
 ## 5. Phases
 
@@ -479,3 +479,44 @@ declined (below). Full gate after integration: 943 tests, recall eval gates held
   that a global teardown removes: a full run leaves zero folders. The old folders were deleted at
   the owner's request; Git Bash `du` had estimated 17.4 GB, but deleting them freed only ~10 MB
   (almost all were tiny files that NTFS keeps inside the MFT).
+
+### 8.11 The card after compaction (owner decision, 2026-10-15)
+
+Owner: re-send the full card after every compaction. §8 P4 measured goal and next surviving OMP's
+summary in every run, so the benefit claimed here is the rest of the card the summary drops:
+Known-here notes, `Often hit lately` fixes and the rendered `See:` plan section. Unmeasured;
+cost ≤ 320 tokens per compaction (live home: OMP main cards 121–319 tokens, mean ~232).
+
+- **OMP:** `session_compact` marks the card due. The first tool result after it carries the card
+  (appended after the result's own text, after any known fix); a compaction that no tool result
+  follows hands it to the next prompt, ranked by that prompt. Not `sendMessage`: OMP's source shows
+  a `nextTurn` message waits for the next user prompt, and an `aside` queued after a run's last step
+  makes OMP start a turn to deliver it (`#resumeStrandedIrcAsides`) — that would continue host work
+  (V4 §3.2 rule 4). A card inside a tool result is no `brain.card` entry, so a process restarted
+  before the next compaction cards once more.
+- **Claude Code:** `SessionStart` with source `compact` returns the card; `resume` stays silent.
+- Nothing to say still returns the lean line, as before.
+
+### 8.12 Obsidian MCP, measured head-to-head (2026-10-15)
+
+Test vault `Documents/Obsidian Brain Test`: a copy of the 167 notes the real-query labels were made on
+(Obsidian 1.14.4), with MCP Connector 3.0.2 (istefox, 64 tools, on-device embeddings) and Local REST
+API 5.4.0 (built-in MCP, 20 tools), release files checked against GitHub's SHA-256 digests. The same
+54 labelled queries (34 frozen + 20 held-out), searches limited to the project and global folders.
+
+| | Brain judged | Brain lexical | Obsidian semantic, top 1 | Obsidian semantic, top 3 | Obsidian simple search |
+|---|---|---|---|---|---|
+| Labelled note found (27 answerable) | 8 | 16 | 16 | 20 | 0 |
+| Answers showing an irrelevant note (of 54) | 0 | 14 | 38 | 54 | 0 |
+
+- Obsidian's simple search (both servers) is literal: no result for any of the 54 questions.
+- Semantic search never abstains. A score threshold tuned on this same set reaches 0 wrong only at 2
+  right (0.45: 8 right, 5 wrong). Brain judged also answered 4 cases from plan docs the vault lacked.
+- Cost: tool definitions 65 KB for 64 tools (~16k tokens) and 32 KB for 20 tools (~8k), against the
+  Brain's 1.7 KB for 3; ~458 tokens per semantic answer (3 results with excerpts) against ~78 for a
+  judged Brain answer; building the embedding index took ~10 min for 167 notes, reporting 0 % until
+  done; searches then take 10 ms (median).
+- Lesson: embeddings put the labelled note in the top 3 for 20 of 27 answerable questions, where the
+  Brain's judged answer finds 8; the judge is what keeps answers free of wrong notes. Semantic
+  candidates in front of the judge is the lever: Tora does this, but adds at most 2 candidates and
+  only while a Tora session runs. Not built here.

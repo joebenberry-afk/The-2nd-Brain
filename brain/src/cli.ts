@@ -679,19 +679,17 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       } else if (event === "SessionStart" && ["startup", "resume", "clear", "compact"].includes(String(p.source ?? "startup"))) {
         try { rmSync(fixDir, { recursive: true, force: true }); }
         catch { /* pending telemetry cleanup must not suppress the card */ }
-        // Compaction drops the card: its state is not repeated (§8 P4), but the lean rule is behaviour
-        // the rest of the session still needs. A resumed transcript already holds a card.
-        if (p.source === "compact") {
-          output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: LEAN_LINE } };
-        } else if (p.source !== "resume") {
+        // Compaction drops the card; it comes back in full (owner decision 2026-10-15): the summary
+        // keeps goal and next (§8 P4) but not the notes and fixes. A resumed transcript already holds
+        // one. With nothing to say, a compaction still gets the lean rule.
+        if (p.source !== "resume") {
           // No scanEvents here: catching up on earlier sessions' events took ~300 ms of every start
           // card. SessionEnd and PreCompact run it, off any prompt's path.
           const { notes } = loadNotes(home);
           const card = renderCard(home, notes, project, { tools: false, subagent: sub, host: "claude-code" });
-          if (card) {
-            output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
-            logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub, ids: cardIds(card) });
-          }
+          const context = card || (p.source === "compact" ? LEAN_LINE : "");
+          if (context) output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context } };
+          if (card) logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub, ids: cardIds(card) });
         }
       } else if (event === "SubagentStart") {
         // The documented hook exposes identity, not the brief: registered docs only.

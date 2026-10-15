@@ -134,7 +134,11 @@ Recall searches the whole registered section, preferring more distinct query ter
 1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message
    (≤ 320 tokens: where we left off, up to five complete notes ranked by the first prompt);
    later prompts add nothing, and a session resumed in a new OMP process (restart,
-   `/resume`) keeps the card it already holds until a compaction. Child cards on both hosts are
+   `/resume`) keeps the card it already holds until a compaction. After a compaction the card
+   comes back in full: inside a run (OMP compacts mid-loop) appended to the next tool result, else
+   with the next prompt; with nothing to say, only the lean line. It never arrives as a message of
+   its own: OMP starts a turn to deliver a message queued after a run's last step, and the Brain
+   never continues host work. Child cards on both hosts are
    capped at **200 tokens total**: the parent plan’s Watch out field (≤40 tokens), up to two
    recurring fixes counted over child sessions, standing rules (≤6 lines/80 tokens), up to eight
    parent-session edited paths, and live H2/H3 doc headings with line numbers (≤60 tokens). A
@@ -165,8 +169,9 @@ Recall searches the whole registered section, preferring more distinct query ter
 2. **Working state.** Ask the agent to set the plan (`brain_state`) when the goal or next step
    changes. OMP's own compaction summary carries goal and next: both were recalled in 100% of
    measured short and long sessions, with or without extra Brain context. The long sessions
-   included three compactions and a goal change; OMP kept the new goal in every run. The Brain
-   adds nothing after compaction. Its working state reaches the next session's start card.
+   included three compactions and a goal change; OMP kept the new goal in every run. The card
+   still comes back after each compaction (see *Start card*), for the notes, fixes and plan anchor
+   the summary drops. The working state also reaches the next session's start card.
    At compaction, shutdown and session switches, files edited and the last ask are saved locally
    in `state/work/<project>.auto.md`, never synced; the agent-written plan is preserved. The plan
    is marked possibly stale when auto observations are over three days newer, or HEAD has commits
@@ -331,7 +336,8 @@ a 949-log home: ~820 → ~410 ms). PreCompact and SessionEnd save edited files (
 256 KiB of the transcript
 (else Claude Code's `last-prompt` row; task notifications and slash commands are not asks) to
 local auto state; the agent-written plan is never replaced.
-SessionStart source `compact` or `resume` adds no context; saved state feeds the next session's card.
+SessionStart source `compact` gets the card again (or the lean line when it has nothing to say);
+`resume` adds no context; saved state feeds the next session's card.
 A failed Read, Grep, Glob, LS or NotebookEdit naming a missing path gets the same "did you mean"
 path hint as OMP; listing candidates is best-effort within 150 ms and skipped for a drive, home or
 temp root (one OMP tool result had been held 24.7 s by an unbounded walk). The Git Bash shim
