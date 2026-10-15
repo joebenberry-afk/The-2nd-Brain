@@ -1,8 +1,5 @@
 ---
-at: 2026-09-28T17:49:57Z
+at: 2026-10-08T03:38:51Z
 ---
 
-Goal: Ultra+ via difficulty edits. Repo @81371ca.
-Done: E002a MOUNTED; E002c not confirmed (v0.2 2/5 Frieza transformed vs vanilla 0/5; p≈0.22). Vanilla arm installed, game running.
-Next: E002b win-rate (mirror, Ultra vs Super, Balanced: Melee); first block vanilla (no restart), 10 matches.
-Watch out: count only pre-registered N; extra matches noted, not counted.
+Goal: automate CPU-vs-CPU batches for E002b. Done: vendored tools/WinDrive.ps1 + tools/winshot.py (gfxcapture works, WinDrive smoke OK without game). Next: with game running + owner away, test whether SZ accepts SendInput (VK vs scanmode) in menus → reach CPU vs CPU match; map menu key sequence. Watch out: never drive while owner idle <60s.

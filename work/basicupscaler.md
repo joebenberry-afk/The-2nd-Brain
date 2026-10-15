@@ -1,8 +1,5 @@
 ---
-at: 2026-10-07T04:19:30Z
+at: 2026-10-10T18:06:47Z
 ---
 
-Goal: BUFG light/efficient/accurate; W/L/D vs LSFG in Frame Gen.md §17.
-Paused 7 Oct for new session. Handoff: D:/BU-gen/SESSION-HANDOFF-20261007.md + live-handoff.md (also bufg-proof .superpowers/sdd/…plan-1-discovery/).
-Next: wire bu live --fg 2x (wip c152fdf), smoke on bu playback, then live Relink with owner + phone vs LSFG; log discovery-4 (runs/…/20261007_discovery-4-fade) and fade_frame_check.json.
-See: BasicUpscaler/Frame Gen.md#17
+OWNER PAUSE active (10 Oct ~14:06 local). All lanes told: no tool calls until RESUME; machine verified clean (no lock, LS, PCSX2, bu, PresentMon; CPU ~1–2%). On RESUME broadcast "RESUME" to agent://all + herdr w4:p3/w4:p4. Pending lanes: 198 (resume via RESUME.md), 205, 230, 231, 235 (needs absolute idle), 237, 238 (DBZ BT4 attract probe at ~175s boot), 239, 240 (blocked on 239). Logged thru FG-240; next FG-241.
