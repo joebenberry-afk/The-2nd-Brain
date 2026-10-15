@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cardIds, renderCard } from "../src/card.ts";
 import { main, type Io } from "../src/cli.ts";
 import { JUDGE_THRESHOLD, typesafePairJudge, type PairJudge } from "../src/judge.ts";
@@ -159,8 +159,8 @@ it("noteUsage separates recalled, opened, carded and fired across rotated and cu
   logUse(root, { kind: "fix", project: "demo", id: "n-used", tokens: 0, ms: 0 }, now);
   logUse(root, { kind: "recall", project: "demo", ids: ["too-old"], tokens: 0, ms: 0 }, new Date("2020-01-01"));
   logUse(root, { kind: "recall", project: "demo", ids: ["future"], tokens: 0, ms: 0 }, new Date("2030-01-01"));
-  expect([...noteUsage(root, 30, now)]).toEqual([["n-used", { recalled: 1, opened: 1, carded: 1, fired: 1, last: "2026-10-04T00:00:00Z" }]]);
-  expect(noteUsage(join(root, "missing"), 30, now).size).toBe(0);
+  expect([...noteUsage(root, 30, now).notes]).toEqual([["n-used", { recalled: 1, opened: 1, carded: 1, fired: 1, last: "2026-10-04T00:00:00Z" }]]);
+  expect(noteUsage(join(root, "missing"), 30, now).notes.size).toBe(0);
 });
 
 it("CLI tidy suggests the right retire direction, shows lexical fallback, and never writes notes", async () => {
@@ -218,7 +218,9 @@ it("stats includes all-home active note usage and CLI cards record only shown id
   createNote(root, { project: "other", text: "Other project advice" });
   const preview = await cli(root, ["card"]);
   expect(cardIds(preview)).toEqual([shown.id]);
-  expect(noteUsage(root).get(shown.id)?.carded).toBe(1);
+  expect(noteUsage(root).notes.get(shown.id)?.carded).toBe(1);
+  // Telemetry that reaches back past the window: the answer holds for all 30 days.
+  logUse(root, { kind: "recall", project: "demo", ids: [], tokens: 0, ms: 0 }, new Date(Date.now() - 40 * 86_400_000));
   expect(await cli(root, ["stats", "--days", "30"])).toContain("notes used (30d): 1 of 2 active · never: 1 (brain tidy)");
 });
 
@@ -239,4 +241,53 @@ it("tidy preserves lexical suggestions when a judge throws, returns undefined or
   for (const judge of [async () => { throw new Error("offline"); }, async () => undefined, async () => new Map()]) {
     expect(await tidyReport(root, notes, project, { judge })).toEqual(lexical);
   }
+});
+
+describe("usage windows follow the telemetry that is retained", () => {
+  const DAY = 86_400_000;
+  const daysAgo = (days: number) => new Date(Date.now() - days * DAY);
+  const day = (date: Date) => date.toISOString().slice(0, 10);
+  const old = (id: string, over: Partial<Note> = {}) => note(id, `Unique ${id} advice`, { at: "2000-01-01", ...over });
+
+  it("does not call a note unused for days the oldest retained row does not reach", async () => {
+    const root = home();
+    // Rotation kept ten days of rows: a note used 20 days ago is simply absent from them.
+    const start = daysAgo(10);
+    logUse(root, { kind: "recall", project: "demo", ids: ["used-lately"], tokens: 0, ms: 0 }, daysAgo(5));
+    logUse(root, { kind: "card", project: "demo", ids: ["young"], tokens: 0, ms: 0 }, start);
+    const notes = [old("never"), old("used-lately"), old("used-20-days-ago"), note("young")];
+    const report = await tidyReport(root, notes, project);
+    expect(report.unusedWindow).toContain("10d");
+    expect(report.unusedWindow).toContain(day(start));
+    expect(report.unusedWindow).not.toMatch(/^30d/);
+    expect(report.unused.map(n => n.id)).toEqual(["never", "used-20-days-ago"]);
+    // A window inside the covered days is answered as asked.
+    expect((await tidyReport(root, notes, project, { days: 7 })).unusedWindow).toBe("7d");
+  });
+
+  it("holds for the full ask once the rows reach back past it, and judges nothing without rows", async () => {
+    const covered = home();
+    logUse(covered, { kind: "card", project: "demo", ids: ["other"], tokens: 0, ms: 0 }, daysAgo(40));
+    expect((await tidyReport(covered, [old("never")], project)).unusedWindow).toBe("30d");
+    const empty = home();
+    const none = await tidyReport(empty, [old("never")], project);
+    expect(none.unused).toEqual([]);
+    expect(none.unusedWindow).toContain("no telemetry");
+  });
+
+  it("brain tidy and brain stats print the window the rows cover", async () => {
+    const root = home();
+    const start = daysAgo(10);
+    const never = createNote(root, { project: "demo", text: "Unique CLI never used guidance" });
+    saveNote(root, { ...never, at: "2000-01-01" });
+    logUse(root, { kind: "card", project: "demo", ids: ["elsewhere"], tokens: 0, ms: 0 }, start);
+    const tidy = await cli(root, ["tidy"]);
+    expect(tidy).toContain(never.id);
+    expect(tidy).toContain("10d");
+    expect(tidy).toContain(day(start));
+    expect(tidy).not.toContain("Unused 30d");
+    const stats = (await cli(root, ["stats", "--days", "30"])).split("\n").find(line => line.startsWith("notes used"))!;
+    expect(stats).toContain(day(start));
+    expect(stats).toContain("never: 1");
+  });
 });

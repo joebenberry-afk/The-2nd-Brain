@@ -434,6 +434,11 @@ export function renderHits(hits: Hit[]): string {
   return hits.map((hit, i) => renderHit(hit, i === 0 ? FIRST_HIT_CHARS : 240)).join("\n");
 }
 
+/** A note that reached the answer by a route other than lexical scoring, trust markers as for any hit. */
+export function plainHit(note: Note, opts: RecallOptions & { home?: string }): Hit {
+  return { note, score: 0, matched: [], stale: staleHere(note, opts.project, noteHome(note, opts)), changed: changedHere(note, opts.project, noteHome(note, opts)) };
+}
+
 export interface AnswerOptions extends RecallOptions {
   /** Explicit Brain home for evidence and registered document lookup. */
   home?: string;
@@ -451,7 +456,7 @@ export function answer(notes: Note[], query: string, opts: AnswerOptions): strin
 }
 
 /** Hit count measures results actually shown, not cross-project suggestions. */
-export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions): { text: string; hits: number; ids: string[]; docExcerpt?: string } {
+export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions, scored?: Scored): { text: string; hits: number; ids: string[]; docExcerpt?: string } {
   const id = idQuery(query);
   const note = findNote(notes, query);
   if (note) {
@@ -467,7 +472,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
   if (/^(?:n|mem)-[0-9a-f]{6,}$/i.test(id)) return { text: `no note ${id}`, hits: 0, ids: [] };
   // Search summaries stay within the three-line budget; explicit id reads above retain history.
   opts = { ...opts, limit: Math.max(1, Math.min(3, opts.limit ?? 3)) };
-  const scored = scoreQuery(notes, query);
+  scored ??= scoreQuery(notes, query);
   let hits = filterHits(scored, opts);
   if (!opts.history) {
     const best = filterHits(scored, { ...opts, history: true, limit: 10 }).sort((a, b) => b.score - a.score).find((h) => h.note.retired);

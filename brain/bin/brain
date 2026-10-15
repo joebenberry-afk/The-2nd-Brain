@@ -1,7 +1,8 @@
 #!/bin/sh
 # `brain` for sh and Git Bash (Claude Code runs its hooks and its Bash tool there on Windows, where
-# brain.cmd is not found). Node >= 22.18 runs the TypeScript sources directly; otherwise Bun.
-# No subprocess on the common path: every hook and agent CLI call pays for each one.
+# brain.cmd is not found). Node >= 22.18 runs the TypeScript sources directly; otherwise Bun: with
+# no node on PATH it is chosen here, with a node too old for it brain.mjs hands over to Bun itself.
+# No subprocess on the common path (`command -v` is a builtin): every hook and agent CLI call pays for each one.
 case $0 in */*) dir=${0%/*} ;; *) dir=$(dirname "$0") ;; esac
 # Git Bash rewrites arguments that look like POSIX paths ("/clear x" -> "C:/Program Files/Git/clear x"):
 # note text must arrive as typed. The script path and --home/--from values are converted here instead
@@ -26,7 +27,5 @@ case ${OSTYPE:-} in
       prev=$arg
     done ;;
 esac
-case "$(node --version 2>/dev/null)" in
-  v22.1[89].* | v22.[2-9][0-9].* | v2[3-9].* | v[3-9][0-9].*) exec node "$dir/brain.mjs" "$@" ;;
-esac
+if command -v node >/dev/null 2>&1; then exec node "$dir/brain.mjs" "$@"; fi
 exec bun "$dir/brain.mjs" "$@"

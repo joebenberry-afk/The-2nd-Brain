@@ -1,7 +1,7 @@
 /** One-shot import of V3 records. */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
-import { errorPatternProblem, loadNotes, parseFrontmatter, saveNote, type Note, GLOBAL } from "./notes.ts";
+import { cleanErrors, loadNotes, maskText, parseFrontmatter, saveNote, type Note, GLOBAL } from "./notes.ts";
 import { idFor, loadProjects } from "./project.ts";
 import { nowIso, slug, writeAtomic } from "./util.ts";
 
@@ -186,11 +186,14 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
             ? v3Record.superseded_at || v3Record.edited_at || v3Record.recorded_at || nowIso()
             : undefined;
 
-        const body = v3Record.body ? `${v3Record.title}\n\n${v3Record.body}` : v3Record.title;
-        const errors = (v3Record.trigger_errors || []).filter((e) => {
-          const problem = errorPatternProblem(e);
-          if (problem) report.errors.push(`${path}: ${problem}`);
-          return !problem;
+        const body = maskText(v3Record.body ? `${v3Record.title}\n\n${v3Record.body}` : v3Record.title);
+        const errors = (v3Record.trigger_errors || []).flatMap((e) => {
+          try {
+            return cleanErrors([e]);
+          } catch (error) {
+            report.errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+            return [];
+          }
         });
 
         // Create note
@@ -201,9 +204,9 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
           private: isPrivate,
           at,
           source: "convert",
-          tags,
+          tags: tags.map(maskText),
           errors,
-          evidence: v3Record.evidence || [],
+          evidence: (v3Record.evidence || []).map(maskText),
           tested,
           testedBy: tested ? "convert" : undefined,
           replaces: v3Record.supersedes,

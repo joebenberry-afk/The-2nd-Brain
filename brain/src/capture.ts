@@ -88,17 +88,31 @@ function saveProposal(home: string, proposal: Proposal): void {
   writeAtomic(join(inboxDir(home), `${proposal.id}.json`), JSON.stringify(proposal, null, 2) + "\n");
 }
 
-/** Deterministic owner sentences only: questions, quoted examples and code are not instructions. */
+/** A folder an OMP isolated task runs in (~/.omp/wt/<id>/…): its name is not a project. */
+const OMP_WORKTREE = /[\\/]\.omp[\\/]wt[\\/]/i;
+
+/**
+ * Deterministic owner sentences only: questions, quoted examples and code are not instructions.
+ * A pasted document is not an instruction either: markdown structure lines, a message of three or
+ * more cue sentences, first-person narrative ("I remember …") and task requests are all skipped.
+ */
 export function userRuleSentences(message: string): string[] {
   const prose = message.replace(/\x60{3}[\s\S]*?(?:\x60{3}|$)|~{3}[\s\S]*?(?:~{3}|$)/g, "")
     .replace(/<([\w-]+)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, "")
-    .replace(/^(?:\s*>| {4}|\t).*$/gm, "");
+    .replace(/^(?:\s*>| {4}|\t).*$/gm, "")
+    .replace(/^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s).*$|^.*\*\*[^*\n]+:\*\*.*$/gm, "");
   const cue = /\b(?:remember|always|never|from now on|don['’]t\b[^.!?]*\bagain|do not\b[^.!?]*\bagain|I want you to|I prefer|my rule|owner rule)\b|\buse\s+\S+(?:\s+\S+){0,3}\s+for\s+(?:sub[ -]?agents?|agents?)\b/i;
-  return prose.split(/(?<=[.!?])\s+|\n+/).flatMap((sentence) => {
+  const task = /^(?:(?:and|also|then|so)\b,?\s+)?(?:please\s+)?(?:I want you to\s+)?(?:create|build|make|write|add|implement|fix|set up)\b/i;
+  const found = prose.split(/(?<=[.!?])\s+|\n+/).flatMap((sentence) => {
     const text = sentence.trim();
     const plain = text.replace(/\x60[^\x60]*\x60|"[^"\n]*"|“[^”\n]*”|'[^'\n]+'/g, "");
     const modelChoice = /\buse\s+(?:\x60[\w.-]+\x60|"[\w.-]+")\s+for\s+(?:sub[ -]?agents?|agents?)\b/i.test(text);
     if ((!cue.test(plain) && !modelChoice) || /\?\s*$/.test(text) || /^(?:can|could|would|should|did|does|is|are|why|how|what|when|where)\b|^do\s+(?!not\b)/i.test(plain.trim())) return [];
+    return [{ text, plain }];
+  });
+  if (found.length >= 3) return [];
+  return found.flatMap(({ text, plain }) => {
+    if (/\bI remember\b/i.test(plain) || task.test(plain.trim())) return [];
     const cleaned = scrub(text, { longRuns: false }).text.replace(/\s+/g, " ").trim();
     return cleaned ? [cleaned.length > 400 ? cleaned.slice(0, 399).trimEnd() + "…" : cleaned] : [];
   });
@@ -122,9 +136,12 @@ function coveredLearning(notes: Note[], text: string, project: Project | null): 
 /** Capture is local and silent; child and private-path messages are never retained. */
 export function captureUserRules(home: string, message: unknown, project: Project, opts: { subagent?: boolean; now?: Date } = {}): Proposal[] {
   if (opts.subagent || typeof message !== "string" || touchesPrivate({ cwd: "", command: message })) return [];
+  // Most prompts hold no rule: decide that before reading any note, proposal or rejection.
+  const sentences = userRuleSentences(message);
+  if (!sentences.length) return [];
   const seen = seenBefore(home, loadNotes(home).notes);
   const out: Proposal[] = [];
-  for (const text of userRuleSentences(message)) {
+  for (const text of sentences) {
     const global = /\b(?:all projects|everywhere)\b/i.test(message);
     const scope = global ? null : project;
     if (coveredLearning(seen.notes, text, scope)) continue;
@@ -133,6 +150,14 @@ export function captureUserRules(home: string, message: unknown, project: Projec
       kind: "decision", text, errors: [], tested: false, source: "user", evidence: [] }, out, scope);
   }
   return out;
+}
+
+/** Inbox rule proposals are derived state: one the current rules reject (pasted structure, narrative, a task) goes. */
+function dropStaleUserProposals(home: string): void {
+  for (const proposal of listProposals(home)) {
+    if (proposal.source !== "user" || userRuleSentences(proposal.text).length) continue;
+    try { rmSync(join(inboxDir(home), `${proposal.id}.json`), { force: true }); } catch { /* best effort */ }
+  }
 }
 
 /** Claude Code replaces each separator (including the colon) individually. */
@@ -287,10 +312,10 @@ export function toolEventFrom(
     }
   }
 
-  // Path: first of input.path, input.file_path, input.filePath, input.file
+  // Path: first of input.path, input.file_path, input.filePath, input.file, input.notebook_path (Claude Code NotebookEdit)
   let path: string | undefined;
   if (typeof input === "object" && input !== null) {
-    for (const key of ["path", "file_path", "filePath", "file"]) {
+    for (const key of ["path", "file_path", "filePath", "file", "notebook_path"]) {
       const val = (input as Record<string, unknown>)[key];
       if (typeof val === "string" && val.trim()) {
         path = val.trim();
@@ -501,8 +526,12 @@ const SOURCE_LINE = /^(?:\d+\s*[|:]\s*)?(?:import\b|from\s+\S+\s+import\b|(?:exp
 /** A line that is only a location (path:line[:col]). */
 const LOCATION_LINE = /^(?:(?:file:\/\/\/|(?:[A-Za-z]:)?[\/\\]|[\w.-]+[\/\\]).*:\d+(?::\d+)?|\S+:\d+(?::\d+)?\)?)$/;
 
-/** Error-like diagnostic, not an echoed source line; prefer whole words without losing specificity. */
-export function errorSignature(error: string, max = 120): string {
+/**
+ * Error-like diagnostic, not an echoed source line; prefer whole words without losing specificity.
+ * `diagnostic` says the text is an exception, error-keyword or known diagnostic line, not a stdout
+ * line or a bare exit status.
+ */
+function signatureOf(error: string, max: number): { text: string; diagnostic: boolean } {
   const lines = error.replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).filter((l) => l.trim());
   const banner = /^(traceback \(most recent call last\):|during handling of the above exception|the above exception was the direct cause|[=_*#~-]{3,}.*[=_*#~-]{3,}$|[=_*#~-]{5,}$)/i;
   const trimmed = lines.map((l) => l.trim());
@@ -514,15 +543,21 @@ export function errorSignature(error: string, max = 120): string {
   // "not recognized": cmd.exe and PowerShell's missing-command error.
   const keyword = /error|fail|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable|unexpected|not recognized/i;
   const diagnostic = /error|cannot|not found|denied|refused|invalid|exception|timed? ?out|mismatch|no such|unable|not recognized/i;
-  // The wrapper is the last resort: "exited with code 1" still beats an empty failure line. When it
-  // comes first (Claude Code: "Exit code N", then all output), the lines after it are stdout, unless
-  // one reads as a keyword-less diagnostic (git "fatal:", "Unknown option", "Could not", "not empty").
-  // Only this branch: the shared regexes above would reorder OMP's signatures.
+  // Keyword-less diagnostics (git "fatal:", "Unknown option", "Could not", "not empty").
+  const plain = /^fatal:|unknown option|could not|not empty/i;
+  // The wrapper is the last resort: "exited with code 1" still beats an empty failure line. Without a
+  // diagnostic, the stdout lines (a JSON line, a banner, usage text) are not the error whether the
+  // wrapper comes first (Claude Code: "Exit code N", then all output) or last (OMP).
+  // Only this tail: the shared regexes above would reorder OMP's signatures.
   const wrapper = trimmed.find((l) => EXIT_WRAPPER.test(l));
-  const hit = exception?.replace(/^E\s+/, "") ?? useful.find((l) => diagnostic.test(l)) ?? useful.find((l) => keyword.test(l)) ??
-    (wrapper === trimmed[0] ? useful.find((l) => /^fatal:|unknown option|could not|not empty/i.test(l)) ?? wrapper : useful[0] ?? wrapper) ?? "";
+  const found = exception?.replace(/^E\s+/, "") ?? useful.find((l) => diagnostic.test(l)) ?? useful.find((l) => keyword.test(l)) ?? useful.find((l) => plain.test(l));
+  const hit = found ?? wrapper ?? useful[0] ?? "";
   // Test runners prefix diagnostics with arrows and bullets (vitest "→", "❯"): not the message.
-  return signatureCut(hit.replace(/^[→❯›»•·*>\s-]+/u, "").replace(/\s+/g, " "), max);
+  return { text: signatureCut(hit.replace(/^[→❯›»•·*>\s-]+/u, "").replace(/\s+/g, " "), max), diagnostic: found !== undefined };
+}
+
+export function errorSignature(error: string, max = 120): string {
+  return signatureOf(error, max).text;
 }
 
 function signatureCut(text: string, max: number): string {
@@ -823,8 +858,12 @@ function identity(body: string): string {
   return firstLine({ body }).replace(/\s+/g, " ").toLowerCase();
 }
 
-/** Record a new proposal unless it repeats a learning applicable to its project. */
-function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[], project: Project | null): boolean {
+/**
+ * Record a new proposal unless it repeats a learning applicable to its project. With `accept`, a
+ * proposal that passed the same checks becomes a note at once (the inbox never sees it); if the
+ * note cannot be written it stays a proposal.
+ */
+function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[], project: Project | null, accept = false): boolean {
   if (touchesPrivate({ cwd: "", command: proposal.text })) return false;
   const head = identity(proposal.text);
   const errors = new Set(proposal.errors.map((error) => error.toLowerCase()));
@@ -832,6 +871,19 @@ function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[], 
   if (seen.notes.some((note) => visibleTo(note, project) && matches(note.body, note.errors))) return false;
   if (seen.proposals.some((p) => (p.project === GLOBAL || p.project === proposal.project) && matches(p.text, p.errors))) return false;
   if (seen.rejected.has(rejectKey("h", head)) || proposal.errors.some((e) => seen.rejected.has(errorKey(proposal.project, e)) || seen.rejected.has(rejectKey("e", e)))) return false;
+  if (accept) {
+    try {
+      // The id derives from the proposal id, so overlapping scans write one note, not two; a note
+      // already holding it (even retired) means this pair was accepted before.
+      const id = `n-${createHash("sha256").update(proposal.id).digest("hex").slice(0, 10)}`;
+      if (loadNotes(home).notes.some((note) => note.id === id)) return false;
+      seen.notes.push(noteFromProposal(home, proposal, id));
+      out.push(proposal);
+      return true;
+    } catch {
+      // fall through to the review flow
+    }
+  }
   seen.proposals.push(proposal);
   saveProposal(home, proposal);
   out.push(proposal);
@@ -841,16 +893,21 @@ function propose(home: string, seen: Seen, proposal: Proposal, out: Proposal[], 
 /**
  * Turn new tool events into proposals: a failure followed within 6 events by a successful changed
  * command of the same program (or an explicit retry after preparation), tool and normalized cwd.
+ * A tested pair in a project with an error pattern is written as a note at once (testedBy
+ * "capture", no inbox file); every other pair waits in the inbox. Both are returned.
  * The cursor makes each event count once; fully processed logs older than
  * EVENT_RETENTION_DAYS are deleted.
  */
 export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): Proposal[] {
   const now = opts?.now ?? new Date();
+  dropStaleUserProposals(home);
   const dir = eventsDir(home);
   if (!existsSync(dir)) return [];
   const cursorFile = join(home, "state", "capture-cursor.json");
   const cursor = readJson<Record<string, number>>(cursorFile, {});
-  const seen = seenBefore(home, notes);
+  // A copy: notes written during this scan count for de-duplication, not for the caller's list.
+  const seen = { ...seenBefore(home, notes), notes: [...notes] };
+  const rejected = seen.rejected;
   const proposals: Proposal[] = [];
   // Evidence survives a waiting cursor, so a later scan cannot reuse an earlier repair, nor pair an
   // already paired failure again (both ends are consumed; a failure and a success never share an offset).
@@ -921,23 +978,39 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
           const error = scrub(failed.error).text;
           const short = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 60);
           // The signature is matched against future raw errors: only credentials are masked in it.
-          const sig = errorSignature(scrub(failed.error, { longRuns: false }).text, 60);
+          const masked = scrub(failed.error, { longRuns: false }).text;
+          const sig = errorSignature(masked, 60);
+          // An owner who dismissed the signature `brain review` prints has dismissed this error.
+          if (rejected.has(rejectKey("e", unmatchedSignature(failed.error)))) {
+            consumed.add(`events:${fileName}#${starts[j] ?? j}`);
+            paired = true;
+            break;
+          }
           const head = cutToTokens(`${prog}: ${short(failedCmd)} fails (${sig}); ${short(fixedCmd)} works`, 50);
           const evidence = [`events:${fileName}#${starts[i] ?? i}-${starts[j] ?? j}`];
           // Reserve the full retained successful command before filling the 800-character body.
           const text = `${head}\n\n${cutToTokens(failedCmd, 20)}\n\n${fixedCmd}\n\nError: ${error}`.slice(0, 800);
           const project = failed.cwd ? resolveProject(home, failed.cwd, {}) : null;
+          // Only a whole diagnostic line is specific enough to fire on its own without review; a cut
+          // prefix ("ModuleNotFoundError: No module named") would match every unrelated failure.
+          const whole = signatureOf(masked, Infinity);
+          const specific = whole.diagnostic && whole.text.length >= 12 && whole.text.length <= 120 && !errorPatternProblem(whole.text);
+          const errors = specific ? [whole.text] : sig && !errorPatternProblem(sig) ? [sig] : [];
+          const projectId = project?.id ?? GLOBAL;
+          // A tested repair of a project's own error with a specific pattern needs no owner: it is
+          // written as a note at once. Untested pairs, global ones, cut patterns and isolated OMP
+          // worktrees (their folder name is not a project) still go to review.
           propose(home, seen, {
             id: proposalId(evidence, text),
             at: nowIso(now),
-            project: project?.id ?? GLOBAL,
+            project: projectId,
             kind: "gotcha",
             text,
-            errors: sig && !errorPatternProblem(sig) ? [sig] : [],
+            errors,
             tested: retriesFailure,
             source: "capture",
             evidence,
-          }, proposals, project);
+          }, proposals, project, retriesFailure && projectId !== GLOBAL && specific && !OMP_WORKTREE.test(failed.cwd));
           consumed.add(`events:${fileName}#${starts[j] ?? j}`);
           paired = true;
           break;
@@ -1041,6 +1114,23 @@ export function listProposals(home: string): Proposal[] {
   return proposals;
 }
 
+/** The note a proposal becomes (under the owner when its project id has since become an alias). */
+function noteFromProposal(home: string, prop: Proposal, id?: string): Note {
+  return createNote(home, {
+    ...(id ? { id } : {}),
+    text: prop.text,
+    project: prop.project === GLOBAL ? GLOBAL : canonical(loadProjects(home), prop.project),
+    kind: prop.kind,
+    errors: prop.errors,
+    evidence: prop.evidence,
+    evidenceRoots: prop.project === GLOBAL ? [] : [projectById(home, prop.project, home).root].filter((root): root is string => !!root),
+    tested: prop.tested,
+    testedBy: "capture",
+    source: prop.source,
+    tags: prop.source === "user" && /\b(?:agents?|sub[ -]?agents?|models?)\b|\b(?:always|never)\s+[a-z]+\b/i.test(prop.text) ? ["brief"] : [],
+  });
+}
+
 /**
  * Accept a proposal: create a note, delete the inbox file, return the note.
  */
@@ -1061,19 +1151,7 @@ export function acceptProposal(home: string, id: string, opts: { env?: NodeJS.Pr
     );
   }
 
-  // Create note (under the owner when its project id has since become an alias)
-  const note = createNote(home, {
-    text: prop.text,
-    project: prop.project === GLOBAL ? GLOBAL : canonical(loadProjects(home), prop.project),
-    kind: prop.kind,
-    errors: prop.errors,
-    evidence: prop.evidence,
-    evidenceRoots: prop.project === GLOBAL ? [] : [projectById(home, prop.project, home).root].filter((root): root is string => !!root),
-    tested: prop.tested,
-    testedBy: "capture",
-    source: prop.source,
-    tags: prop.source === "user" && /\b(?:agents?|sub[ -]?agents?|models?)\b|\b(?:always|never)\s+[a-z]+\b/i.test(prop.text) ? ["brief"] : [],
-  });
+  const note = noteFromProposal(home, prop);
 
   // Delete inbox file
   try {
@@ -1115,13 +1193,6 @@ export function rejectProposal(home: string, id: string, opts: { env?: NodeJS.Pr
   } catch {
     // Ignore
   }
-}
-
-/**
- * Count pending proposals, optionally filtered by project.
- */
-export function pendingCount(home: string, project?: string): number {
-  return listProposals(home).filter((p) => !project || p.project === project || p.project === GLOBAL).length;
 }
 
 const regexCache = new Map<string, RegExp | null>();
@@ -1250,6 +1321,18 @@ export interface UnmatchedError {
   then?: string;
 }
 
+/**
+ * The normalized signature `brain review` prints and `brain dismiss` stores: paths, hex and line
+ * numbers masked, so one error class groups. Capture checks the same key against dismissals.
+ */
+export function unmatchedSignature(error: string): string {
+  return signatureCut(errorSignature(scrub(error).text, Infinity)
+    .replace(/(?:file:\/\/\/)?(?:[A-Za-z]:)?[\/\\]?(?:[\w.@~[\]-]+[\/\\])+[\w.@~[\]-]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)?/g, "<path>")
+    .replace(/\b[\w.-]+\.[a-z]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)/gi, "<path>")
+    .replace(/^\d+:\d+\s+/, "").replace(/\bline\s+\d+\b/gi, "line <n>")
+    .replace(/\b0x[\da-f]+\b|\b[\da-f]{8,}\b/gi, "<hex>"), 120);
+}
+
 /** Recent failed signatures with no visible tested fix, most frequent first. */
 export function unmatchedErrors(home: string, notes: Note[], opts: { days?: number; project?: string; global?: boolean } = {}): UnmatchedError[] {
   const dir = eventsDir(home);
@@ -1259,25 +1342,27 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
   const latest = new Map<string, number>();
   const rejected = readRejected(home);
   const projects = new Map<string, Project>();
+  const fixes = new Map<string, boolean>();
   let names: string[];
   try { names = readdirSync(dir); } catch { return []; }
   for (const name of names.filter((name) => name.endsWith(".jsonl"))) {
     let bytes: Buffer;
     try {
+      // A log last written before the window holds no failure inside it.
+      if (statSync(join(dir, name)).mtimeMs < since) continue;
       bytes = readEventTail(join(dir, name), 0).bytes;
     } catch {
       continue;
     }
     const lines = bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1).toString("utf8").split("\n");
-    // Walking backwards remembers the next success without rescanning for every failure.
-    const next = new Map<string, string | undefined>();
+    // Walking backwards remembers the next success without rescanning for every failure; it is
+    // described (and scrubbed) only when a failure needs it, not for every success in the log.
+    const next = new Map<string, ToolEvent | undefined>();
     for (let i = lines.length - 1; i >= 0; i--) {
       const event = parseEvent(lines[i]!);
       if (!event) continue;
       if (event.ok) {
-        next.set(event.session, touchesPrivate(event) ? undefined : scrub(
-          [event.tool, event.command || event.path].filter(Boolean).join(" ")
-        ).text.replace(/\s+/g, " ").trim().slice(0, 120));
+        next.set(event.session, touchesPrivate(event) ? undefined : event);
         continue;
       }
       const at = Date.parse(event.at);
@@ -1291,12 +1376,11 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
       }
       const scope = project?.id ?? GLOBAL;
       if (opts.project && opts.project !== scope && !(opts.global && scope === GLOBAL)) continue;
-      if (findFix(notes, event.error, project)) continue;
-      const signature = signatureCut(errorSignature(scrub(event.error).text, Infinity)
-        .replace(/(?:file:\/\/\/)?(?:[A-Za-z]:)?[\/\\]?(?:[\w.@~[\]-]+[\/\\])+[\w.@~[\]-]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)?/g, "<path>")
-        .replace(/\b[\w.-]+\.[a-z]+(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?)/gi, "<path>")
-        .replace(/^\d+:\d+\s+/, "").replace(/\bline\s+\d+\b/gi, "line <n>")
-        .replace(/\b0x[\da-f]+\b|\b[\da-f]{8,}\b/gi, "<hex>"), 120);
+      const fixKey = `${scope}\0${event.error}`;
+      let fix = fixes.get(fixKey);
+      if (fix === undefined) fixes.set(fixKey, fix = findFix(notes, event.error, project) !== null);
+      if (fix) continue;
+      const signature = unmatchedSignature(event.error);
       // A bare exit status groups unrelated failures: nothing a note could match.
       if (!signature || EXIT_WRAPPER.test(signature) || rejected.has(rejectKey("e", signature))) continue;
       let row = rows.get(signature);
@@ -1315,7 +1399,7 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
         latest.set(signature, at);
         row.tool = scrub(event.tool).text;
         const then = next.get(event.session);
-        if (then) row.then = then;
+        if (then) row.then = scrub([then.tool, then.command || then.path].filter(Boolean).join(" ")).text.replace(/\s+/g, " ").trim().slice(0, 120);
         else delete row.then;
       }
     }

@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -127,9 +127,12 @@ describe("brain cli", () => {
   it("ranks outcome lines by total firings, not session counts, and limits them to five", async () => {
     const { home, io } = setup();
     const base = { project: "demo", tokens: 0, ms: 0, session: "same" };
+    const fired = new Date(Date.now() - 30 * 60_000);
+    // A minute later: the model had read the fix (an outcome in its fire's second is no evidence).
+    const scored = new Date(fired.getTime() + 60_000);
     for (let i = 0; i < 6; i++) {
-      for (let n = 0; n <= i; n++) logUse(home, { ...base, kind: "fix", id: `fix-${i}` });
-      logUse(home, { ...base, kind: "fixout", id: `fix-${i}`, outcome: "helped" });
+      for (let n = 0; n <= i; n++) logUse(home, { ...base, kind: "fix", id: `fix-${i}` }, fired);
+      logUse(home, { ...base, kind: "fixout", id: `fix-${i}`, outcome: "helped" }, scored);
     }
     const measured = await run(["stats"], io);
     expect(measured.out.split("\n").filter(line => line.startsWith("fix outcomes:"))).toEqual([5, 4, 3, 2, 1].map(i => `fix outcomes: fix-${i} helped 1/missed 0`));
@@ -204,6 +207,26 @@ describe("brain cli", () => {
     // nothing current answers any more, so the retired note shows as history
     expect((await run(["recall", "migration", "order"], io)).out).toMatch(new RegExp(`^${id} \\[procedure, tested\\] Migrations apply in numeric order \\(retired \\d{4}-\\d{2}-\\d{2}\\)`));
     expect((await run(["recall", "migration", "order", "--history"], io)).out).toContain("retired");
+  });
+
+  it("note --replaces saves a correction and validates the target before writing", async () => {
+    const { home, io } = setup();
+    const old = createNote(home, { project: "demo", text: "Migration order\nApply backwards." });
+    const missing = await run(["note", "Missing correction", "--replaces", "n-missing"], io);
+    expect(missing.code).not.toBe(0);
+    expect(missing.err).toContain("no note n-missing");
+    expect(loadNotes(home).notes).toHaveLength(1);
+    const saved = await run(["note", "Migration order\nApply forwards.", "--replaces", old.id], io);
+    expect(saved.code).toBe(0);
+    const notes = loadNotes(home).notes;
+    const replacement = notes.find(note => note.id !== old.id)!;
+    expect(saved.out).toBe(`saved ${replacement.id} (retired ${old.id})`);
+    expect(replacement.replaces).toBe(old.id);
+    expect(notes.find(note => note.id === old.id)).toMatchObject({ retired: expect.any(String), replacedBy: replacement.id });
+    const retired = await run(["note", "Another correction", "--replaces", old.id], io);
+    expect(retired.code).not.toBe(0);
+    expect(retired.err).toContain(`${old.id} is already retired`);
+    expect(loadNotes(home).notes).toHaveLength(2);
   });
 
   it("accepts ids as pasted: brackets, trailing punctuation, upper case", async () => {
@@ -305,11 +328,13 @@ describe("brain cli", () => {
     const { home, cwd, io } = setup();
     const events = join(home, "state", "events");
     mkdirSync(events, { recursive: true });
+    // Relative to now: the unmatched-error window (14 days) must still hold the failures later.
+    const at = (seconds: number) => new Date(Date.now() - 3_600_000 + seconds * 1000).toISOString();
     const rows = [
-      { v: 1, at: "2026-09-27T10:00:00Z", session: "s", cwd, tool: "bash", command: "npm test", ok: false, error: "Error: Cannot find module x" },
-      { v: 1, at: "2026-09-27T10:00:05Z", session: "s", cwd, tool: "bash", command: "npm test extra-target", ok: true },
-      { v: 1, at: "2026-09-27T10:01:00Z", session: "s", cwd, tool: "bash", command: "tsc --noEmit", ok: false, error: "error TS2307: cannot resolve" },
-      { v: 1, at: "2026-09-27T10:01:05Z", session: "s", cwd, tool: "bash", command: "tsc --version", ok: true },
+      { v: 1, at: at(0), session: "s", cwd, tool: "bash", command: "npm test", ok: false, error: "Error: Cannot find module x" },
+      { v: 1, at: at(5), session: "s", cwd, tool: "bash", command: "npm test extra-target", ok: true },
+      { v: 1, at: at(60), session: "s", cwd, tool: "bash", command: "tsc --noEmit", ok: false, error: "error TS2307: cannot resolve" },
+      { v: 1, at: at(65), session: "s", cwd, tool: "bash", command: "tsc --version", ok: true },
     ];
     writeFileSync(join(events, "s.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
     const review = await run(["review"], io);
@@ -327,6 +352,23 @@ describe("brain cli", () => {
     expect(loadNotes(home).notes).toHaveLength(1);
     expect(loadNotes(home).notes[0]?.tested).toBe(false);
     expect((await run(["accept", "p-nope"], io)).code).toBe(1);
+  });
+
+  it("review turns a tested captured fix into a note by itself, without a proposal to accept", async () => {
+    const { home, cwd, io } = setup();
+    const events = join(home, "state", "events");
+    mkdirSync(events, { recursive: true });
+    const at = (seconds: number) => new Date(Date.now() - 3_600_000 + seconds * 1000).toISOString();
+    const rows = [
+      { v: 1, at: at(0), session: "s", cwd, tool: "bash", command: "npm test", ok: false, error: "Error: Cannot find module x" },
+      { v: 1, at: at(5), session: "s", cwd, tool: "bash", command: "npm test --run", ok: true },
+    ];
+    writeFileSync(join(events, "s.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    const review = await run(["review"], io);
+    expect(review.out).not.toMatch(/^p-[0-9a-f]+/m);
+    expect(loadNotes(home).notes).toHaveLength(1);
+    expect(loadNotes(home).notes[0]).toMatchObject({ project: "demo", source: "capture", tested: true, testedBy: "capture" });
+    expect(existsSync(join(home, "state", "inbox")) ? readdirSync(join(home, "state", "inbox")) : []).toEqual([]);
   });
 
   it("check reports load errors with exit 1; stats summarises telemetry", async () => {
@@ -651,7 +693,6 @@ describe("host-independent memory", () => {
     expect(auto).toContain("Edit.ts");
     expect(auto).toContain("Write.ts");
     expect(auto).toContain("MultiEdit.ts");
-    expect(auto).toContain("npm test → Error: dependency missing");
     expect(auto).toContain("Please repair startup");
     expect(readFileSync(planPath, "utf8")).toBe(plan);
     await send({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: join(cwd, "final.ts") } });
@@ -699,7 +740,7 @@ describe("claude-code hook lifecycle", () => {
     expect(JSON.parse(r.out).hookSpecificOutput.additionalContext).toContain("Pin the numpy wheel");
   });
 
-  it("clears the last failure once the same command succeeds, and ignores host noise", async () => {
+  it("saves edited files regardless of command failures and host noise", async () => {
     const { home, cwd, send } = hookSetup();
     await send(failure("npm test", "Error: dependency missing"));
     await send({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: join(cwd, "a.ts") } });
@@ -708,18 +749,6 @@ describe("claude-code hook lifecycle", () => {
     await send({ hook_event_name: "PreCompact" });
     const auto = readWork(home, "demo")?.auto;
     expect(auto).toContain("a.ts");
-    expect(auto).not.toContain("last failure");
-  });
-
-  it("keeps the last failure when only a command with another SHA succeeds", async () => {
-    const { home, send } = hookSetup();
-    await send(failure("git cherry-pick 0123456789abcdef0123456789abcdef01234567", "error: could not apply 0123456... conflict in src/x.ts"));
-    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "git cherry-pick fedcba9876543210fedcba9876543210fedcba98" } });
-    await send({ hook_event_name: "PreCompact" });
-    const auto = readWork(home, "demo")?.auto;
-    expect(auto).toContain("last failure");
-    expect(auto).toContain("last failure: git cherry-pick *** →");
-    expect(auto).not.toMatch(/\*\*\*[0-9a-f]{6}/);
   });
 
   it("takes the human ask, not harness rows, and falls back to the last-prompt row", async () => {

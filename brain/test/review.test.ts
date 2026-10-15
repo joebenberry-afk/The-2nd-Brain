@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acceptProposal, listProposals, pendingCount, rejectProposal, errorSignature, findFix, scanCommits, scanEvents } from "../src/capture.ts";
+import { acceptProposal, listProposals, rejectProposal, errorSignature, findFix, scanCommits, scanEvents } from "../src/capture.ts";
 import { convertV3 } from "../src/convert.ts";
 import { createNote, loadNotes } from "../src/notes.ts";
 import secondBrain, { type HostLike } from "../src/omp.ts";
@@ -477,13 +477,13 @@ it("review lists this project's and global proposals, and counts the rest (--all
   expect(await review()).toBe("nothing to review here; +1 in other projects (brain review --all)");
 });
 
-it("a proposal under an id that became an alias is listed, counted and accepted under its owner", () => {
+it("a proposal under an id that became an alias is listed and accepted under its owner", () => {
   const home = tmp();
   mkdirSync(join(home, "state", "inbox"), { recursive: true });
   writeFileSync(join(home, "state", "inbox", "p-0123456789.json"), JSON.stringify({ id: "p-0123456789", at: new Date().toISOString(), project: "old", kind: "gotcha", text: "proposal from old", tested: false, errors: [], evidence: [], source: "capture" }));
   writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { owner: { aliases: ["old"] } } }));
   expect(listProposals(home)[0]?.project).toBe("owner");
-  expect(pendingCount(home, "owner")).toBe(1);
+  expect(listProposals(home)).toHaveLength(1);
   const note = acceptProposal(home, "p-0123456789");
   expect(note.project).toBe("owner");
   expect(existsSync(join(home, "notes", "owner", `${note.id}.md`))).toBe(true);

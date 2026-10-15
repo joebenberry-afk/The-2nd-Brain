@@ -29,6 +29,16 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     throw new SyncError(`${home} is not a git repository`);
   }
 
+  // A commit on a detached HEAD, or in the middle of a rebase/merge/bisect, leaves the branch once the
+  // owner returns to it: nothing is staged or committed.
+  const inProgress = ["MERGE_HEAD", "BISECT_LOG", "CHERRY_PICK_HEAD", "REVERT_HEAD"].some((name) => {
+    const path = git(home, "rev-parse", "--git-path", name).stdout.trim();
+    return path !== "" && existsSync(isAbsolute(path) ? path : join(home, path));
+  });
+  if (git(home, "symbolic-ref", "-q", "HEAD").status !== 0 || inProgress || rebaseInProgress(home)) {
+    throw new SyncError("HEAD is detached, or a rebase, merge or bisect is in progress; check out your branch and finish it, then run brain sync (nothing was committed)");
+  }
+
   // The SYNC_PATHS that exist on disk or are tracked (so deleting all of notes/ is committed too)
   const existingPaths: string[] = [];
   for (const path of SYNC_PATHS) {

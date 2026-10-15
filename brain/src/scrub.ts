@@ -8,6 +8,28 @@ const SHORT_WORDS = new Set(["pass", "pgpass", "pwd"]);
 const KEY_OWNERS = new Set(["api", "private", "access", "secret", "client", "auth", "signing", "encryption", "master"]);
 
 /**
+ * A reference to a secret, not the secret: $DB_PASSWORD, ${{ secrets.X }}, %X%, process.env.X,
+ * os.environ[…], $env:X. Each form names one variable and nothing else, so a literal riding after a
+ * reference (`process.env["K"]||"hunter2"`, `os.getenv('K', 'hunter2')` quoted whole) stays masked.
+ */
+const REFERENCE = /^(?:\$\{?[A-Z_][A-Z0-9_]*\}?|\$\{\{[^}]*(?:\}\})?|%[A-Za-z_][A-Za-z0-9_]*%|\$env:\w+|env:\w+|process\.env(?:\.\w+)+|(?:process\.env|os\.environ)\[["']?\w+["']?\]|(?:os\.environ\.get|os\.getenv|Deno\.env\.get)\(["']?\w+["']?\)?)[)'"}\]]*$/;
+/** A configuration size or switch, not a secret: password_min_length=12 (unless the value is generated-looking). */
+const SETTING_SUFFIX = /^(?:length|size|min|max|count|ttl|expiry|enabled|required|policy)$/;
+
+/**
+ * A value that cannot be a secret: a reference, true/false/null/undefined, fetch's `credentials`
+ * enum, a setting named after a credential (password_min_length), PWD=<directory>.
+ */
+function benignValue(name: string, value: string): boolean {
+  const bare = value.replace(/^["']+|["']+$/g, "");
+  if (REFERENCE.test(bare) || /^(?:true|false|null|undefined)$/i.test(bare)) return true;
+  if (name === "credentials" && /^(?:include|omit|same-origin)$/.test(bare)) return true;
+  if (name === "PWD" && /^(?:[/~]|[A-Za-z]:[\\/])/.test(bare)) return true;
+  const last = name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[_.-]+/).filter(Boolean).at(-1) ?? "";
+  return SETTING_SUFFIX.test(last) && !tokenLike(bare);
+}
+
+/**
  * Whether a key name holds a credential: one of its parts (split on _ . - and camelCase) is a
  * credential word (DB_PASSWORD, clientSecret, aws_secret_access_key), a word pair names a key
  * (api_key, private-key, accessKey), a name ending in "key" holds a generated-looking value
@@ -15,6 +37,7 @@ const KEY_OWNERS = new Set(["api", "private", "access", "secret", "client", "aut
  * "Unexpected token: }" stays).
  */
 function isCredential(name: string, value: string): boolean {
+  if (benignValue(name, value)) return false;
   const parts = name
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .toLowerCase()
@@ -75,6 +98,15 @@ export function scrub(text: string, opts: { longRuns?: boolean; tagRuns?: boolea
   result = result.replace(/\bglpat-[A-Za-z0-9_-]{20,}/g, "***"); // GitLab
   result = result.replace(/\bnpm_[A-Za-z0-9]{36}\b/g, "***"); // npm
   result = result.replace(/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, "***"); // SendGrid
+  result = result.replace(/\bhf_[A-Za-z0-9]{30,}/g, "***"); // Hugging Face
+  result = result.replace(/\bshp(?:at|ss|ca|pa)_[a-fA-F0-9]{32}/g, "***"); // Shopify
+  result = result.replace(/\bpypi-AgE[A-Za-z0-9_-]{50,}/g, "***"); // PyPI
+  result = result.replace(/\bhv[sb]\.[A-Za-z0-9_-]{24,}/g, "***"); // HashiCorp Vault
+  result = result.replace(/\bdop_v1_[a-f0-9]{64}/g, "***"); // DigitalOcean
+  result = result.replace(/\bya29\.[A-Za-z0-9_-]{20,}/g, "***"); // Google OAuth access token
+  result = result.replace(/\b\d{8,10}:AA[A-Za-z0-9_-]{33}\b/g, "***"); // Telegram bot
+  result = result.replace(/\b[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38}\b/g, "***"); // Discord bot
+  result = result.replace(/([?&]sig=)[A-Za-z0-9%+/_=-]{8,}/g, "$1***"); // Azure SAS signature
   result = result.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "***"); // JWT
 
   // Private key blocks (PEM, OpenSSH), also when the output was cut before the END line

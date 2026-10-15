@@ -1,7 +1,9 @@
 /** Optional relevance check over the lexical answer; failures preserve that answer. */
 import { findNote, type Note } from "./notes.ts";
-import { answerWithHits, fold, type AnswerOptions } from "./search.ts";
+import { answerWithHits, fold, plainHit, renderHit, renderHits, scoreQuery, type AnswerOptions } from "./search.ts";
+import { visibleTo } from "./project.ts";
 import { scrub } from "./scrub.ts";
+import { TORA_ADD, TORA_FLOOR, type ToraScorer, type ToraScores } from "./tora.ts";
 
 /** 0.75 gave 0-2 wrong answers across four runs of the same 54 real queries (Jev drifts about ±0.02); 0.78 gave 0 in all four. */
 export const JUDGE_THRESHOLD = 0.78;
@@ -77,35 +79,117 @@ export function holdsPhrase(text: string, query: string): boolean {
   return !!words && new RegExp(`(?<![\\p{L}\\p{N}])${words.join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`, "u").test(fold(text));
 }
 
-export async function judgedAnswer(notes: Note[], query: string, opts: AnswerOptions, judge?: Judge) {
-  const lexical = { ...answerWithHits(notes, query, opts), judged: false, dropped: 0 };
-  if (!judge || !lexical.hits || findNote(notes, query)) return lexical;
+/**
+ * What Tora scored for one recall. Each `c` row is [id, cosine, Jev probability, "l"exical | "t"ora-added,
+ * kept]: probability and kept are null when Jev gave no usable verdict (skipped, failed); kept is 1 when
+ * the answer's own rule kept it (0.78, or the phrase floor for a phrase-holding lexical candidate), else 0.
+ */
+export interface ToraRecall {
+  ms: number;
+  cut: number;
+  floor: number;
+  /** Every candidate scored under the floor: Jev could have been skipped. */
+  skip: boolean;
+  enforced: boolean;
+  c: [string, number, number | null, "l" | "t", 0 | 1 | null][];
+}
+export interface Answer { text: string; hits: number; ids: string[]; docExcerpt?: string; judged: boolean; dropped: number; tora?: ToraRecall }
+
+/** Jev-kept Tora additions follow whatever today's path answers (a doc heading included) as ordinary hits, within the usual three-line cap. */
+function withAdditions(result: Answer, extra: Note[], opts: AnswerOptions): Answer {
+  const shown = extra.slice(0, Math.max(0, Math.max(1, Math.min(3, opts.limit ?? 3)) - result.hits));
+  if (!shown.length) return result;
+  const hits = shown.map(note => plainHit(note, opts));
+  return {
+    ...result,
+    text: result.hits ? [result.text, ...hits.map(hit => renderHit(hit))].join("\n") : renderHits(hits),
+    hits: result.hits + hits.length,
+    ids: [...result.ids, ...shown.map(note => note.id)],
+  };
+}
+
+/**
+ * `tora` adds up to TORA_ADD notes the lexical search missed as extra candidates in the same Jev request
+ * (a note appears only if Jev keeps it). Every candidate under TORA_FLOOR means Jev could be skipped:
+ * that is only logged, unless `enforce`. An absent or failed Tora leaves the answer as it was.
+ */
+export async function judgedAnswer(notes: Note[], query: string, opts: AnswerOptions, judge?: Judge, tora?: ToraScorer, enforce = false): Promise<Answer> {
+  const exact = findNote(notes, query);
+  const scored = exact ? undefined : scoreQuery(notes, query);
+  const lexical: Answer = { ...answerWithHits(notes, query, opts, scored), judged: false, dropped: 0 };
+  if (!judge || exact || (!lexical.hits && !tora)) return lexical;
+  const lexicalIds = new Set(lexical.ids);
   const candidates = lexical.ids.flatMap(id => {
     const note = notes.find(n => n.id === id);
     return note && !note.private ? [{ id, text: judgeText(note) }] : [];
   });
   const phrased = new Set(candidates.filter(c => holdsPhrase(notes.find(n => n.id === c.id)!.body, query)).map(c => c.id));
+  // The pool follows lexical visibility; private and retired notes are never added (a retired lexical
+  // candidate is scored only, so the floor sees it).
+  let found: ToraScores | undefined;
+  let additions: Note[] = [];
+  if (tora) {
+    const pool = notes.filter(n => !n.private && (lexicalIds.has(n.id) || (!n.retired && (opts.all || visibleTo(n, opts.project)))));
+    try {
+      found = await tora(scrub(query).text, pool.map(n => ({ id: n.id, text: n.body })));
+    } catch {
+      found = undefined;
+    }
+    if (found) {
+      const scores = found.scores;
+      additions = pool
+        .filter(n => !lexicalIds.has(n.id) && !n.retired && (scores.get(n.id) ?? -1) >= found!.cut)
+        .sort((a, b) => scores.get(b.id)! - scores.get(a.id)!)
+        .slice(0, TORA_ADD);
+    }
+  }
+  if (!lexical.hits && !additions.length) return lexical;
+  const sent = [...candidates, ...additions.map(n => ({ id: n.id, text: judgeText(n) }))];
+  const wouldSkip = !!found && sent.length > 0 && sent.every(c => (found!.scores.get(c.id) ?? Infinity) < TORA_FLOOR);
+  const skipJev = enforce && wouldSkip;
+  // Only all-public note answers can fall through to a document. Judge that conditional
+  // heading in the same request, but never promote it while any lexical note survives.
+  const fallback = !skipJev && candidates.length && candidates.length === lexical.ids.length && opts.home && opts.project?.root && !opts.noDoc
+    ? answerWithHits(notes, query, { ...opts, exclude: new Set([...opts.exclude ?? [], ...lexical.ids]) }, scored)
+    : undefined;
+  const batchedDoc = fallback?.docExcerpt ? { id: fallback.ids[0]!, text: scrub(fallback.docExcerpt).text.slice(0, 450) } : undefined;
+  const bar = (id: string) => phrased.has(id) ? PHRASE_FLOOR : JUDGE_THRESHOLD;
+  let verdicts: Map<string, number> | undefined;
+  const done = (answer: Answer): Answer => {
+    if (!found || !sent.length) return answer;
+    const c = sent.flatMap((s): ToraRecall["c"] => {
+      const cosine = found!.scores.get(s.id);
+      const p = verdicts?.get(s.id);
+      const judged = probability(p) ? p : null;
+      return cosine === undefined ? [] : [[s.id, cosine, judged, lexicalIds.has(s.id) ? "l" : "t", judged === null ? null : judged >= bar(s.id) ? 1 : 0]];
+    });
+    return { ...answer, tora: { ms: found.ms, cut: found.cut, floor: TORA_FLOOR, skip: wouldSkip, enforced: enforce, c } };
+  };
   let result = lexical;
   try {
-    if (candidates.length) {
-      const scores = await judge(scrub(query).text, candidates);
-      if (!scores || candidates.some(c => !probability(scores.get(c.id)))) return lexical;
-      const dropped = candidates.filter(c => scores.get(c.id)! < (phrased.has(c.id) ? PHRASE_FLOOR : JUDGE_THRESHOLD)).map(c => c.id);
+    let kept: Note[] = [];
+    if (sent.length) {
+      verdicts = skipJev ? undefined : await judge(scrub(query).text, batchedDoc ? [...sent, batchedDoc] : sent);
+      const scores = verdicts;
+      // Lexical candidates are today's answer: an unusable verdict for them fails open to it. An unusable verdict for a Tora addition only costs that addition.
+      if (!skipJev && candidates.length && (!scores || candidates.some(c => !probability(scores.get(c.id))))) return lexical;
+      const dropped = candidates.filter(c => !scores || scores.get(c.id)! < bar(c.id)).map(c => c.id);
+      kept = scores ? additions.filter(n => probability(scores.get(n.id)) && scores.get(n.id)! >= bar(n.id)).sort((a, b) => scores.get(b.id)! - scores.get(a.id)!) : [];
       opts = { ...opts, exclude: new Set([...opts.exclude ?? [], ...dropped]) };
-      result = { ...(dropped.length ? answerWithHits(notes, query, opts) : lexical), judged: true, dropped: dropped.length };
+      result = { ...(dropped.length ? dropped.length === lexical.ids.length && fallback ? fallback : answerWithHits(notes, query, opts, scored) : lexical), judged: !!scores, dropped: dropped.length };
     }
     // A plan-doc heading (all notes dropped, or none matched) is checked the same way. A doc the
     // query names by file (its outline) is what was asked for and is not judged.
     if (result.docExcerpt) {
       const id = result.ids[0]!;
-      const scores = await judge(scrub(query).text, [{ id, text: scrub(result.docExcerpt).text.slice(0, 450) }]);
-      if (!scores || !probability(scores.get(id))) return result;
+      const scores = batchedDoc?.id === id ? verdicts : await judge(scrub(query).text, [{ id, text: scrub(result.docExcerpt).text.slice(0, 450) }]);
+      if (!scores || !probability(scores.get(id))) return done(withAdditions(result, kept, opts));
       const keep = scores.get(id)! >= JUDGE_THRESHOLD;
-      result = { ...(keep ? result : answerWithHits(notes, query, { ...opts, noDoc: true })), judged: true, dropped: result.dropped + (keep ? 0 : 1) };
+      result = { ...(keep ? result : answerWithHits(notes, query, { ...opts, noDoc: true }, scored)), judged: true, dropped: result.dropped + (keep ? 0 : 1) };
     }
-    return result;
+    return done(withAdditions(result, kept, opts));
   } catch {
-    return result;
+    return done(result);
   }
 }
 

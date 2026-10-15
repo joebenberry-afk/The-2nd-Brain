@@ -393,6 +393,15 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
 }
 
 /**
+ * A project id that only names a folder: projects.json does not list it and the checkout has no git
+ * remote. OMP's isolated subagents run in such a scratch copy of their parent's checkout
+ * (~/.omp/wt/<id>/m): every copy is called "m", and none of them owns the parent's notes.
+ */
+export function folderOnly(home: string, project: Project): boolean {
+  return !loadProjects(home)[project.id] && !(project.root && gitRemote(project.root));
+}
+
+/**
  * Whether a caller sees its own notes or applicable globals. `brief` describes behavior,
  * never project scope; remaining global tags must share a project tag.
  */

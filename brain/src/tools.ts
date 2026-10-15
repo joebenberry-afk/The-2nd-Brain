@@ -1,7 +1,8 @@
 /** Shared Brain tools; transports supply identity, rendering and telemetry. */
-import { createNote, differentBody, findSameHeadline, GLOBAL, KINDS, loadNotes, upgradeNote, type Kind } from "./notes.ts";
+import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, upgradeNote, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { judgedAnswer, typesafeJudge, typesafePairJudge } from "./judge.ts";
+import { judgedAnswer, typesafeJudge, typesafePairJudge, type ToraRecall } from "./judge.ts";
+import { toraScorer } from "./tora.ts";
 import type { UseKind } from "./telemetry.ts";
 import { stateSaved, writeWork } from "./work.ts";
 import { noteHint } from "./tidy.ts";
@@ -22,7 +23,7 @@ export interface ToolContext {
   edited?: string[];
 }
 
-type ToolResult = { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[]; judged?: boolean; dropped?: number };
+type ToolResult = { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[]; judged?: boolean; dropped?: number; tora?: ToraRecall };
 
 export interface BrainTool {
   name: string;
@@ -53,18 +54,19 @@ export const brainTools: BrainTool[] = [
     async run(params, { home, cwd, env }) {
       const query = requireString(params.query, "query");
       const project = resolveProject(home, cwd, env);
-      return { ...await judgedAnswer(loadNotes(home).notes, query, { home, project, all: params.all === true }, typesafeJudge(env)), query, kind: "recall", project: project.id };
+      return { ...await judgedAnswer(loadNotes(home).notes, query, { home, project, all: params.all === true }, typesafeJudge(env), toraScorer(env), env.BRAIN_TORA_SKIP === "on"), query, kind: "recall", project: project.id };
     },
   },
   {
     name: "brain_note",
-    description: "Save what the repo cannot tell you: a decision and why, an environment gotcha with its error line, what failed before, an owner preference. Not facts readable from code.",
+    description: "Save what the repo cannot tell you: a decision and why, an environment gotcha with its error line, what failed before, an owner preference. Not facts readable from code. replaces: id of a note this corrects.",
     params: {
       text: { type: "string", description: "the learning; first line is the headline" },
       kind: { type: "string", description: `one of ${KINDS.join(", ")}`, optional: true },
       error: { type: "string", description: "the error message this fixes", optional: true },
       tested: { type: "boolean", description: "you verified it works", optional: true },
       global: { type: "boolean", description: "useful beyond this project", optional: true },
+      replaces: { type: "string", description: "id of a note this corrects", optional: true },
     },
     async run(params, { home, cwd, env, sub, session, edited }) {
       const text = requireString(params.text, "text");
@@ -74,7 +76,12 @@ export const brainTools: BrainTool[] = [
       const error = typeof params.error === "string" && params.error.trim() ? params.error.trim() : undefined;
       const project = resolveProject(home, cwd, env);
       const scope = params.global === true ? GLOBAL : project.id;
-      const same = findSameHeadline(loadNotes(home).notes, text, scope, project.tags);
+      const notes = loadNotes(home).notes;
+      const replaces = params.replaces === undefined ? undefined : requireString(params.replaces, "replaces");
+      const old = replaces === undefined ? undefined : findNote(notes, replaces);
+      if (replaces !== undefined && !old) throw new Error(`no note ${replaces}`);
+      if (old?.retired) throw new Error(`${old.id} is already retired`);
+      const same = replaces === undefined ? findSameHeadline(notes, text, scope, project.tags) : undefined;
       if (same && differentBody(same, text)) return { text: `not saved: ${same.id} has this headline with a different body; use a new headline, or \`brain retire ${same.id}\` first`, kind: "note", project: project.id };
       // Only a parent can vouch for a project fix; global fixes need the owner's confirmation.
       const wantsTested = params.tested === true;
@@ -86,8 +93,9 @@ export const brainTools: BrainTool[] = [
         return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}`, kind: "note", project: project.id };
       }
       const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });
+      if (old) retireNote(home, old.id, note.id);
       const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env));
-      return { text: `saved ${note.id}${untested}${hint}`, kind: "note", project: project.id };
+      return { text: `saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${hint}`, kind: "note", project: project.id };
     },
   },
   {
@@ -98,7 +106,7 @@ export const brainTools: BrainTool[] = [
       const project = resolveProject(home, cwd, env);
       if (sub) return { text: "not saved: working state belongs to the parent session", project: project.id };
       const work = writeWork(home, project.id, requireString(params.text, "text"));
-      return { text: stateSaved(work), kind: "state", project: project.id };
+      return { text: stateSaved(work, home, project), kind: "state", project: project.id };
     },
   },
 ];

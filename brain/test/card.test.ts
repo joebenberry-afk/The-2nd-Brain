@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CARD_BUDGET, cardCandidates, rankForCard, renderCard } from "../src/card.ts";
+import { CARD_BUDGET, cardCandidates, LEAN_LINE, rankForCard, renderCard } from "../src/card.ts";
 import { createNote, loadNotes, saveNote, type Note } from "../src/notes.ts";
 import type { Project } from "../src/project.ts";
 import { cutToTokens, estimateTokens } from "../src/util.ts";
@@ -70,32 +70,43 @@ describe("card", () => {
     expect(ranked.map(note => note.id)).toEqual([live.id, stale.id]);
   });
 
-  it("leads with where we left off, stays within budget, and names the tools", () => {
+  it("keeps an expired note behind a live one even when only the expired one matches the prompt", () => {
+    const home = tmp();
+    const stale = createNote(home, { text: "Authentication cookie token refresh middleware", project: "demo", kind: "fact", staleAfter: "2000-01-01" });
+    const live = createNote(home, { text: "Authentication configuration", project: "demo", kind: "gotcha", tested: true });
+    const ranked = rankForCard([stale, live], project, "", NOW, home, "cookie token refresh middleware");
+    expect(ranked.map(note => note.id)).toEqual([live.id, stale.id]);
+  });
+
+  it("leads with where we left off, stays within budget, and leaves tool guidance to resident tools", () => {
     const home = tmp();
     for (let i = 0; i < 12; i++) {
       createNote(home, { text: `gotcha number ${i} ${"with a long explanation ".repeat(8)}`, project: "demo", kind: "gotcha", tested: true });
     }
     writeWork(home, "demo", "Goal: ship login fix. Next: patch refresh.");
-    writeAuto(home, "demo", { edited: ["src/auth.ts"], failure: "`npm test` → TypeError", ask: "fix login" });
+    writeAuto(home, "demo", { edited: ["src/auth.ts"], ask: "fix login" });
     const card = renderCard(home, loadNotes(home).notes, project, { tools: true, now: NOW });
     const lines = card.split("\n");
     expect(lines[0]).toMatch(/^Brain · demo/);
     expect(lines[1]).toMatch(/^Where we left off/);
     expect(card).toContain("- edited: src/auth.ts");
     expect(card).toContain("Known here:");
-    expect(card).toContain("brain_state(");
+    expect(card).not.toMatch(/brain_recall\(|brain_note\(|brain_state\(/);
+    expect(lines.at(-1)).toBe(LEAN_LINE);
     expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
     expect(renderCard(home, loadNotes(home).notes, project, { now: NOW })).toContain('brain note "<text>"');
   });
 
-  it("mentions waiting proposals", () => {
+  it("keeps owner-facing proposal counts out of the card", () => {
     const home = tmp();
     mkdirSync(join(home, "state", "inbox"), { recursive: true });
     writeFileSync(
       join(home, "state", "inbox", "p-1.json"),
       JSON.stringify({ id: "p-1", at: "2026-09-27T00:00:00Z", project: "demo", kind: "gotcha", text: "x", errors: [], tested: true, source: "capture", evidence: [] }),
     );
-    expect(renderCard(home, [], project, { now: NOW })).toContain("1 proposal waiting");
+    expect(renderCard(home, [], project, { now: NOW })).toBe("");
+    const note = createNote(home, { text: "Shared fact", project: "demo" });
+    expect(renderCard(home, [note], project, { now: NOW })).not.toMatch(/proposal|brain review/);
   });
 });
 
@@ -132,9 +143,10 @@ describe("card completeness and scope", () => {
     const note = createNote(home, { text: "Shared fact", project: "demo" });
     const card = renderCard(home, [note], project, { tools: true, subagent: true });
     expect(card).toContain(note.body);
-    expect(card).toContain("brain_recall(");
+    expect(card).not.toContain("brain_recall(");
     expect(card).not.toContain("brain_note(");
     expect(card).not.toMatch(/parent|Where we left off|brain_state/);
+    expect(renderCard(home, [note], project, { subagent: true })).toContain('brain recall "<query>"');
   });
 
   it("ranks the first prompt ahead of unrelated static rank and previous work", () => {
@@ -184,9 +196,7 @@ describe("card completeness and scope", () => {
     expect(shown.length).toBeGreaterThanOrEqual(3);
     expect(shown.length).toBeLessThan(5);
     expect(card).not.toContain("…");
-    expect(card.split("\n").at(-1)).toContain("brain_recall(");
-    expect(card.split("\n").at(-1)).toContain("brain_note(");
-    expect(card.split("\n").at(-1)).toContain("brain_state(");
+    expect(card.split("\n").at(-1)).toBe(LEAN_LINE);
     expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
     for (const line of card.split("\n").filter((line) => line.startsWith("- [note]"))) {
       expect(notes.some((note) => line.includes(note.body))).toBe(true);
@@ -262,7 +272,7 @@ describe("recurring known fix", () => {
 
   it("keeps a recurring fix too long for its parent slot as an ordinary note", () => {
     const home = tmp();
-    const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(96), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
+    const long = createNote(home, { text: "Long project gotcha " + "with detail ".repeat(60), project: "demo", kind: "gotcha", tested: true, errors: ["long failure"] });
     const before = renderCard(home, loadNotes(home).notes, project, { tools: true, now: NOW });
     expect(before).toContain(long.id);
     for (const s of ["a", "b", "c"]) logUse(home, { kind: "fix", project: "demo", tokens: 1, ms: 1, session: s, sub: false, id: long.id }, NOW);

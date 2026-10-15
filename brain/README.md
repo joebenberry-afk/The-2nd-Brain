@@ -66,11 +66,40 @@ are dropped (0.75 let 1-2 wrong answers through on reruns of the same 54 queries
 still applies. Only the scrubbed query and note body text (whitespace collapsed, scrubbed, then
 cut to 450 characters, so a secret at the cut is masked whole) are sent. Private notes are never sent and remain lexical, unjudged.
 A plan-doc heading answer (its heading and best-matching paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.
+When a doc heading could become the fallback answer, it is checked in the same request as the
+notes, so a rejected note no longer costs a second sequential call (54-query replay: 44 → 39
+requests, 58 → 64 questions); surviving notes still win over the heading.
 Set `BRAIN_JUDGE=off` to opt out; without a key, or on timeout, HTTP or parse errors, recall
 **fails open** to its unchanged lexical answer. Calls take about 300 ms, with a 5-second
 timeout. A small per-process cache avoids repeated calls for the same query, note id and text.
 The endpoint defaults to `https://api.typesafe.ai` (`TYPESAFE_BASE_URL` overrides it).
 Recall telemetry retains query/ids and adds `judged` (a successful check) and `dropped` (count).
+
+**Isolated subagents.** An OMP isolated child runs in a scratch copy (`~/.omp/wt/<id>/m`) whose folder
+names no project; a child whose own folder is undeclared and has no git remote works for its live
+parent's project — card, recall, notes, known fixes and logged events — instead of a phantom `m`
+(61 child sessions in one week had run with no project notes at all).
+
+**Tora (optional local scorer).** While a Tora session (a local EmbeddingGemma 2 scorer that lives
+as long as its agent session) is running, judged recall asks it to score the query against every
+visible, non-private, non-retired note (`%LOCALAPPDATA%\tora\sessions\<pid>.json` says where it
+listens; a stale file whose process is gone is ignored). The two best notes at or above Tora's own
+confidence cut that the lexical search missed join the lexical candidates in the same Jev request;
+they appear, after whatever recall would answer without Tora (a plan-doc heading included, still
+checked as before), only if Jev keeps them (0.78), within the usual three
+lines. Tora only adds: it never removes or replaces that answer, and it is **optional and fails open**:
+no session, a refused or slow (0.8 s) call, or a malformed answer leaves recall exactly as it was. `BRAIN_TORA=off` disables it.
+Jev still needs `TYPESAFE_API_KEY`; without a judge, Tora is not asked.
+When every candidate scores under the floor (0.70), the Jev call could be skipped. That is only
+logged (**shadow**) unless `BRAIN_TORA_SKIP=on` enforces it: then no Jev call is made for the
+candidates, they are dropped like a rejected batch (`judged` is false unless the doc check still ran), and the doc fallback applies as usual. Recall rows gain `tora` (`ms`, `cut`, `floor`,
+`skip`, `enforced`, and `c`: `[id, cosine, Jev probability, "l"exical | "t"ora-added, kept]` per candidate; `kept` is 1 when the
+answer kept it by its own rule (0.78, or the phrase floor), 0 when dropped, null when Jev gave no verdict)
+only when Tora answered. `brain stats` summarises them: recalls scored, candidates Tora added and
+Jev kept, recalls the floor would skip, `lost` (Jev-kept candidates inside those: answers enforcing
+would have lost), and kept candidates scoring under the floor. The last line is the verdict:
+`skip floor: ready` only when `lost` is 0 and at least 150 Jev-kept candidates carry a Tora score;
+otherwise `not ready` with the reason. Set `BRAIN_TORA_SKIP=on` only after it says ready.
 
 **Tidy and note usage.** `brain tidy [--all] [--days N]` is a read-only report of duplicate or
 contradictory notes and active notes older than N days (default 30) with no recent use. Without
@@ -79,7 +108,10 @@ pairs are checked in batches of at most 20; private text never leaves the machin
 failures leave lexical suggestions intact. Retire commands are suggestions only, keeping the
 newer note. New public CLI/tool notes can append a duplicate/contradiction hint; no hint changes
 the normal reply, and subagents skip it. Local per-note telemetry counts recalls, explicit id
-opens, rendered card appearances and fix fires across the current and rotated logs.
+opens, rendered card appearances and fix fires across the current and rotated logs. One 1 MiB
+telemetry generation holds about two weeks, so `brain tidy` and `brain stats` name the window
+the retained rows actually cover (`Unused 17d, telemetry since …; 30d asked`) and judge unused
+notes only within it.
 `brain stats --days N` reports used/never-used active notes across the Brain home, like its
 other usage totals; retained telemetry, not an unlimited lifetime history, defines that window.
 
@@ -89,14 +121,18 @@ lets the Brain read a project's own plan files: only headings and the text under
 (YAML front matter is skipped),
 never code. A working state line `See: docs/LOOP.md#checkpoint` is shown as that section's current
 text wherever the state appears (card, `brain state`), so the state never drifts from the
-repo; a missing file or heading shows `anchor missing: …`, never an old copy.
+repo; a missing file or heading shows `anchor missing: …`, never an old copy. Saving a state
+whose anchor resolves to nothing already says `anchor missing: …`. An anchor written inside a
+sentence (`… Next: patch it. See: docs/LOOP.md#checkpoint.`) is moved onto its own line when the
+state is saved, trailing punctuation dropped, so it renders and is checked like one written alone.
+A bare section number (`#17`, `#9.1`) names the heading numbered that way (`## 17. Scoreboard`).
 
 Recall searches the whole registered section, preferring more distinct query terms and then heading matches; unnamed queries need at least two distinct matching terms. `brain project docs suggest [-n N]` (default 5) ranks checkout Markdown files by distinct silent or doc-answered queries logged locally in the last 30 days, skips registered docs, and prints explicit `brain project docs add <path>` commands. It never registers files itself or sends scanned docs to a judge. `--project <id>` uses that project's existing declared checkout when run elsewhere. Scanning uses git-tracked Markdown when available, otherwise a bounded walk excluding hidden folders and `node_modules` (at most 2,000 files, 512 KiB each).
 
 ## 2. Verify in the first sessions
 
 1. **Start card.** Start OMP in a project: the first turn carries a hidden `brain.card` message
-   (≤ 400 tokens: where we left off, up to five complete notes ranked by the first prompt);
+   (≤ 320 tokens: where we left off, up to five complete notes ranked by the first prompt);
    later prompts add nothing, and a session resumed in a new OMP process (restart,
    `/resume`) keeps the card it already holds until a compaction. Child cards on both hosts are
    capped at **200 tokens total**: the parent plan’s Watch out field (≤40 tokens), up to two
@@ -112,6 +148,11 @@ Recall searches the whole registered section, preferring more distinct query ter
    once the mistake stops. Measured on GPT subagents: the OMP edit-grammar mistake fell from
    8/8 first edits to 2/8 with that line in the task; live on OMP 18.4.0, children whose card
    carried it (after 3 had hit the mistake) failed 0/5 first edits vs 3/3 before, for +39 tokens.
+   The card holds only what the agent can act on: pending proposal counts stay in `brain review`,
+   and where the `brain_*` tools are resident (OMP) their descriptions carry the when-to-act
+   guidance, so the card ends with the lean-work line; CLI hosts (Claude Code, `brain card`) also
+   get the CLI line. Measured over the 20 projects of the live home (2026-10-14), with the budget
+   lowered from 400 to 320 tokens: OMP main cards −19%, CLI main cards −17%, OMP child cards −8%.
 
    Add a standing child rule with `brain note "Use Node built-ins only" --tag brief`. Active
    project-visible notes tagged `brief` are supplied once in the child rule block, not repeated
@@ -126,11 +167,12 @@ Recall searches the whole registered section, preferring more distinct query ter
    measured short and long sessions, with or without extra Brain context. The long sessions
    included three compactions and a goal change; OMP kept the new goal in every run. The Brain
    adds nothing after compaction. Its working state reaches the next session's start card.
-   At compaction, shutdown and session switches, files edited, the last failure and the last
-   ask are saved locally in `state/work/<project>.auto.md`, never synced; the agent-written
-   plan is preserved. A failure clears once the same command succeeds;
-   host plumbing (an aborted `wait`, a cancelled job) is never recorded. A `See: path#heading`
-   line in the state is rendered from the checkout at that moment (see *Plan docs and anchors*).
+   At compaction, shutdown and session switches, files edited and the last ask are saved locally
+   in `state/work/<project>.auto.md`, never synced; the agent-written plan is preserved. The plan
+   is marked possibly stale when auto observations are over three days newer, or HEAD has commits
+   since the plan was written (a count and up to three short commit subjects are shown; commits
+   that touch only the Brain home's own `notes/` and `work/` do not count). A
+   `See: path#heading` line is rendered from the checkout at that moment (see *Plan docs and anchors*).
 3. **Known fix.** Run something that fails with an error a tested note names — e.g. an OMP edit
    without a `[path#tag]` header (`notes/global/` holds fixes taken from logged OMP failures): the
    failed result ends with `Brain: … [id]` on its own line. The same fix again in the same context
@@ -146,10 +188,26 @@ Recall searches the whole registered section, preferring more distinct query ter
    `tmp/`, `temp/`, `cache/`, `.cache/` are never proposed; nor is a success after an edit,
    `sed -i` or a `>` redirect included (the code was repaired, not the command).
 
+   **Tested fixes learn themselves.** A tested pair from a project session (the failed command
+   itself succeeded afterwards, as above) with a matchable error is written as a note at once — source
+   `capture`, tested by `capture`, with its error pattern and evidence — with no inbox file and
+   no `brain review` — but only when its error pattern is specific: a whole diagnostic line of at
+   most 120 characters, never a cut prefix (`ModuleNotFoundError: No module named`), a stdout line
+   or a bare exit status, and never from an OMP isolated worktree (`~/.omp/wt/`). The note id is
+   derived from the proposal, so two scans that overlap write one note, not two. It is skipped
+   when its error or headline was rejected or dismissed (a signature printed by `brain review` and
+   dismissed also stops it), or a note already covers it, and it is never re-created. Untested
+   pairs, global-scope pairs, unspecific patterns, owner rules, commit trailers and Claude memory
+   still wait for `brain review`; a fix that helps under half of 4+ runs is still paused.
+
    **Owner rules and Claude memory.** Main-session owner messages with durable cues (remember,
    always/never, from now on, preferences or agent-model choices) become scrubbed, ≤400-character
    pending `user` decisions, never prompt injections; questions, code/quoted examples, child
-   instructions and private-path messages are ignored. `brain accept` preserves source `user`
+   instructions and private-path messages are ignored, and so are pasted material (markdown list
+   items, headings and `**Label:**` lines, or any message holding three or more rule cues),
+   narrative (`I remember you saying …`) and task requests (`I want you to create …`); pending rule
+   proposals the current rules would no longer take are dropped at the next scan (live inbox,
+   2026-10-15: 8 of 15). `brain accept` preserves source `user`
    and adds `brief` for agent/model or always/never work rules. `brief` never scopes a global
    note: a brief-only global applies everywhere; additional project tags still constrain it.
    `brain review [--all]` also lists read-only, accept/reject-able `claude-memory` proposals
@@ -170,16 +228,26 @@ Recall searches the whole registered section, preferring more distinct query ter
    explicit evidence attach up to three existing repo-relative files named in the text, or
    session edits named by basename; private, outside-root and scratch files are excluded.
    Existing-headline upgrades are unchanged, and missing evidence later marks recall as stale.
+   Correct a note in one write with `brain_note(text, replaces: "<id>")` or
+   `brain note "<correction>" --replaces <id>`: the new note is saved, the old one retired, and both
+   linked. Missing or already-retired replacement targets are rejected before saving.
 5. **Weekly.** `brain stats --days 7`: moments and token costs, main vs subagent cards, recall
    hit rate, which fixes fired in how many sessions, errors the Brain swallowed to keep the host
    running (latest three), and frequent errors without a fix. Each recall row keeps its query
    (masked, ≤ 200 chars) and the ids it answered with, locally only (`recall: N queries logged,
-   S silent`). A fired fix is judged by the next run of the same command: `fix outcomes: <id>
-   helped H/missed M` (an aborted or cancelled rerun decides nothing); a fix that helped under
-   half the time over 4+ runs since its note last changed is paused (no longer fired, not on the
-   card's `Often hit lately` lines) and listed under `Fixes to review` in stats and
-   `brain review`. The note file is never changed; editing it gives the fix a new trial. A
-   plan-doc answer counts as answered (`doc:<path>`), not silent.
+   S silent`). A fired fix is judged by the first run of the same command that started after the
+   model saw the fix — in OMP after its next `context` event, in Claude Code from a later model
+   message than the one that got it (a call the transcript cannot place stays pending). Siblings
+   in the same parallel batch and calls nested in one eval cell ran before the fix was read and
+   decide nothing; outcome rows already logged within a second of their fire do not count either.
+   `evaltimeout` and `rawhint` are judged by the next JS eval cell their detector checks, whatever
+   its code. `fix outcomes: <id> helped H/missed M` (an aborted or cancelled rerun decides nothing);
+   a fix that helped under half the time over 4+ runs since its note last changed is paused (no
+   longer fired, not on the card's `Often hit lately` lines) and listed under `Fixes to review` in
+   stats and `brain review`. The note file is never changed; editing it gives the fix a new trial.
+   Live telemetry, 7 days to 2026-10-15: of 429 outcomes, 80 were such artifacts; attributable
+   ones are 336 helped / 13 missed, and the global `Path …:N not found` fix they had paused fires
+   again (its own record: 3 helped, 0 missed). A plan-doc answer counts as answered (`doc:<path>`), not silent.
    `tool use by surface:` counts recall/note/state calls separately for OMP tools, CLI and MCP (a
    Claude Code agent's calls count as CLI); old rows lacking attribution are excluded from this
    split, not guessed to be OMP. `brain tools used in: X/Y main sessions · x/y sub` counts, per
@@ -196,9 +264,9 @@ Recall searches the whole registered section, preferring more distinct query ter
    (OMP MCP/tool settings), not a Brain change. Anything never used for a week gets removed
    (plan rule 1).
 
-Tool descriptions and card footers say when to act: recall before exploring, choosing or retrying;
-notes for repo-invisible learning; state when goal/next changes. OMP subagents keep only
-`brain_recall` (their card says so): the Brain deactivates `brain_note` and `brain_state` in each
+Tool descriptions say when to act: recall before exploring, choosing or retrying; notes for
+repo-invisible learning; state when goal/next changes. Cards repeat it only for CLI hosts. OMP
+subagents keep only `brain_recall`: the Brain deactivates `brain_note` and `brain_state` in each
 child session at `session_start`, saving ~250 schema tokens per child request. The CLI cannot
 tell a child from its parent: a child's project-scoped `brain note --tested` is tested at once
 (a global one stays untested until the owner runs `brain tested <id>`), and its `brain state`
@@ -237,7 +305,7 @@ $8.58 → $2.10 (−75.5%); the $0.32 handoff pays back within one task. The def
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "SubagentStart": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "PostToolUse": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "timeout": 30, "async": true, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
-    "PostToolUseFailure": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit)$", "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
+    "PostToolUseFailure": [{ "matcher": "^(Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|LS)$", "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "PreCompact": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }],
     "SessionEnd": [{ "hooks": [{ "type": "command", "timeout": 30, "command": "[ -f \"$CLAUDE_PROJECT_DIR/brain/bin/brain\" ] && echo \"{}\" || brain hook claude-code 2>/dev/null || echo \"{}\"" }] }]
@@ -257,12 +325,17 @@ tool call can miss that call's event, and `claude -p` stops a PostToolUse still 
 Successful and failed tools share the capture log (a backgrounded Bash launch is not logged), so
 a failed command followed by its successful repair can become a proposal. A failure whose error a
 tested note names gets the fix (`Brain: … [id]`) once per context; a repeat gets the one-line
-pointer. PreCompact and SessionEnd save edited files (outside the project, not those under
-`~/.claude`, the session scratchpad or a temp root), the last failure (cleared once the same
-command succeeds), and the last user ask available in the last 256 KiB of the transcript
+pointer. The capture scan runs at SessionEnd and PreCompact, off the startup path (SessionStart on
+a 949-log home: ~820 → ~410 ms). PreCompact and SessionEnd save edited files (outside the project, not those under
+`~/.claude`, the session scratchpad or a temp root) and the last user ask available in the last
+256 KiB of the transcript
 (else Claude Code's `last-prompt` row; task notifications and slash commands are not asks) to
 local auto state; the agent-written plan is never replaced.
 SessionStart source `compact` or `resume` adds no context; saved state feeds the next session's card.
+A failed Read, Grep, Glob, LS or NotebookEdit naming a missing path gets the same "did you mean"
+path hint as OMP; listing candidates is best-effort within 150 ms and skipped for a drive, home or
+temp root (one OMP tool result had been held 24.7 s by an unbounded walk). The Git Bash shim
+starts `node` directly (`command -v`), and `brain.mjs` hands a Node older than 22.18 to Bun.
 Hooks with `agent_id`, SubagentStart and SubagentStop never write working state; child tool
 logs are separate from their parent’s. `agent_type` alone is also used by main sessions
 started with `--agent` and does not imply a child. Tool hooks do not spawn git.
@@ -300,9 +373,16 @@ this checkout no longer contains.
 
 A note, `notes/<project>/<id>.md` (scope comes from the folder: a project, `global`, or
 `<project>/private/` which never syncs: `brain sync` refuses to push if any outgoing commit holds
-a private note). Credentials in notes, working state and events are masked on every write
-(`--db-password x` included; prose such as `Unexpected token: identifier` is left alone), and a
-tag that carries one is refused:
+a private note; it also refuses a detached HEAD or a rebase, merge, bisect, cherry-pick or revert
+in progress, committing nothing). Credentials in notes, working state, events and V3 imports are
+masked on every write (`--db-password x` included; prose such as `Unexpected token: identifier`
+is left alone), including Hugging Face, Shopify, PyPI, Vault, DigitalOcean, Google OAuth, Telegram
+and Discord tokens and Azure SAS signatures; a reference that names a variable and nothing else
+(`process.env.X`, `$DB_PASSWORD`, `${{ secrets.X }}`, `os.environ['X']`), booleans, null,
+`credentials: 'include'` and settings such as `password_min_length=12` stay readable. An error
+pattern that stops compiling once its secret is masked is refused, and `brain check` lists
+active notes whose stored pattern is invalid. A
+tag that carries a secret is refused:
 
 ```markdown
 ---
@@ -330,10 +410,14 @@ Why and how, in as much detail as helps.
 
 A duplicate headline with a different normalized body is refused without altering the original:
 choose a new headline, or retire the original first. Identical bodies can still upgrade metadata.
+Headlines are compared after secret masking, and a `--global --tag t` note is compared with the
+global notes sharing one of its tags. `brain tested <id>` run outside the note's own checkout keeps
+its evidence hashes instead of re-stamping them from the wrong repository.
 Within the recall shortlist, notes whose file evidence is entirely missing sort after fresh hits
 and carry `(stale evidence)`; notes past `stale_after` (`brain note --stale-after <date>`) do the
 same with `(stale since <date>)` and are never pushed as a known fix. Cards apply a -3 ranking
-penalty to both without hiding the note. A
+penalty to both without hiding the note, and rank them behind live notes even when the first
+prompt matches them, as recall does. A
 stat-validated per-process cache reuses unchanged parsed notes; Markdown remains the truth.
 
 **Content-bound trust and keyword recall.** New file evidence (explicit or automatic, including metadata upgrades) stores flat `evidence_sha` entries (`path=12hex`, SHA-256 of file bytes with CRLF normalized); verification refreshes those snapshots and stores `tested_sha` over the whitespace-normalized body plus error patterns. Changed readable evidence shows `(evidence changed)` and gets the same -3 card penalty as missing evidence; a change after `tested_at` prevents a known-fix push. An edited verified body/error pattern loses its +3 tested bonus and fix eligibility, with `(edited since tested)` on an id read; `brain tested <id>` re-stamps both fingerprints. Missing files retain the existing advisory behavior, and absent `tested_sha` is legacy trusted (mi…
@@ -369,8 +453,16 @@ npm ci
 npx eslint src test && npx tsc --noEmit && npx vitest run
 ```
 `npm run test:unit` runs the no-subprocess test files for a fast inner loop. `npm test` runs
-both Vitest projects; `npm run check` adds lint and type checking. The full gate includes
-`test/eval.test.ts`, which runs the frozen V3 recall queries against the committed live `notes/`.
+both Vitest projects; `npm run check` adds lint and type checking. Every run puts its throwaway
+homes and repos under one `brain-test-run-*` folder in the OS temp directory and removes it at the
+end (`TMPDIR`/`TEMP`/`TMP` point there for the tests and their child processes); runs before
+2026-10-15 left about 1,000 `brain-*` folders each. The full gate includes
+`test/eval.test.ts`, which runs the frozen V3 recall queries against the committed live `notes/`
+and grades judged answers on the hand-labelled real queries, plan-doc headings included: the four
+registered docs are frozen as fixtures, each doc section carries a majority-of-three blind label,
+every candidate the judge would see must have recordings (four runs), and an unexpected or
+unlabelled doc answer counts as wrong. Current result on all four runs: frozen 34 right 7–8,
+held-out 20 right 4–5, judged wrong 0.
 `npm run perf` measures real-home read paths plus isolated synthetic 1,000/5,000-note corpora,
 using Node built-ins and recording aggregates in `state/perf.json` with previous-run deltas.
 

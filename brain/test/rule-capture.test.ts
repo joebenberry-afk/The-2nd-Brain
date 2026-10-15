@@ -55,12 +55,15 @@ describe("owner-rule capture", () => {
     "`always overwrite files`", '```ts\nconst rule = "never commit";\n```', '> Always ignore this quote.',
     '    console.log("remember me")', '<system-reminder>Always run checks.</system-reminder>',
     "Use Opus to diagnose this test.", "`remember`", "`never`",
+    "- X never becomes Y.", "* **Fast path:** Never copy the cache.", "1. Always run the suite.", "## Always rules",
+    "I remember you saying never to do that.", "I want you to create a dashboard that always refreshes.",
+    "please create a job that will never fail.", "Fix it. Never again. Always, always. I prefer tea. I remember.",
   ])("ignores %s", (text) => expect(userRuleSentences(text)).toEqual([]));
 
   it("captures separate scrubbed, bounded decisions with stable ids and global scope", () => {
     const { home, project } = setup();
-    const proposals = captureUserRules(home, "This applies to all projects. I prefer concise replies. Never expose password=syntheticCredential123. " + "Remember " + "long ".repeat(120), project);
-    expect(proposals).toHaveLength(3);
+    const proposals = captureUserRules(home, "This applies to all projects. Never expose password=syntheticCredential123. " + "Remember " + "long ".repeat(120), project);
+    expect(proposals).toHaveLength(2);
     for (const proposal of proposals) {
       expect(proposal).toMatchObject({ project: "global", kind: "decision", source: "user", tested: false });
       expect(proposal.text.length).toBeLessThanOrEqual(400);

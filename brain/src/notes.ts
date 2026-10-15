@@ -86,7 +86,12 @@ export function expired(note: Pick<Note, "staleAfter">, now = Date.now()): boole
 
 /** The note as verified by `by` now. */
 export function markTested(note: Note, by: Tester, roots: string[] = []): Note {
-  return { ...note, tested: true, testedBy: by, testedAt: nowIso(), testedSha: testedHash(note), evidenceSha: evidenceHashes(note.evidence, roots) };
+  // A file the roots cannot resolve (checked out elsewhere) keeps the hash taken where it was verified.
+  const fresh = evidenceHashes(note.evidence, roots);
+  const pathOf = (entry: string) => entry.slice(0, entry.lastIndexOf("="));
+  const resolved = new Set(fresh.map(pathOf));
+  const evidenceSha = [...(note.evidenceSha ?? []).filter((entry) => !resolved.has(pathOf(entry))), ...fresh];
+  return { ...note, tested: true, testedBy: by, testedAt: nowIso(), testedSha: testedHash(note), evidenceSha };
 }
 
 /** Whitespace is incidental; error-pattern edits invalidate verification too. */
@@ -515,6 +520,8 @@ export interface NewNote {
   source?: string;
   private?: boolean;
   replaces?: string;
+  /** A caller-derived id (`n-` + 10 hex), for writes that must stay idempotent across processes. */
+  id?: string;
 }
 
 /** A host's exit-status wrapper says that a command failed, never why. */
@@ -603,11 +610,27 @@ function repeats(source: string): { nested: boolean; open: number; broad: number
   return { nested: false, open, broad };
 }
 
+/** The one masking every written note field goes through (create, upgrade, V3 convert). */
+export function maskText(text: string): string {
+  return scrub(text, { longRuns: false }).text;
+}
+
 function checkErrors(errors: string[]): void {
   for (const pattern of errors) {
     const problem = errorPatternProblem(pattern);
     if (problem) throw new NoteError(problem);
   }
+}
+
+/** Mask error patterns; a pattern that is valid raw but invalid once masked (`re:password=(\d+)`) is refused so its writer rewords it. */
+export function cleanErrors(errors: string[]): string[] {
+  checkErrors(errors);
+  return errors.map((pattern) => {
+    const masked = maskText(pattern);
+    const problem = masked === pattern ? null : errorPatternProblem(masked);
+    if (problem) throw new NoteError(`error pattern changed by secret masking (${problem}); reword it without the credential: ${JSON.stringify(masked)}`);
+    return masked;
+  });
 }
 
 function checkStaleAfter(value: string | undefined): void {
@@ -617,21 +640,22 @@ function checkStaleAfter(value: string | undefined): void {
 
 /** Create and save a new note. `text` becomes the body (first line = headline); secrets are masked. */
 export function createNote(home: string, input: NewNote): Note {
-  const clean = (s: string) => scrub(s, { longRuns: false }).text;
+  const clean = maskText;
   const body = clean(input.text.trim());
   if (!body) throw new NoteError("empty note");
-  checkErrors(input.errors ?? []);
+  if (input.id !== undefined && !/^n-[0-9a-f]{10}$/.test(input.id)) throw new NoteError(`invalid note id ${input.id}`);
+  const errors = cleanErrors(input.errors ?? []);
   checkStaleAfter(input.staleAfter);
   const tested = input.tested ?? false;
   const note: Note = {
-    id: randomId("n"),
+    id: input.id ?? randomId("n"),
     kind: input.kind ?? "note",
     project: input.project,
     private: input.private ?? false,
     at: nowIso(),
     source: input.source ?? "agent",
     tags: tagList((input.tags ?? []).map(clean)),
-    errors: (input.errors ?? []).map(clean),
+    errors,
     evidence: (input.evidence ?? []).map(clean),
     tested,
     testedBy: tested ? input.testedBy : undefined,
@@ -653,15 +677,15 @@ export function createNote(home: string, input: NewNote): Note {
  * first. Null when nothing changed.
  */
 export function upgradeNote(home: string, note: Note, input: Omit<NewNote, "text" | "project">): Note | null {
-  checkErrors(input.errors ?? []);
+  const errors = cleanErrors(input.errors ?? []);
   checkStaleAfter(input.staleAfter);
-  const clean = (s: string) => scrub(s, { longRuns: false }).text;
+  const clean = maskText;
   const heldHashes = new Set((note.evidenceSha ?? []).map(entry => entry.slice(0, entry.lastIndexOf("="))));
   const merged: Note = {
     ...note,
     kind: input.kind ?? note.kind,
     tags: tagList([...note.tags, ...(input.tags ?? [])].map(clean)),
-    errors: [...new Set([...note.errors, ...(input.errors ?? []).map(clean)])],
+    errors: [...new Set([...note.errors, ...errors])],
     evidence: [...new Set([...note.evidence, ...(input.evidence ?? [])].map(clean))],
     evidenceSha: [...(note.evidenceSha ?? []), ...evidenceHashes((input.evidence ?? []).map(clean), [...(input.evidenceRoots ?? []), home]).filter(entry => !heldHashes.has(entry.slice(0, entry.lastIndexOf("="))))],
     staleAfter: input.staleAfter ?? note.staleAfter,
@@ -694,20 +718,21 @@ export function retireNote(home: string, id: string, by?: string): Note {
  */
 export function findSameHeadline(notes: Note[], text: string, project: string, tags: string[] = [], isPrivate = false): Note | undefined {
   const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-  const wanted = key(firstLine({ body: text }));
+  // Stored headlines were masked on write: compare the masked text.
+  const wanted = key(firstLine({ body: maskText(text.trim()) }));
   if (!wanted) return undefined;
   const sees = (n: Note): boolean => {
     if (isPrivate) return n.private && n.project === project;
     if (n.project !== GLOBAL) return project !== GLOBAL && n.project === project;
     if (n.tags.every((t) => t === "brief")) return true;
-    return project !== GLOBAL && n.tags.some((t) => t !== "brief" && tags.includes(t));
+    return n.tags.some((t) => t !== "brief" && tags.includes(t));
   };
   return notes.find((n) => !n.retired && sees(n) && key(firstLine(n)) === wanted);
 }
 
 /** Whitespace is incidental; changed text must never be acknowledged as an identical write. */
 export function differentBody(same: Note, text: string): boolean {
-  const body = scrub(text.trim(), { longRuns: false }).text;
+  const body = maskText(text.trim());
   return body.replace(/\s+/g, " ").trim() !== same.body.replace(/\s+/g, " ").trim();
 }
 

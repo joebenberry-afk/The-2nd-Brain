@@ -10,6 +10,7 @@ import { LEAN_LINE } from "../src/card.ts";
 import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, slowEvalCell, type HostLike } from "../src/omp.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
+import { resolveProject } from "../src/project.ts";
 import { readWork, writeWork } from "../src/work.ts";
 import { stats } from "../src/telemetry.ts";
 
@@ -96,9 +97,12 @@ describe("OMP extension", () => {
     const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
     const { handlers } = load();
     const result = (session: string, content: string, isError: boolean) => handlers.get("tool_result")!({ toolName: "bash", input: { command: "npm test" }, isError, content }, ctx(session));
+    // The model's next request: the fix it just received is in front of it.
+    const seen = (session: string) => handlers.get("context")!({ messages: [] }, ctx(session));
     const outcomes = () => readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => row.kind === "fixout").map(row => [row.session, row.id, row.outcome]);
     for (const session of ["help", "miss"]) {
       result(session, "runtime mismatch", true);
+      seen(session);
       result(session, noise, true);
     }
     expect(outcomes()).toEqual([]);
@@ -111,16 +115,21 @@ describe("OMP extension", () => {
     const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
     const { handlers } = load();
     const result = (session: string, command: string | undefined, failed: boolean, toolName = "bash") => handlers.get("tool_result")!({ toolName, input: command ? { command } : {}, isError: failed, content: failed ? "runtime mismatch" : "ok" }, ctx(session));
+    const seen = (session: string) => handlers.get("context")!({ messages: [] }, ctx(session));
     result("help", "build", true);
+    seen("help");
     result("other", "build", false);
     result("help", "test", false);
     result("help", "build", false);
     result("help", "build", false);
     result("miss", undefined, true, "edit");
+    seen("miss");
     result("miss", undefined, true, "edit");
+    seen("miss");
     result("miss", undefined, false, "edit");
     for (const event of ["session_compact", "session_shutdown", "session_before_switch"]) {
       result(event, "build", true);
+      seen(event);
       handlers.get(event)!({}, ctx(event));
       result(event, "build", false);
     }
@@ -541,44 +550,14 @@ describe("OMP extension", () => {
     const session = "s-shutdown";
     const c = ctx(session, workDir);
 
-    // Track a failure
-    toolResult(
-      {
-        toolName: "bash",
-        input: { command: "test" },
-        isError: true,
-        content: [{ type: "text", text: "Error: failed" }],
-      },
-      c
-    );
+    toolResult({ toolName: "edit", input: { path: join(workDir, "a.ts") }, isError: false, content: [] }, c);
 
     // Trigger shutdown
     shutdown({}, c);
 
     // Check work file was written
     const workFile = readWork(home, "work");
-    expect(workFile?.auto).toContain("last failure");
-  });
-
-  it("keeps host plumbing and resolved failures out of the working state", () => {
-    const { handlers } = load();
-    const toolResult = handlers.get("tool_result")!;
-    const c = ctx("s-failures");
-    const fail = (toolName: string, command: string | undefined, text: string) => toolResult({ toolName, input: command ? { command } : {}, isError: true, content: [{ type: "text", text }] }, c);
-
-    fail("wait", undefined, "Daemon broker request aborted");
-    fail("bash", "sleep 100", "Command aborted by user");
-    handlers.get("session_shutdown")!({}, c);
-    expect(readWork(home, "work")?.auto ?? "").not.toContain("last failure");
-
-    fail("bash", "npm test", "Error: 3 tests failed");
-    toolResult({ toolName: "bash", input: { command: "npm test" }, isError: false, content: [{ type: "text", text: "ok" }] }, c);
-    handlers.get("session_shutdown")!({}, c);
-    expect(readWork(home, "work")?.auto ?? "").not.toContain("last failure");
-
-    fail("bash", "npm run build", "Error: tsc exited");
-    handlers.get("session_shutdown")!({}, c);
-    expect(readWork(home, "work")?.auto).toContain("last failure: npm run build → Error: tsc exited");
+    expect(workFile?.auto).toContain("- edited: a.ts");
   });
 
   it("context ignores missing or non-array messages", () => {
@@ -636,7 +615,7 @@ describe("OMP extension", () => {
     expect(loadNotes(home).notes[0]?.tested).toBe(true);
   });
 
-  it("child startup leaves capture proposals to the parent", () => {
+  it("child startup leaves capture learning to the parent, whose scan writes a tested fix", () => {
     const cwd = join(root, "work");
     mkdirSync(cwd);
     appendEvent(home, "previous", cwd, { tool: "bash", command: "npm test", ok: false, error: "Cannot find module left-pad" });
@@ -648,10 +627,12 @@ describe("OMP extension", () => {
     start({ prompt: "run tests" }, { ...ctx("child", cwd), agent: { kind: "sub" } });
     tick();
     expect(listProposals(home)).toEqual([]);
+    expect(loadNotes(home).notes).toEqual([]);
     start({ prompt: "run tests" }, { ...ctx("parent", cwd), agent: { kind: "main" } });
     tick();
     vi.useRealTimers();
-    expect(listProposals(home).map(p => p.text)).toEqual([expect.stringContaining("npm ci && npm test works")]);
+    expect(listProposals(home)).toEqual([]);
+    expect(loadNotes(home).notes.map(n => [n.body.includes("npm ci && npm test works"), n.tested, n.testedBy])).toEqual([[true, true, "capture"]]);
   });
 
   it("subagent brain_state cannot overwrite the parent's plan", async () => {
@@ -847,4 +828,124 @@ describe("OMP extension under a hostile or limited host", () => {
   });
 
 
+});
+
+describe("OMP fix outcomes", () => {
+  const rows = () => readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const outcomes = () => rows().filter(row => row.kind === "fixout").map(row => [row.id, row.outcome]);
+
+  it("scores a fix only on results that ran after the model saw it", () => {
+    const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const { handlers } = load();
+    const c = ctx("batch");
+    const result = (failed: boolean) => handlers.get("tool_result")!({ toolName: "bash", input: { command: "build" }, isError: failed, content: failed ? "runtime mismatch" : "ok" }, c);
+    // One batch of tool calls: the first failure fires the fix, its siblings ran before the model saw it.
+    result(true);
+    result(true);
+    result(false);
+    result(true);
+    expect(outcomes()).toEqual([]);
+    // The model's next request carries the fix; only now does a same-key result judge it, once.
+    handlers.get("context")!({ messages: [{}] }, c);
+    result(false);
+    result(false);
+    expect(outcomes()).toEqual([[note.id, "helped"]]);
+    result(true);
+    handlers.get("context")!({ messages: [{}, {}] }, c);
+    result(true);
+    expect(outcomes()).toEqual([[note.id, "helped"], [note.id, "missed"]]);
+  });
+
+  it("a host without the context event still scores the next same-key result", () => {
+    const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const handlers = new Map<string, Handler>();
+    const pi: HostLike = { on: (name, handler) => { if (name === "context") throw new Error("unknown event context"); handlers.set(name, handler); } };
+    secondBrain(pi, { SECOND_BRAIN_HOME: home });
+    const result = (failed: boolean) => handlers.get("tool_result")!({ toolName: "bash", input: { command: "build" }, isError: failed, content: failed ? "runtime mismatch" : "ok" }, ctx("old-host"));
+    result(true);
+    result(false);
+    expect(outcomes()).toEqual([[note.id, "helped"]]);
+  });
+
+  it("scores the eval hints on the next cell their detector judges, whatever its code", () => {
+    const { handlers } = load();
+    const c = ctx("cells");
+    const cell = (code: string, timeout?: number) => handlers.get("tool_result")!({ toolName: "eval", input: { language: "js", code, ...(timeout === undefined ? {} : { timeout }) }, isError: false, content: [{ type: "text", text: "ok" }] }, c) as { content: { text: string }[] } | undefined;
+    const seen = () => handlers.get("context")!({ messages: [] }, c);
+    const slow = (prompt: string) => `const r = await tool.task({ prompt: ${JSON.stringify(prompt)} })`;
+    const raw = (word: string) => String.raw`await tool.grep({ pattern: '\b${word}\b' })`;
+    // evaltimeout and rawhint both fire; the cells in the same batch judge neither.
+    expect(cell(slow("one"))?.content.at(-1)?.text).toContain("timeout");
+    expect(cell(raw("add"))?.content.at(-1)?.text).toContain("backspace");
+    expect(cell(slow("same batch"), 120)).toBeUndefined();
+    expect(outcomes()).toEqual([]);
+    seen();
+    // A cell the timeout detector does not look at judges only rawhint (a clean one helped it).
+    expect(cell("1 + 1")).toBeUndefined();
+    expect(outcomes()).toEqual([["rawhint", "helped"]]);
+    // The next slow cell is judged on its timeout, a different cell from the one that got the hint.
+    expect(cell(slow("two"), 120)).toBeUndefined();
+    expect(outcomes()).toEqual([["rawhint", "helped"], ["evaltimeout", "helped"]]);
+    // Hints keep one outcome each; a repeat of the mistake after a new hint is a miss.
+    handlers.get("session_compact")!({}, c);
+    expect(cell(raw("sum"))?.content.at(-1)?.text).toContain("backspace");
+    seen();
+    expect(cell(raw("max"))?.content.at(-1)?.text).toContain("backspace");
+    expect(outcomes().at(-1)).toEqual(["rawhint", "missed"]);
+    expect(cell(slow("three"))?.content.at(-1)?.text).toContain("timeout");
+    seen();
+    expect(cell(slow("four"))).toBeUndefined();
+    // That cell has no backspace either, so the re-fired rawhint helped; the missing timeout is a miss.
+    expect(outcomes().slice(-2)).toEqual([["evaltimeout", "missed"], ["rawhint", "helped"]]);
+  });
+});
+
+describe("OMP isolated subagents", () => {
+  const DECISION = "Quartz migration uses numbered steps";
+  const rows = () => readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+
+  function setup() {
+    const repo = join(root, "demo-repo");
+    const other = join(root, "other-repo");
+    const scratch = join(root, ".omp", "wt", "abc123", "m");
+    for (const dir of [repo, other, join(scratch, ".git")]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(scratch, ".git", "config"), "[core]\n\tbare = false\n");
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { demo: { paths: [repo] }, other: { paths: [other] } } }));
+    const note = createNote(home, { project: "demo", text: DECISION });
+    const parent = { cwd: repo, agent: { kind: "main" }, sessionManager: { getSessionId: () => "parent", getSessionFile: () => "parent.jsonl" } };
+    const child = (cwd: string) => ({ cwd, agent: { kind: "sub", id: "child" }, sessionManager: { getSessionId: () => "child", getSessionFile: () => "child.jsonl", getHeader: () => ({ parentSession: "parent.jsonl" }) } });
+    return { repo, other, scratch, note, parent, child };
+  }
+
+  it("works for the live parent's project from a scratch copy that names none", async () => {
+    const { scratch, note, parent, child } = setup();
+    createNote(home, { project: "demo", text: "Install the pinned runtime", tested: true, errors: ["runtime mismatch"] });
+    const { handlers, tools } = load({ SECOND_BRAIN_HOME: home }, true);
+    handlers.get("before_agent_start")!({ prompt: "start" }, parent);
+    const card = handlers.get("before_agent_start")!({ prompt: "quartz migration" }, child(scratch)) as { message: { content: string } };
+    expect(card.message.content).toContain(DECISION);
+    const recall = (tools as { name: string; execute(...args: unknown[]): Promise<{ content: { text: string }[] }> }[]).find(tool => tool.name === "brain_recall")!;
+    expect((await recall.execute("r", { query: "quartz migration" }, undefined, undefined, child(scratch))).content[0]!.text).toContain(note.id);
+    const failed = handlers.get("tool_result")!({ toolName: "bash", input: { command: "build" }, isError: true, content: [{ type: "text", text: "runtime mismatch" }] }, child(scratch)) as { content: { text: string }[] } | undefined;
+    expect(failed?.content[1]?.text).toContain("Install the pinned runtime");
+    expect(rows().filter(row => ["card", "recall", "fix"].includes(row.kind) && row.sub === true).map(row => [row.kind, row.project])).toEqual([["card", "demo"], ["recall", "demo"], ["fix", "demo"]]);
+    // Its events name the parent's project too, so capture files them there, never under "m".
+    const eventsDir = join(home, "state", "events");
+    const events = readdirSync(eventsDir).flatMap(file => readFileSync(join(eventsDir, file), "utf8").trim().split("\n").map(line => JSON.parse(line)));
+    expect(events.map(event => resolveProject(home, event.cwd, {}).id)).toEqual(["demo"]);
+    expect(existsSync(join(home, "notes", "m"))).toBe(false);
+  });
+
+  it("a child keeps its own project when projects.json declares it, and without a live parent", () => {
+    const { other, scratch, parent, child } = setup();
+    createNote(home, { project: "other", text: "Other repo uses Bazel for builds" });
+    const { handlers } = load();
+    handlers.get("before_agent_start")!({ prompt: "start" }, parent);
+    const elsewhere = handlers.get("before_agent_start")!({ prompt: "bazel builds" }, child(other)) as { message: { content: string } };
+    expect(elsewhere.message.content).toContain("Bazel");
+    expect(elsewhere.message.content).not.toContain(DECISION);
+    // A new process: no parent session is live, so nothing is inherited from it.
+    const orphan = handlers.get("before_agent_start")!({ prompt: "quartz migration" }, { ...child(scratch), sessionManager: { getSessionId: () => "orphan", getSessionFile: () => "orphan.jsonl", getHeader: () => ({ parentSession: "gone.jsonl" }) } }) as { message?: { content: string } } | undefined;
+    expect(orphan?.message?.content ?? "").not.toContain(DECISION);
+  });
 });

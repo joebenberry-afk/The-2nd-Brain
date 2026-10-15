@@ -3,7 +3,7 @@ import { JUDGE_THRESHOLD, judgeText, type PairJudge } from "./judge.ts";
 import { GLOBAL, type Note } from "./notes.ts";
 import { projectById, visibleTo, type Project } from "./project.ts";
 import { tokens } from "./search.ts";
-import { noteUsage } from "./telemetry.ts";
+import { noteUsage, usageWindow } from "./telemetry.ts";
 
 export interface SimilarPair {
   id: string;
@@ -46,19 +46,21 @@ function valid(scores: { same: number; contradicts: number } | undefined): boole
   return !!scores && [scores.same, scores.contradicts].every(p => Number.isFinite(p) && p >= 0 && p <= 1);
 }
 
-export async function tidyReport(home: string, notes: Note[], project: Project, opts: { judge?: PairJudge; all?: boolean; days?: number } = {}): Promise<{ duplicates: SimilarPair[]; contradictions: SimilarPair[]; similar: SimilarPair[]; unused: Note[] }> {
+export async function tidyReport(home: string, notes: Note[], project: Project, opts: { judge?: PairJudge; all?: boolean; days?: number } = {}): Promise<{ duplicates: SimilarPair[]; contradictions: SimilarPair[]; similar: SimilarPair[]; unused: Note[]; unusedWindow: string }> {
   const days = opts.days ?? 30;
   const active = notes.filter(note => !note.retired && (opts.all || visibleTo(note, project)));
   const usage = noteUsage(home, days);
   const since = Date.now() - days * 86_400_000;
-  const unused = active.filter(note => Date.parse(note.at) < since && !usage.has(note.id));
+  // Telemetry keeps about two weeks: a note's absence from rows that start later says nothing about
+  // the days before them. "Unused" holds for the window they cover; with no rows it holds for none.
+  const unused = usage.from === undefined ? [] : active.filter(note => Date.parse(note.at) < since && !usage.notes.has(note.id));
   const pairs = similarPairs(active, Infinity).filter(({ a, b }) => {
     if (a.project === b.project) return true;
     const local = a.project === GLOBAL ? b : a;
     const global = a.project === GLOBAL ? a : b;
     return visibleTo(global, opts.all ? projectById(home, local.project, home) : project);
   });
-  const report = { duplicates: [] as SimilarPair[], contradictions: [] as SimilarPair[], similar: pairs, unused };
+  const report = { duplicates: [] as SimilarPair[], contradictions: [] as SimilarPair[], similar: pairs, unused, unusedWindow: usageWindow(usage, days) };
   if (!opts.judge) return report;
   const publicPairs = pairs.filter(({ a, b }) => !a.private && !b.private);
   try {

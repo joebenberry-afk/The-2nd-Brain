@@ -1,5 +1,4 @@
 /** Start-of-session memory: complete facts, scoped context, and a hard total budget. */
-import { pendingCount } from "./capture.ts";
 import { childDocContext, projectDocs } from "./docs.ts";
 import { displayLine, firstLine, GLOBAL, testedCurrent, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
@@ -8,7 +7,8 @@ import { fixFires, pausedFixes } from "./telemetry.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
 import { planFit, readWork, workText } from "./work.ts";
 
-export const CARD_BUDGET = 400;
+/** Lean by owner request (2026-10-14): low-ranked notes cost every session; recall fetches them on demand. */
+export const CARD_BUDGET = 320;
 export const CHILD_CARD_BUDGET = 200;
 export const CARD_NOTES = 5;
 /** Distinct sessions of the same role in 7 days before a fix is said up front (E1: 8/8 → 2/8). */
@@ -62,13 +62,17 @@ export function rankForCard(candidates: Note[], project: Project, workText: stri
   const promptScores = new Map(prompt.trim()
     ? recall(candidates, prompt, { project, limit: candidates.length }).map((hit) => [hit.note.id, hit.score])
     : []);
-  const score = (n: Note): number => {
+  const score = (n: Note, stale: boolean): number => {
     const age = (now.getTime() - Date.parse(n.at)) / DAY_MS;
     const recent = age <= 14 ? 2 : age <= 60 ? 1 : 0;
-    return (testedCurrent(n) ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent - (staleHere(n, project, home) ? 3 : 0) + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
+    return (testedCurrent(n) ? 3 : 0) + (KIND_WEIGHT[n.kind] ?? 1) + recent - (stale ? 3 : 0) + RELEVANCE_WEIGHT * (relevance.get(n.id) ?? 0);
   };
-  const scored = candidates.map((n) => ({ n, s: score(n), p: promptScores.get(n.id) ?? 0 }));
-  scored.sort((a, b) => b.p - a.p || b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));
+  const scored = candidates.map((n) => {
+    const stale = staleHere(n, project, home);
+    return { n, stale, s: score(n, stale), p: promptScores.get(n.id) ?? 0 };
+  });
+  // Stale notes sit behind live ones even under a prompt match, as in recall.
+  scored.sort((a, b) => Number(a.stale) - Number(b.stale) || b.p - a.p || b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));
   return scored.map((x) => x.n);
 }
 
@@ -85,13 +89,12 @@ function noteLine(n: Note, room: number): string {
   return line.length <= room ? line : "";
 }
 
-function footer(tools: boolean, subagent: boolean): string {
-  const recall = tools ? "brain_recall(query)" : '`brain recall "<query>"`';
-  const note = tools ? "brain_note(text)" : '`brain note "<text>"`';
-  const state = tools ? "brain_state(text)" : '`brain state "<text>"`';
+/** The CLI's when-to-act line; hosts with resident brain_* tools carry it in the tool descriptions. */
+function footer(subagent: boolean): string {
+  const recall = '`brain recall "<query>"` before explore/choose/retry, batched with other calls';
   // Children keep only recall: their notes went unused (0 of 27) and their state writes are refused.
-  if (subagent) return `${recall} before explore/choose/retry, batched with other calls`;
-  return `${recall} before explore/choose/retry, batched with other calls · ${note} for what code can't tell · ${state} when goal/next changes`;
+  if (subagent) return recall;
+  return `${recall} · \`brain note "<text>"\` for what code can't tell · \`brain state "<text>"\` when goal/next changes`;
 }
 /** Active standing rules in the central project/global visibility scope. */
 export function briefNotes(notes: Note[], project: Project): Note[] {
@@ -107,8 +110,8 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
   const lines = [
     `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — child context; the repo wins on conflict`
   ];
-  const tail = footer(opts.tools === true, true);
-  const room = (): number => CHILD_CARD_BUDGET * 4 - [...lines, tail].join("\n").length - 1;
+  const tail = opts.tools === true ? [] : [footer(true)];
+  const room = (): number => CHILD_CARD_BUDGET * 4 - [...lines, ...tail].join("\n").length - 1;
   const add = (text: string): boolean => {
     if (!text || text.length > room()) return false;
     lines.push(text);
@@ -159,7 +162,7 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
   }
 
   if (lines.length === 1) return "";
-  const card = [...lines, tail].join("\n");
+  const card = [...lines, ...tail].join("\n");
   return estimateTokens(card) <= CHILD_CARD_BUDGET ? card : "";
 }
 
@@ -183,9 +186,9 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
   const ranked = rankForCard(candidates, project, work?.text ?? "", now, home, opts.prompt);
-  const pending = pendingCount(home, project.id);
   const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — what prior sessions learned; the repo wins on conflict`;
-  const tail = [pending ? `${pending} proposal${pending === 1 ? "" : "s"} waiting → ` + "`brain review`" : "", LEAN_LINE, footer(opts.tools === true, false)].filter(Boolean);
+  // Owner-facing counts (pending proposals) stay in `brain review`; resident tools describe themselves.
+  const tail = opts.tools === true ? [LEAN_LINE] : [LEAN_LINE, footer(false)];
   const lines = [head];
   const room = (extra: string[] = []): number => CARD_BUDGET * 4 - [...lines, ...extra, ...tail].join("\n").length - 1;
   if (rules.length) lines.push(`children get: ${rules.length} rules`);
@@ -212,7 +215,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     lines.push(...label, line);
     if (++count === CARD_NOTES) break;
   }
-  if (lines.length === 1 && !pending) return "";
+  if (lines.length === 1) return "";
   const card = [...lines, ...tail].join("\n");
   return estimateTokens(card) <= CARD_BUDGET ? card : "";
 }

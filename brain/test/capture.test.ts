@@ -14,7 +14,7 @@ import {
   eventsDir,
   findFix,
   listProposals,
-  pendingCount,
+  dismissError,
   program,
   rejectProposal,
   renderFix,
@@ -30,6 +30,7 @@ import {
   createNote,
   formatNote,
   loadNotes,
+  retireNote,
 } from "../src/notes.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-capture-"));
@@ -146,7 +147,7 @@ describe("capture.errorSignature", () => {
   });
 
   it("never signs a failure by an OMP output notice", () => {
-    expect(errorSignature("boom\n[raw output: artifact://12]\nCommand exited with code 1")).toBe("boom");
+    expect(errorSignature("boom: failed\n[raw output: artifact://12]\nCommand exited with code 1")).toBe("boom: failed");
     expect(errorSignature("[Showing lines 1-40 of 90 (4.0KB limit). Read artifact://7 for full output]\nCommand exited with code 1")).toBe("Command exited with code 1");
   });
 });
@@ -782,7 +783,7 @@ describe("capture.rejectProposal", () => {
   it("keeps rejections through a BOM, and never overwrites an unreadable rejected.json", () => {
     const home = tmp();
     appendEvent(home, "s", home, { tool: "bash", command: "cargo build", ok: false, error: "error[E0425]: cannot find value `x` in this scope" });
-    appendEvent(home, "s", home, { tool: "bash", command: "cargo build --offline", ok: true });
+    appendEvent(home, "s", home, { tool: "bash", command: "cargo build -p demo", ok: true });
     rejectProposal(home, scanEvents(home, [])[0]!.id);
     const file = join(home, "rejected.json");
     const first = JSON.parse(readFileSync(file, "utf8")).hashes as string[];
@@ -802,87 +803,82 @@ describe("capture.rejectProposal", () => {
   });
 });
 
-describe("capture.pendingCount", () => {
-  it("counts proposals in inbox", () => {
+describe("capture auto-accept of tested project fixes", () => {
+  const ERROR = "Error: cannot find module 'left-pad'";
+  const failed = (home: string, cwd: string, command = "npm test") => appendEvent(home, "s", cwd, { tool: "bash", command, ok: false, error: ERROR });
+  const inbox = (home: string) => listProposals(home);
+  const rescan = (home: string) => {
+    writeFileSync(join(home, "state", "capture-cursor.json"), "{}"); // read every event again
+    return scanEvents(home, loadNotes(home).notes);
+  };
+
+  it("writes a tested project pair as a note, leaves no inbox file and never duplicates it", () => {
     const home = tmp();
-    const dir = join(home, "state", "inbox");
-    mkdirSync(dir, { recursive: true });
-
-    for (let i = 0; i < 3; i++) {
-      const prop: Proposal = {
-        id: `p-${i}`,
-        at: "2026-09-27T10:00:00Z",
-        project: "demo",
-        kind: "gotcha",
-        text: `Proposal ${i}`,
-        errors: [],
-        tested: true,
-        source: "capture",
-        evidence: [],
-      };
-      writeFileSync(join(dir, `p-${i}.json`), JSON.stringify(prop));
-    }
-
-    expect(pendingCount(home)).toBe(3);
+    failed(home, home);
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test -- --run", ok: true });
+    const proposals = scanEvents(home, []);
+    expect(proposals).toHaveLength(1);
+    expect(inbox(home)).toEqual([]);
+    expect(existsSync(join(home, "state", "inbox")) ? readdirSync(join(home, "state", "inbox")) : []).toEqual([]);
+    const notes = loadNotes(home).notes;
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ source: "capture", tested: true, testedBy: "capture", kind: "gotcha", errors: [errorSignature(ERROR, 60)] });
+    expect(notes[0]!.evidence).toEqual(proposals[0]!.evidence);
+    expect(readFileSync(notes[0]!.path, "utf8")).toContain("tested_by: capture");
+    expect(findFix(notes, ERROR, { id: notes[0]!.project, tags: [], root: null })).not.toBeNull();
+    expect(rescan(home)).toEqual([]);
+    expect(scanEvents(home, loadNotes(home).notes)).toEqual([]);
+    expect(loadNotes(home).notes).toHaveLength(1);
+    expect(inbox(home)).toEqual([]);
   });
 
-  it("filters by project", () => {
+  it("keeps an untested pair in the inbox", () => {
     const home = tmp();
-    const dir = join(home, "state", "inbox");
-    mkdirSync(dir, { recursive: true });
-
-    const prop1: Proposal = {
-      id: "p-1",
-      at: "2026-09-27T10:00:00Z",
-      project: "demo",
-      kind: "gotcha",
-      text: "Demo proposal",
-      errors: [],
-      tested: true,
-      source: "capture",
-      evidence: [],
-    };
-
-    const prop2: Proposal = {
-      id: "p-2",
-      at: "2026-09-27T10:00:00Z",
-      project: "other",
-      kind: "gotcha",
-      text: "Other proposal",
-      errors: [],
-      tested: true,
-      source: "capture",
-      evidence: [],
-    };
-
-    writeFileSync(join(dir, "p-1.json"), JSON.stringify(prop1));
-    writeFileSync(join(dir, "p-2.json"), JSON.stringify(prop2));
-
-    expect(pendingCount(home, "demo")).toBe(1);
-    expect(pendingCount(home, "other")).toBe(1);
-    expect(pendingCount(home)).toBe(2);
+    failed(home, home);
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test -- extra", ok: true });
+    expect(scanEvents(home, [])).toHaveLength(1);
+    expect(inbox(home)).toHaveLength(1);
+    expect(inbox(home)[0]!.tested).toBe(false);
+    expect(loadNotes(home).notes).toEqual([]);
   });
 
-  it("includes global proposals when filtering by project", () => {
+  it("keeps a global-scope pair in the inbox", () => {
     const home = tmp();
-    const dir = join(home, "state", "inbox");
-    mkdirSync(dir, { recursive: true });
+    failed(home, "");
+    appendEvent(home, "s", "", { tool: "bash", command: "npm test -- --run", ok: true });
+    expect(scanEvents(home, [])).toHaveLength(1);
+    expect(inbox(home)).toHaveLength(1);
+    expect(inbox(home)[0]).toMatchObject({ project: "global", tested: true });
+    expect(loadNotes(home).notes).toEqual([]);
+  });
 
-    const prop: Proposal = {
-      id: "p-1",
-      at: "2026-09-27T10:00:00Z",
-      project: "global",
-      kind: "gotcha",
-      text: "Global",
-      errors: [],
-      tested: true,
-      source: "capture",
-      evidence: [],
-    };
+  it("keeps a tested pair without an error pattern in the inbox", () => {
+    const home = tmp();
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test", ok: false, error: "Exit code 1" });
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test -- --run", ok: true });
+    expect(scanEvents(home, [])).toHaveLength(1);
+    expect(inbox(home)[0]).toMatchObject({ tested: true, errors: [] });
+    expect(loadNotes(home).notes).toEqual([]);
+  });
 
-    writeFileSync(join(dir, "p-1.json"), JSON.stringify(prop));
+  it("does not re-create a pair whose error was rejected", () => {
+    const home = tmp();
+    dismissError(home, errorSignature(ERROR, 60));
+    failed(home, home);
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test -- --run", ok: true });
+    expect(scanEvents(home, [])).toEqual([]);
+    expect(inbox(home)).toEqual([]);
+    expect(loadNotes(home).notes).toEqual([]);
+  });
 
-    expect(pendingCount(home, "demo")).toBe(1);
+  it("does not re-create a pair after its note was retired", () => {
+    const home = tmp();
+    failed(home, home);
+    appendEvent(home, "s", home, { tool: "bash", command: "npm test -- --run", ok: true });
+    scanEvents(home, []);
+    retireNote(home, loadNotes(home).notes[0]!.id);
+    expect(rescan(home)).toEqual([]);
+    expect(inbox(home)).toEqual([]);
   });
 });
 
@@ -1280,10 +1276,10 @@ describe("capture batch five regressions", () => {
     log(home, pair(a), "other");
     expect(scanEvents(home, []).map((p) => p.project)).toEqual(["a"]);
     log(home, pair(b), "repeat");
-    expect(scanEvents(home, [])).toEqual([]);
-    const applicable = createNote(home, { text: "Shared fix", project: "global", tags: ["node"], errors: ["Error: a shared failure"] });
+    expect(scanEvents(home, loadNotes(home).notes)).toEqual([]);
+    createNote(home, { text: "Shared fix", project: "global", tags: ["node"], errors: ["Error: a shared failure"] });
     log(home, pair(b, "Error: a shared failure"), "shared");
-    expect(scanEvents(home, [applicable])).toEqual([]);
+    expect(scanEvents(home, loadNotes(home).notes)).toEqual([]);
   });
 
   it("keeps the full successful command in a bounded captured fix", () => {
@@ -1537,11 +1533,13 @@ describe("capture repair boundaries", () => {
     const proposals = scanEvents(home, []);
     expect(proposals).toHaveLength(1);
     expect(proposals[0]!.errors).toEqual([error.slice(0, 60)]);
+    // The cut pattern is not specific enough to write unreviewed; the owner may still accept it.
+    expect(loadNotes(home).notes).toEqual([]);
     const note = acceptProposal(home, proposals[0]!.id);
     expect(findFix([note], "unrelated failed operation", null)).toBeNull();
     const other = tmp();
     appendEvent(other, "first", other, { tool: "bash", command: "pytest tests/test_x.py", ok: false, error });
-    appendEvent(other, "first", other, { tool: "bash", command: "pytest tests/test_x.py --strict", ok: true });
+    appendEvent(other, "first", other, { tool: "bash", command: "pytest tests/test_x.py -k x", ok: true });
     rejectProposal(other, scanEvents(other, [])[0]!.id);
     appendEvent(other, "second", other, { tool: "bash", command: "pytest tests/test_y.py", ok: false, error: error.replace("test_x", "test_y") });
     appendEvent(other, "second", other, { tool: "bash", command: "pytest tests/test_y.py --strict", ok: true });
@@ -1558,7 +1556,7 @@ describe("capture repair boundaries", () => {
       appendEvent(home, session, cwd, { tool: "bash", command: fixed, ok: true });
       return scanEvents(home, []);
     };
-    const [first] = pair("a1", alpha, "pytest tests/test_x.py", "pytest tests/test_x.py --lf");
+    const [first] = pair("a1", alpha, "pytest tests/test_x.py", "pytest tests/test_x.py -k x");
     expect([first?.project, first?.errors]).toEqual(["alpha", ["AssertionError: x mismatch"]]);
     rejectProposal(home, first!.id);
     expect(pair("b1", beta, "pytest tests/test_y.py", "pytest tests/test_y.py -x")).toHaveLength(1);
@@ -1583,7 +1581,7 @@ describe("capture repair boundaries", () => {
       appendEvent(home, session, dir, { tool: "bash", command: fixed, ok: true });
       return scanEvents(home, []);
     };
-    const [first] = pair("a1", "pytest tests/test_x.py --lf");
+    const [first] = pair("a1", "pytest tests/test_x.py -k x");
     expect(first?.project).toBe("old");
     writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { alpha: { aliases: ["old"] } } }));
     rejectProposal(home, first!.id);

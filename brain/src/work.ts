@@ -1,11 +1,12 @@
 /** Per-project working state for the next session's card. */
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { cutToTokens, estimateTokens, nowIso, writeAtomic } from "./util.ts";
 import { parseFrontmatter } from "./notes.ts";
 import { scrub } from "./scrub.ts";
-import { anchorSection, bareAnchor } from "./docs.ts";
-import { normalizePath, projectDocPath, worktreeSpelling } from "./project.ts";
+import { anchorSection, bareAnchor, projectDocs, type Section } from "./docs.ts";
+import { normalizePath, projectDocPath, worktreeSpelling, type Project } from "./project.ts";
 
 export const WORK_BUDGET = 150;
 export const AUTO_BUDGET = 80;
@@ -25,7 +26,6 @@ export interface Work {
 
 export interface AutoFields {
   edited?: string[];
-  failure?: string;
   ask?: string;
 }
 
@@ -66,7 +66,7 @@ function readPlan(home: string, project: string): Work | null {
   const lines = body.split("\n");
   const autoIndex = autoAt ? lines.map((l) => l.trim()).lastIndexOf("## auto") : -1;
   const text = (autoIndex < 0 ? lines : lines.slice(0, autoIndex)).join("\n").trim();
-  const auto = autoIndex < 0 ? "" : lines.slice(autoIndex + 1).join("\n").trim();
+  const auto = autoIndex < 0 ? "" : lines.slice(autoIndex + 1).filter(line => !/^- last failure:/.test(line)).join("\n").trim();
   return { project, at, autoAt, text, auto, path };
 }
 
@@ -76,7 +76,7 @@ export function readWork(home: string, project: string): Work | null {
   try {
     const { fields, body } = parseFrontmatter(readFileSync(join(home, "state", "work", `${project}.auto.md`), "utf8"));
     const stamp = fields.get("at");
-    return { project, path: workPath(home, project), at: plan?.at ?? "", text: plan?.text ?? "", autoAt: typeof stamp === "string" ? stamp : "", auto: body.trim() };
+    return { project, path: workPath(home, project), at: plan?.at ?? "", text: plan?.text ?? "", autoAt: typeof stamp === "string" ? stamp : "", auto: body.replace(/^- last failure:.*(?:\r?\n|$)/gm, "").trim() };
   } catch {
     return plan;
   }
@@ -113,7 +113,10 @@ export function planFit(text: string, budget: number): string {
 
 /** Write work text (agent text, drops auto section). Throws WorkError on empty text. */
 export function writeWork(home: string, project: string, text: string): Work {
-  const trimmed = scrub(text, { longRuns: false }).text.trim();
+  // An anchor written inside a sentence moves onto its own line, where it renders and is checked.
+  const trimmed = scrub(text, { longRuns: false }).text
+    .replace(/(?<=\S)[ \t]+See:[ \t]*((?:[^#\n.]|\.(?![ \t\n]|$)){1,100}#\S+)[ \t]*/g, (_m, anchor: string) => `\nSee: ${anchor.replace(/[.,;:!?]+$/, "")}\n`)
+    .trim();
   if (!trimmed) throw new WorkError("empty work text");
 
   const over = trimmed.length > WORK_BUDGET * 4;
@@ -144,21 +147,31 @@ function unanchoredSection(text: string): string | undefined {
   return text.match(/§\s*\d+(?:\.\d+)*|\bsection\s+\d+(?:\.\d+)*/i)?.[0];
 }
 
-/** Acknowledge the stored plan without predicting what the host keeps in context. */
-export function stateSaved(work: Work): string {
+const SEE = /^See:[ \t]*(.+?)[ \t]*$/gm;
+
+/**
+ * Acknowledge the stored plan without predicting what the host keeps in context. With the project,
+ * a See: anchor that resolves to no heading is named now, not as "anchor missing" next session.
+ */
+export function stateSaved(work: Work, home?: string, project?: Project): string {
   const cut = work.cutFrom ? `; cut from ${work.cutFrom} chars to fit ${WORK_BUDGET} tokens — keep Goal/Next short` : "";
   const section = unanchoredSection(work.text);
   const anchor = section ? `; "${section}" names no file — add See: path#heading so the next session need not search for it` : "";
-  return `state saved (${estimateTokens(work.text)} tokens)${cut}${anchor}`;
+  const registered = home && project?.docRoot ? projectDocs(home, project) : [];
+  const missing = project ? [...work.text.matchAll(SEE)].map(match => match[1]!).filter(see => !seeSection(see, project.root, project.docRoot, registered)) : [];
+  const broken = missing.length ? `; anchor missing: ${missing.join(", ")} — use a heading that exists (path#heading-slug or path#17 for "## 17. …")` : "";
+  return `state saved (${estimateTokens(work.text)} tokens)${cut}${anchor}${broken}`;
 }
+
+/** Host placeholders for attachments ("[Image #1, 1568x421]", "[Pasted text #2 +40 lines]") carry no ask. */
+const ATTACHMENT = /\[(?:Image|Pasted text|File|Attachment|Document)\b[^\]\n]{0,80}\]/gi;
 
 /**
  * Format auto fields as lines. Each field has its own share of AUTO_BUDGET (edited 80 chars,
- * failure 28 tokens, ask 24 tokens), so a long file list never pushes the last ask out.
+ * ask 24 tokens), so a long file list never pushes the last ask out.
  */
 export function formatAuto(fields: AutoFields): string {
-  const failure = fields.failure && scrub(fields.failure).text.replace(/\s+/g, " ").trim();
-  const ask = fields.ask && scrub(fields.ask, { longRuns: false }).text.replace(/\s+/g, " ").trim();
+  const ask = fields.ask && scrub(fields.ask.replace(ATTACHMENT, " "), { longRuns: false }).text.replace(/\s+/g, " ").trim();
   const lines: string[] = [];
 
   // Edited: the most recent unique files that fit, in last-occurrence order
@@ -178,7 +191,6 @@ export function formatAuto(fields: AutoFields): string {
     const room = 80 - "- edited: ".length - tail.length;
     lines.push(`- edited: ${list.length > room ? `…${list.slice(-(room - 1))}` : list}${tail}`);
   }
-  if (failure) lines.push(`- last failure: ${cutToTokens(failure, 28)}`);
   if (ask) lines.push(`- last ask: ${cutToTokens(ask, 24)}`);
 
   return cutToTokens(lines.join("\n"), AUTO_BUDGET);
@@ -196,30 +208,47 @@ function timestamp(at: string): string {
   return at ? `${at.slice(0, 16).replace("T", " ")} UTC` : "time unknown";
 }
 
-function planHeading(work: Work): string {
+function planHeading(work: Work, root: string | null): string {
   const stale = Date.parse(work.autoAt) - Date.parse(work.at) > 3 * 86400000;
-  return `${stale ? "plan may be stale — " : ""}Where we left off (${timestamp(work.at)}):`;
+  let commits: string[] = [];
+  if (root && Number.isFinite(Date.parse(work.at))) {
+    try {
+      // A project root that holds the Brain home: committing the plan or notes is no reason to doubt it.
+      const rel = relative(root, dirname(dirname(work.path))).split(sep).join("/");
+      const own = rel.startsWith("..") || isAbsolute(rel) ? [] : ["--", ".", ...["work", "notes"].map(dir => `:(exclude)${rel ? `${rel}/` : ""}${dir}`)];
+      commits = execFileSync("git", ["-C", root, "log", `--since=${work.at}`, "--format=%h %s", "HEAD", ...own], { encoding: "utf8", timeout: 1000, stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").filter(Boolean);
+    } catch {
+      // Missing git, an unborn HEAD or a slow repository adds no commit hint.
+    }
+  }
+  const hint = commits.length ? `plan may be stale — ${commits.length} ${commits.length === 1 ? "commit" : "commits"} since: ${commits.slice(0, 3).map(commit => cutToTokens(scrub(commit, { longRuns: false }).text, 16)).join("; ")}${commits.length > 3 ? "; …" : ""}\n` : stale ? "plan may be stale — " : "";
+  return `${hint}Where we left off (${timestamp(work.at)}):`;
+}
+
+/** The section a See: anchor names, resolved as the card resolves it. */
+function seeSection(anchor: string, root: string | null, docRoot: string | undefined, registered: string[]): Section | undefined {
+  const bare = bareAnchor(anchor);
+  const docs = new Set(registered.map(normalizePath));
+  // A repo inside a declared folder: the anchor may be spelled against the folder (as recall and
+  // docs list print a doc outside the repo). A registered doc there wins, as docFile resolves it.
+  const inFolder = docRoot ? projectDocPath(docRoot, bare.slice(0, Math.max(0, bare.indexOf("#")))) : undefined;
+  const [first, second] = inFolder && docs.has(normalizePath(inFolder)) ? [docRoot, root] : [root, docRoot];
+  // In a linked worktree, a folder-spelled anchor reads the worktree's own copy when it has one;
+  // a heading missing there is missing, not read from main's older copy.
+  const hash = bare.indexOf("#");
+  const own = hash > 0 ? worktreeSpelling(root, docRoot, bare.slice(0, hash)) : undefined;
+  return own && projectDocPath(root, own) ? anchorSection(root!, own + bare.slice(hash))
+    : (first ? anchorSection(first, anchor) : undefined) ?? (second ? anchorSection(second, anchor) : undefined);
 }
 
 /** Resolve See lines at display time, preserving the agent-owned delta around them. */
 function anchoredText(text: string, root: string | null, budget: number, docRoot?: string, registered: string[] = []): string {
-  const pattern = /^See:[ \t]*(.+?)[ \t]*$/gm;
-  const count = [...text.matchAll(pattern)].length;
+  const count = [...text.matchAll(SEE)].length;
   if (!count) return text;
-  const room = Math.floor((budget * 4 - text.replace(pattern, "").length) / Math.max(1, count) / 4);
-  const docs = new Set(registered.map(normalizePath));
-  return cutToTokens(text.replace(pattern, (_line, anchor: string) => {
+  const room = Math.floor((budget * 4 - text.replace(SEE, "").length) / Math.max(1, count) / 4);
+  return cutToTokens(text.replace(SEE, (_line, anchor: string) => {
     const bare = bareAnchor(anchor);
-    // A repo inside a declared folder: the anchor may be spelled against the folder (as recall and
-    // docs list print a doc outside the repo). A registered doc there wins, as docFile resolves it.
-    const inFolder = docRoot ? projectDocPath(docRoot, bare.slice(0, Math.max(0, bare.indexOf("#")))) : undefined;
-    const [first, second] = inFolder && docs.has(normalizePath(inFolder)) ? [docRoot, root] : [root, docRoot];
-    // In a linked worktree, a folder-spelled anchor reads the worktree's own copy when it has one;
-    // a heading missing there is missing, not read from main's older copy.
-    const hash = bare.indexOf("#");
-    const own = hash > 0 ? worktreeSpelling(root, docRoot, bare.slice(0, hash)) : undefined;
-    const section = own && projectDocPath(root, own) ? anchorSection(root!, own + bare.slice(hash))
-      : (first ? anchorSection(first, anchor) : undefined) ?? (second ? anchorSection(second, anchor) : undefined);
+    const section = seeSection(anchor, root, docRoot, registered);
     const rendered = section ? `${bare.slice(0, bare.indexOf("#"))} › ${section.heading}:\n${section.text}` : `anchor missing: ${anchor}`;
     return cutToTokens(rendered, Math.max(0, room));
   }), budget);
@@ -228,7 +257,7 @@ function anchoredText(text: string, root: string | null, budget: number, docRoot
 /** Full working-state display; plan and observations retain their own timestamps. */
 export function workText(work: Work | null, root: string | null = null, docRoot?: string, registered: string[] = []): string {
   if (!work || (!work.text && !work.auto)) return "";
-  const parts = work.text ? [planHeading(work), anchoredText(work.text, root, WORK_BUDGET, docRoot, registered)] : ["Where we left off:"];
+  const parts = work.text ? [planHeading(work, root), anchoredText(work.text, root, WORK_BUDGET, docRoot, registered)] : ["Where we left off:"];
   if (work.auto) parts.push(`Auto (${timestamp(work.autoAt)}):`, work.auto);
   return parts.join("\n");
 }

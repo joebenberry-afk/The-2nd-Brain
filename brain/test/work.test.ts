@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -82,6 +83,54 @@ describe("work", () => {
     expect(stateSaved(writeWork(home, "p", "Goal: bump to 8.8 and ship"))).toMatch(/^state saved \(\d+ tokens\)$/);
   });
 
+  it("stateSaved: a See: anchor naming no heading is reported at save; a section number resolves", () => {
+    const home = tmp(), root = tmp();
+    // The 2026-10-07 BasicUpscaler state: "See: Frame Gen.md#17" rendered "anchor missing" next session.
+    writeFileSync(join(root, "Frame Gen.md"), "# Frame gen\n\n## 9. Research\n\n### 9.1 Public material\n\nnine-one text\n\n## 17. Lossless Scaling scoreboard (FG-86)\n\nW/L/D table\n");
+    const project = { id: "p", tags: [], root };
+    for (const see of ["Frame Gen.md#17", "Frame Gen.md#§17", "Frame Gen.md#9.1", "Frame Gen.md#17-lossless-scaling-scoreboard-fg-86"]) {
+      const work = writeWork(home, "p", `Goal: beat LSFG\nSee: ${see}`);
+      expect(stateSaved(work, home, project)).toMatch(/^state saved \(\d+ tokens\)$/);
+      expect(workText(work, root)).not.toContain("anchor missing");
+    }
+    expect(workText(writeWork(home, "p", "Goal: x\nSee: Frame Gen.md#9.1"), root)).toContain("nine-one text");
+    // "#1" is no prefix of "17" or "9.1": no heading is numbered 1 here.
+    for (const see of ["Frame Gen.md#1", "Frame Gen.md#scoreboard", "Missing.md#17"]) {
+      expect(stateSaved(writeWork(home, "p", `Goal: x\nSee: ${see}`), home, project)).toContain(`anchor missing: ${see}`);
+    }
+  });
+
+  it("an anchor written inside a sentence is moved onto its own line, rendered and checked", () => {
+    const home = tmp(), root = tmp();
+    writeFileSync(join(root, "Frame Gen.md"), "# Frame gen\n\n## 17. Lossless Scaling scoreboard\n\nW/L/D table\n");
+    const project = { id: "p", tags: [], root };
+    const work = writeWork(home, "p", "Goal: x. Next: y. See: Frame Gen.md#17. Watch out: z");
+    expect(work.text).toContain("\nSee: Frame Gen.md#17\n");
+    expect(workText(work, root)).toContain("W/L/D table");
+    expect(stateSaved(work, home, project)).toMatch(/^state saved/);
+    expect(stateSaved(writeWork(home, "p", "Goal: x. See: Frame Gen.md#nope."), home, project)).toContain("anchor missing: Frame Gen.md#nope");
+  });
+
+  it("workText: commits of the Brain's own work/ and notes/ folders do not mark the plan stale", () => {
+    const home = tmp();
+    const git = (...args: string[]) => execFileSync("git", ["-C", home, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: "ignore" });
+    git("init", "-q");
+    execFileSync("git", ["-C", home, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"], { stdio: "ignore", env: { ...process.env, GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" } });
+    const work = writeWork(home, "p", "Goal: x");
+    const later = new Date(Date.parse(work.at) + 3600_000).toISOString();
+    const commit = (file: string, message: string) => {
+      mkdirSync(join(home, file, ".."), { recursive: true });
+      writeFileSync(join(home, file), message);
+      git("add", "-A");
+      execFileSync("git", ["-C", home, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message], { stdio: "ignore", env: { ...process.env, GIT_AUTHOR_DATE: later, GIT_COMMITTER_DATE: later } });
+    };
+    commit("work/p.md", "plan");
+    commit("notes/p/a.md", "note");
+    expect(workText(work, home)).not.toContain("commit");
+    commit("src/x.ts", "code");
+    expect(workText(work, home)).toContain("1 commit since");
+  });
+
   it("writeWork: a See: block over half the budget is cut, never Goal and Next", () => {
     const home = tmp();
     const see = "See: " + Array.from({ length: 30 }, (_, i) => `brain/src/module${i}.ts:${i * 10}`).join("; ");
@@ -155,18 +204,17 @@ describe("work", () => {
     expect(formatted.split("\n")[0]).toBe("- edited: d, e, a, f, g, h, i, j +2 more");
   });
 
-  it("formatAuto: failure collapsed and cut to 200 chars", () => {
-    const failure = "error:  line1\n  line2\n  line3";
-    const formatted = formatAuto({ failure });
-    expect(formatted).toContain("- last failure:");
-    expect(estimateTokens(formatted)).toBeLessThanOrEqual(AUTO_BUDGET);
-  });
-
   it("formatAuto: ask collapsed and cut to 160 chars", () => {
     const ask = "what  is\n  the  issue?";
     const formatted = formatAuto({ ask });
     expect(formatted).toContain("- last ask:");
     expect(estimateTokens(formatted)).toBeLessThanOrEqual(AUTO_BUDGET);
+  });
+
+  it("formatAuto: attachment placeholders are not an ask", () => {
+    expect(formatAuto({ ask: "[Image #1, 1568x421]" })).toBe("");
+    expect(formatAuto({ ask: "[Pasted text #2 +40 lines] [Image #3]", edited: ["a.ts"] })).toBe("- edited: a.ts");
+    expect(formatAuto({ ask: "why does this crash? [Image #1, 1568x421]" })).toBe("- last ask: why does this crash?");
   });
 
   it("formatAuto: empty when all fields empty", () => {
@@ -177,7 +225,6 @@ describe("work", () => {
   it("formatAuto: cuts total to AUTO_BUDGET tokens", () => {
     const formatted = formatAuto({
       edited: Array.from({ length: 20 }, (_, i) => `file${i}.ts`),
-      failure: "x".repeat(500),
       ask: "y".repeat(500),
     });
     expect(estimateTokens(formatted)).toBeLessThanOrEqual(AUTO_BUDGET);
@@ -230,22 +277,44 @@ describe("work", () => {
     const work1 = readWork(home, "proj");
     expect(work1?.text).toContain("Goal: test");
 
-    writeAuto(home, "proj", { edited: ["src/a.ts", "src/b.ts"], failure: "timeout" });
+    writeAuto(home, "proj", { edited: ["src/a.ts", "src/b.ts"] });
     const work2 = readWork(home, "proj");
 
     expect(work2?.text).toContain("Goal: test");
     expect(work2?.auto).toContain("edited");
     expect(work2?.auto).toContain("src/a.ts");
-    expect(work2?.auto).toContain("timeout");
   });
 
   it("auto observations remain local and leave the synced plan byte-identical", () => {
     const home = tmp();
     const plan = writeWork(home, "p", "Goal: ship safely");
     const before = readFileSync(plan.path, "utf8");
-    writeAuto(home, "p", { edited: ["a.ts"], failure: "npm test failed" });
+    writeAuto(home, "p", { edited: ["a.ts"] });
     expect(readFileSync(plan.path, "utf8")).toBe(before);
-    expect(readFileSync(join(home, "state", "work", "p.auto.md"), "utf8")).toContain("npm test failed");
+    expect(readFileSync(join(home, "state", "work", "p.auto.md"), "utf8")).toContain("- edited: a.ts");
+  });
+
+  it("warns when HEAD has commits newer than the plan and caps the subjects", () => {
+    const root = tmp();
+    const work = { project: "p", path: "", at: "2026-09-20T12:00:00Z", autoAt: "", text: "Goal: ship", auto: "" };
+    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const commit = (subject: string, date: string) => execFileSync("git", ["-C", root, "-c", "user.name=Brain Test", "-c", "user.email=brain@example.test", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", subject], { env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }, stdio: "pipe" });
+    try {
+      git("init");
+      commit("before plan", "2026-09-19T12:00:00Z");
+      expect(workText(work, root)).not.toContain("plan may be stale");
+      for (let i = 1; i <= 4; i++) commit(`change ${i}`, `2026-09-2${i}T12:00:00Z`);
+      const latest = git("log", "-3", "--format=%h %s").trim().split("\n");
+      const text = workText(work, root);
+      expect(text).toContain(`plan may be stale — 4 commits since: ${latest.join("; ")}; …`);
+      expect(text).not.toMatch(/change 1|before plan/);
+      expect(text).toContain("Where we left off (2026-09-20 12:00 UTC):\nGoal: ship");
+      expect(workText({ ...work, at: "2026-09-23T12:00:01Z" }, root)).toContain("1 commit since:");
+      expect(workText({ ...work, at: "" }, root)).not.toContain("plan may be stale");
+      expect(workText(work, join(root, "missing"))).not.toContain("commits since:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("an explicit plan written during an auto write cannot be lost", () => {
@@ -277,10 +346,12 @@ describe("work", () => {
   it("legacy auto is readable, overridden locally, and dropped on the next plan write", () => {
     const home = tmp();
     mkdirSync(join(home, "work"));
-    writeFileSync(workPath(home, "p"), "---\nat: 2026-09-20T12:00:00Z\nauto_at: 2026-09-21T12:00:00Z\n---\n\nGoal: old\n\n## auto\n- last ask: legacy\n");
-    expect(readWork(home, "p")?.auto).toContain("legacy");
+    writeFileSync(workPath(home, "p"), "---\nat: 2026-09-20T12:00:00Z\nauto_at: 2026-09-21T12:00:00Z\n---\n\nGoal: old\n\n## auto\n- last failure: obsolete inline snippet\n- last ask: legacy\n");
+    expect(readWork(home, "p")?.auto).toBe("- last ask: legacy");
+    mkdirSync(join(home, "state", "work"), { recursive: true });
+    writeFileSync(join(home, "state", "work", "p.auto.md"), "---\nat: 2026-09-22T12:00:00Z\n---\n\n- last ask: local\n- last failure: obsolete local snippet\n");
+    expect(readWork(home, "p")?.auto).toBe("- last ask: local");
     writeAuto(home, "p", { ask: "local" });
-    expect(readWork(home, "p")?.auto).toContain("local");
     writeWork(home, "p", "Goal: new");
     expect(readFileSync(workPath(home, "p"), "utf8")).not.toContain("legacy");
     expect(readWork(home, "p")?.auto).toContain("local");

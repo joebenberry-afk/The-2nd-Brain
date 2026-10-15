@@ -3,15 +3,15 @@
  * V3 (SQLite FTS5) scored dev 13/15 and held-out 7/8 in the top 3; V4 must not regress.
  * The misses V3 had: the retired 2-worker-cap policy (correctly not current) and one long prompt.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
-import { loadNotes } from "../src/notes.ts";
-import { answer, answerWithHits, recall } from "../src/search.ts";
-import { judgedAnswer, type Judge } from "../src/judge.ts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { loadNotes, type Note } from "../src/notes.ts";
+import { answer, answerWithHits, recall, type AnswerOptions } from "../src/search.ts";
+import { judgedAnswer, type Answer } from "../src/judge.ts";
 import { PACKAGE_HOME } from "../src/util.ts";
-import { loadProjects } from "../src/project.ts";
 
 interface Case {
   id: string;
@@ -90,22 +90,65 @@ interface RealCase {
   query: string;
   expect: string[];
   verdict: "note" | "silence";
-  doc?: string;
 }
-function answeredDoc(text: string): string | undefined {
-  return /^([^\n]+) › [^\n]+ \(line [1-9]\d*\)$/.exec(text)?.[1];
+interface DocLabel {
+  caseId: string;
+  id: string;
+  answer: string;
+  votes: boolean[];
+  right: boolean;
+  recordings: number[];
+  textSha256: string;
 }
 
-it("grades only a single heading line naming the hinted document as a doc answer", () => {
+function grade(c: Pick<RealCase, "id" | "expect">, result: Pick<Answer, "ids" | "text">, labels: DocLabel[]): "right" | "wrong" | "miss" | "silence" {
+  if (result.ids.some(id => id.startsWith("doc:")
+    ? !labels.some(label => label.caseId === c.id && label.id === id && result.text.split("\n").includes(label.answer) && label.right)
+    : !c.expect.includes(id))) return "wrong";
+  return result.ids.length ? "right" : c.expect.length ? "miss" : "silence";
+}
+
+async function replay(notes: Note[], query: string, opts: AnswerOptions, recordings: Record<string, Record<string, number>>, caseId: string, labels: DocLabel[] = []): Promise<Answer> {
+  const sent: { id: string; text: string }[] = [];
+  const result = await judgedAnswer(notes, query, opts, async (_query, candidates) => {
+    sent.push(...candidates);
+    return new Map(candidates.map(c => [c.id, recordings[caseId]?.[c.id]!]));
+  });
+  // Outside the fail-open boundary, and over actual requests (including conditional fallbacks).
+  for (const { id, text } of sent) {
+    const p = recordings[caseId]?.[id];
+    expect(typeof p, `missing recorded pair ${caseId}/${id}`).toBe("number");
+    expect(p, `invalid recorded pair ${caseId}/${id}`).toBeGreaterThanOrEqual(0);
+    expect(p).toBeLessThanOrEqual(1);
+    if (id.startsWith("doc:")) {
+      const label = labels.find(label => label.caseId === caseId && label.id === id);
+      expect(label?.textSha256, `changed document candidate ${caseId}/${id}`).toBe(createHash("sha256").update(text).digest("hex"));
+    }
+  }
+  return result;
+}
+
+it("counts unlabelled or irrelevant document headings as wrong, even on silence cases", () => {
+  const c = { id: "case", expect: [] };
+  const result = { ids: ["doc:PLAN.md"], text: "PLAN.md › Quartz migration (line 1)" };
+  const label: DocLabel = { caseId: c.id, id: result.ids[0]!, answer: result.text, votes: [true, true, false], right: true, recordings: [], textSha256: "" };
+  expect(grade(c, result, [])).toBe("wrong");
+  expect(grade(c, result, [{ ...label, right: false }])).toBe("wrong");
+  expect(grade(c, result, [label])).toBe("right");
+  expect(grade(c, { ...result, text: "PLAN.md › Unrelated section (line 8)" }, [label])).toBe("wrong");
+  expect(grade(c, { ...result, ids: [...result.ids, "irrelevant-note"] }, [label])).toBe("wrong");
+  expect(grade({ ...c, expect: ["relevant-note"] }, { ids: [...result.ids, "relevant-note"], text: result.text + "\nrelevant-note [note] Useful advice" }, [label])).toBe("right");
+});
+
+it("fails missing document recordings outside runtime fail-open, including after note rejection", async () => {
   const home = mkdtempSync(join(tmpdir(), "brain-eval-doc-"));
   try {
     writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { test: { docs: ["PLAN.md"] } } }));
     writeFileSync(join(home, "PLAN.md"), "# Quartz migration\nStage the update.\n");
-    const text = answer([], "quartz migration", { project: { id: "test", tags: [], root: home }, home });
-    expect(answeredDoc(text)).toBe("PLAN.md");
-    expect(answeredDoc(text)).not.toBe("OTHER.md");
-    expect(answeredDoc(text + "\nUnrelated answer")).toBeUndefined();
-    expect(answeredDoc(answer([], "unknown topic", { project: null }))).toBeUndefined();
+    const opts = { project: { id: "test", tags: [], root: home }, home };
+    const note: Note = { id: "note", kind: "note", project: "test", private: false, at: "2026-09-28", source: "agent", tags: [], errors: [], evidence: [], tested: false, body: "Quartz migration guidance", path: "" };
+    await expect(replay([], "quartz migration", opts, {}, "case")).rejects.toThrow();
+    await expect(replay([note], "quartz migration", opts, { case: { note: 0.1 } }, "case")).rejects.toThrow();
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -122,22 +165,34 @@ describe.skipIf(!hasNotes)("real queries", () => {
   // never judged, so it must not change this score (or fail the gate for want of a recording).
   const LABELLED_AT = "2026-09-28T14:12:00Z";
   const notes = loadNotes(PACKAGE_HOME).notes.filter(note => note.at <= LABELLED_AT);
-  const projects = loadProjects(PACKAGE_HOME);
-
-  function recordedJudge(recordings: Record<string, Record<string, number>>, caseId: string, shown: string[]): Judge {
-    // Assert outside the fail-open boundary: a missing recording must fail the test, not return lexical results.
-    for (const id of shown.filter(id => notes.some(note => note.id === id && !note.private))) {
-      const p = recordings[caseId]?.[id];
-      expect(typeof p, `missing recorded pair ${caseId}/${id}`).toBe("number");
-      expect(p, `invalid recorded pair ${caseId}/${id}`).toBeGreaterThanOrEqual(0);
-      expect(p).toBeLessThanOrEqual(1);
-    }
-    return async (_query, candidates) => new Map(candidates.map(c => [c.id, recordings[caseId]![c.id]!]));
+  const frozen = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "recall-documents.json"), "utf8")) as { projects: Record<string, { docs: Record<string, string> }> };
+  const documentJudgments: { labels: DocLabel[] } = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "recall-document-judge.json"), "utf8"));
+  const labels = documentJudgments.labels;
+  for (const label of labels) {
+    expect(label.votes).toHaveLength(3);
+    expect(label.right).toBe(label.votes.filter(Boolean).length >= 2);
+    expect(label.recordings).toHaveLength(runs.length);
+    runs.forEach((run, i) => { (run[label.caseId] ??= {})[label.id] = label.recordings[i]!; });
   }
+  let home: string;
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), "brain-eval-frozen-"));
+    const projects: Record<string, { docs: string[] }> = {};
+    for (const [id, project] of Object.entries(frozen.projects)) {
+      projects[id] = { docs: Object.keys(project.docs) };
+      for (const [path, text] of Object.entries(project.docs)) {
+        const file = join(home, "repos", id, path);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, text);
+      }
+    }
+    writeFileSync(join(home, "projects.json"), JSON.stringify({ projects }));
+  });
+  afterAll(() => { if (home) rmSync(home, { recursive: true, force: true }); });
 
   for (const [file, size, lexicalRight, lexicalWrong, judgedRight] of [
-    ["recall-real.jsonl", 34, 6, 8, 5],
-    ["recall-real-heldout.jsonl", 20, 2, 4, 2],
+    ["recall-real.jsonl", 34, 15, 8, 7],
+    ["recall-real-heldout.jsonl", 20, 10, 6, 4],
   ] as const) {
     for (const judged of [false, true]) it(`${judged ? "judged (every recorded run)" : "lexical"}: ${file} retains right answers and bounds wrong answers`, async () => {
      for (const recordings of judged ? runs : [undefined]) {
@@ -145,22 +200,21 @@ describe.skipIf(!hasNotes)("real queries", () => {
       let right = 0, miss = 0, silence = 0;
       const wrong: string[] = [];
       for (const c of set) {
-        const project = { id: c.project, tags: [], root: projects[c.project]?.paths?.find(path => existsSync(path)) ?? null };
+        const project = { id: c.project, tags: [], root: frozen.projects[c.project] ? join(home, "repos", c.project) : null };
         for (const id of c.expect) expect(notes.some(note => note.id === id && !note.retired && !note.private), `${c.id}: ${id}`).toBe(true);
-        const opts = { project, home: PACKAGE_HOME };
-        const lexical = answerWithHits(notes, c.query, opts);
-        const result = recordings ? await judgedAnswer(notes, c.query, opts, recordedJudge(recordings, c.id, lexical.ids)) : lexical;
-        const ids = result.ids.filter(id => !id.startsWith("doc:"));
-        if (ids.some(id => !c.expect.includes(id))) wrong.push(`${c.id}: ${ids.join(",")}`);
-        else if (ids.length) right++;
-        else if (c.doc && answeredDoc(result.text) === c.doc) right++;
-        else if (c.expect.length) miss++;
+        const opts = { project, home };
+        const result = recordings ? await replay(notes, c.query, opts, recordings, c.id, labels) : answerWithHits(notes, c.query, opts);
+        const outcome = grade(c, result, labels);
+        if (outcome === "wrong") wrong.push(c.id);
+        else if (outcome === "right") right++;
+        else if (outcome === "miss") miss++;
         else silence++;
       }
       console.log(`${judged ? "judged" : "lexical"} ${file}: right ${right}/${set.length}; wrong ${wrong.length}; miss ${miss}; silence ${silence}; wrong cases ${wrong.join("; ")}`);
       expect(set).toHaveLength(size);
       expect(right).toBeGreaterThanOrEqual(judged ? judgedRight : lexicalRight);
-      // Majority-of-3 blind labels, frozen 2026-09-28: lexical 6/8 and held-out 2/4 right/wrong.
+      // Note labels are frozen at 2026-09-28; blind document-section labels include two
+      // additional wrong lexical headings in held-out. Every judged answer must be right.
       if (judged) expect(wrong).toEqual([]);
       else expect(wrong.length).toBeLessThanOrEqual(lexicalWrong);
      }
@@ -175,8 +229,7 @@ describe.skipIf(!hasNotes)("real queries", () => {
         const memory = cases(file).filter(c => c.expect.length);
         const missed: string[] = [];
         for (const c of memory) {
-          const lexical = answerWithHits(notes, c.prompt, { project });
-          const result = await judgedAnswer(notes, c.prompt, { project }, recordedJudge(recordings, `v3:${c.id}`, lexical.ids));
+          const result = await replay(notes, c.prompt, { project }, recordings, `v3:${c.id}`);
           if (!c.expect.some(id => result.ids.includes(id))) missed.push(c.id);
         }
         console.log(`judged V3 ${file}: ${memory.length - missed.length}/${memory.length}; missed ${missed.join(",")}`);

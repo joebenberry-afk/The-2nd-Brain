@@ -1,5 +1,20 @@
 #!/usr/bin/env node
 // Runs the TypeScript sources directly: Node >= 22.18 strips types natively; Bun runs them too.
+import * as nodeModule from "node:module";
+// Cached bytecode for the sources: about 50 ms off every CLI and hook call (Node >= 22.1; Bun lacks it).
+nodeModule.enableCompileCache?.();
+// The sh shim starts node without probing its version (a subprocess on every hook call), so a Node
+// too old to strip types hands over to Bun here, before the sources load.
+const [major, minor] = process.versions.node.split(".").map(Number);
+if (!process.versions.bun && (major < 22 || (major === 22 && minor < 18))) {
+  const { spawnSync } = await import("node:child_process");
+  const child = spawnSync("bun", [process.argv[1], ...process.argv.slice(2)], { stdio: "inherit", windowsHide: true });
+  if (child.error) {
+    process.stderr.write(`brain: needs Node >= 22.18 or Bun on PATH (this is Node ${process.versions.node})\n`);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
 process.stdout.on("error", (error) => {
   if (error.code === "EPIPE") process.exit(0);
   throw error;

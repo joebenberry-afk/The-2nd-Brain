@@ -1,0 +1,548 @@
+{
+  "protocol": "Three independent blind Jev requests saw only query and full candidate section; majority vote. Four uncached runtime-prompt recordings see the scrubbed 450-character excerpt.",
+  "model": "jev-latest",
+  "recordedAt": "2026-10-15T04:24:53.049Z",
+  "questions": 210,
+  "labels": [
+    {
+      "caseId": "R18",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.43,
+        0.41,
+        0.4,
+        0.41
+      ],
+      "right": true,
+      "textSha256": "5f0539365c261499820ce373f4c7a677f8a2a21a9a128914e859523314d14555"
+    },
+    {
+      "caseId": "R19",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        false
+      ],
+      "recordings": [
+        0.2,
+        0.18,
+        0.2,
+        0.2
+      ],
+      "right": true,
+      "textSha256": "5f0539365c261499820ce373f4c7a677f8a2a21a9a128914e859523314d14555"
+    },
+    {
+      "caseId": "R20",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.56,
+        0.58,
+        0.58,
+        0.57
+      ],
+      "right": true,
+      "textSha256": "5f0539365c261499820ce373f4c7a677f8a2a21a9a128914e859523314d14555"
+    },
+    {
+      "caseId": "R21",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.65,
+        0.67,
+        0.64,
+        0.67
+      ],
+      "right": true,
+      "textSha256": "c5a6da37745ca33fa7556c57c01ae8b060cfeb88153488e8fb18ea7a0a7ded66"
+    },
+    {
+      "caseId": "R22",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.26,
+        0.23,
+        0.26,
+        0.25
+      ],
+      "right": true,
+      "textSha256": "ceade44b7a3812456a222cb60b84461eed0d41a8c291e6b4c24ff7937b76c159"
+    },
+    {
+      "caseId": "R23",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.88,
+        0.85,
+        0.79,
+        0.81
+      ],
+      "right": true,
+      "textSha256": "ceade44b7a3812456a222cb60b84461eed0d41a8c291e6b4c24ff7937b76c159"
+    },
+    {
+      "caseId": "R24",
+      "id": "doc:docs/intake/2026-09-28-plan-v5-anchored-memory.md",
+      "answer": "docs/intake/2026-09-28-plan-v5-anchored-memory.md › 8.9 Lean card and a self-closing fix loop (2026-10-14) (line 401)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.41,
+        0.41,
+        0.4,
+        0.42
+      ],
+      "right": true,
+      "textSha256": "3ac3a8f63856e6e9bca3e488040169b5ebd01a2c9b9f3cd7707638480d3b76bf"
+    },
+    {
+      "caseId": "R25",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.22,
+        0.22,
+        0.24,
+        0.21
+      ],
+      "right": true,
+      "textSha256": "ceade44b7a3812456a222cb60b84461eed0d41a8c291e6b4c24ff7937b76c159"
+    },
+    {
+      "caseId": "R26",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        false,
+        false,
+        false
+      ],
+      "recordings": [
+        0.04,
+        0.04,
+        0.03,
+        0.04
+      ],
+      "right": false,
+      "textSha256": "93b111c5d380f0169a501bce1388e951fdec6ca0dadf21c12cf3e5d017eda11d"
+    },
+    {
+      "caseId": "R27",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.15,
+        0.16,
+        0.14,
+        0.14
+      ],
+      "right": true,
+      "textSha256": "20c11062c43358fba5af0d2472f88f4f7620239d7d6c6ef7a12cbd5b61f5df50"
+    },
+    {
+      "caseId": "R28",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.17,
+        0.18,
+        0.18,
+        0.19
+      ],
+      "right": true,
+      "textSha256": "5f0539365c261499820ce373f4c7a677f8a2a21a9a128914e859523314d14555"
+    },
+    {
+      "caseId": "R29",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.05,
+        0.05,
+        0.06,
+        0.05
+      ],
+      "right": true,
+      "textSha256": "ceade44b7a3812456a222cb60b84461eed0d41a8c291e6b4c24ff7937b76c159"
+    },
+    {
+      "caseId": "R30",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.12,
+        0.12,
+        0.13,
+        0.13
+      ],
+      "right": true,
+      "textSha256": "ceade44b7a3812456a222cb60b84461eed0d41a8c291e6b4c24ff7937b76c159"
+    },
+    {
+      "caseId": "R31",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.5,
+        0.58,
+        0.51,
+        0.48
+      ],
+      "right": true,
+      "textSha256": "ceade44b7a3812456a222cb60b84461eed0d41a8c291e6b4c24ff7937b76c159"
+    },
+    {
+      "caseId": "R33",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.51,
+        0.55,
+        0.57,
+        0.55
+      ],
+      "right": true,
+      "textSha256": "5f0539365c261499820ce373f4c7a677f8a2a21a9a128914e859523314d14555"
+    },
+    {
+      "caseId": "R34",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.79,
+        0.78,
+        0.79,
+        0.79
+      ],
+      "right": true,
+      "textSha256": "c5a6da37745ca33fa7556c57c01ae8b060cfeb88153488e8fb18ea7a0a7ded66"
+    },
+    {
+      "caseId": "H01",
+      "id": "doc:BasicUpscaler/DECISIONS.md",
+      "answer": "BasicUpscaler/DECISIONS.md › Decisions (line 1)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.94,
+        0.94,
+        0.94,
+        0.94
+      ],
+      "right": true,
+      "textSha256": "f8b9736c7524e8ddc822e8bb7cb528b2299dc961adf1f3a852c3e1266e69306d"
+    },
+    {
+      "caseId": "H02",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.67,
+        0.64,
+        0.66,
+        0.64
+      ],
+      "right": true,
+      "textSha256": "5f0539365c261499820ce373f4c7a677f8a2a21a9a128914e859523314d14555"
+    },
+    {
+      "caseId": "H03",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 6.1 Status (2026-09-28; live OMP 18.4.0 on the owner's Windows machine) (line 218)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.21,
+        0.19,
+        0.18,
+        0.18
+      ],
+      "right": true,
+      "textSha256": "20c11062c43358fba5af0d2472f88f4f7620239d7d6c6ef7a12cbd5b61f5df50"
+    },
+    {
+      "caseId": "H04",
+      "id": "doc:docs/intake/2026-09-28-plan-v5-anchored-memory.md",
+      "answer": "docs/intake/2026-09-28-plan-v5-anchored-memory.md › 1. Evidence from V4 (2026-09-27 → 2026-09-28) (line 29)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.18,
+        0.17,
+        0.2,
+        0.18
+      ],
+      "right": true,
+      "textSha256": "ab883ab27c0c3acab3efdf648c37f3f3cca5bbe57b0780a5783b583d45ae6e63"
+    },
+    {
+      "caseId": "H05",
+      "id": "doc:BasicUpscaler/DECISIONS.md",
+      "answer": "BasicUpscaler/DECISIONS.md › Decisions (line 1)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.63,
+        0.58,
+        0.62,
+        0.6
+      ],
+      "right": true,
+      "textSha256": "f8b9736c7524e8ddc822e8bb7cb528b2299dc961adf1f3a852c3e1266e69306d"
+    },
+    {
+      "caseId": "H06",
+      "id": "doc:BasicUpscaler/DECISIONS.md",
+      "answer": "BasicUpscaler/DECISIONS.md › Decisions (line 1)",
+      "votes": [
+        false,
+        false,
+        false
+      ],
+      "recordings": [
+        0.11,
+        0.09,
+        0.1,
+        0.1
+      ],
+      "right": false,
+      "textSha256": "d272f01b3cfb9ee4a0eacf2f0803637c607d463a08fddfc2a488e7f7a0b32c60"
+    },
+    {
+      "caseId": "H07",
+      "id": "doc:BasicUpscaler/DECISIONS.md",
+      "answer": "BasicUpscaler/DECISIONS.md › Decisions (line 1)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.13,
+        0.12,
+        0.15,
+        0.16
+      ],
+      "right": true,
+      "textSha256": "f8b9736c7524e8ddc822e8bb7cb528b2299dc961adf1f3a852c3e1266e69306d"
+    },
+    {
+      "caseId": "H08",
+      "id": "doc:docs/intake/2026-09-28-plan-v5-anchored-memory.md",
+      "answer": "docs/intake/2026-09-28-plan-v5-anchored-memory.md › 3.4 Kits: confirm or fold (line 114)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.81,
+        0.81,
+        0.8,
+        0.81
+      ],
+      "right": true,
+      "textSha256": "defc81c40bf5aebba79ebee4f9e37e43e06aa016c574a1d2098a6a466edd7acc"
+    },
+    {
+      "caseId": "H09",
+      "id": "doc:BasicUpscaler/DECISIONS.md",
+      "answer": "BasicUpscaler/DECISIONS.md › Decisions (line 1)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.17,
+        0.18,
+        0.18,
+        0.16
+      ],
+      "right": true,
+      "textSha256": "f8b9736c7524e8ddc822e8bb7cb528b2299dc961adf1f3a852c3e1266e69306d"
+    },
+    {
+      "caseId": "H10",
+      "id": "doc:BasicUpscaler/PLAN.md",
+      "answer": "BasicUpscaler/PLAN.md › Known bugs (line 131)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.16,
+        0.14,
+        0.13,
+        0.14
+      ],
+      "right": true,
+      "textSha256": "429d845a26c11a48838b14b9723eaea8b9953223273d486be39547eb93967977"
+    },
+    {
+      "caseId": "H11",
+      "id": "doc:BasicUpscaler/DECISIONS.md",
+      "answer": "BasicUpscaler/DECISIONS.md › Decisions (line 1)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.45,
+        0.48,
+        0.45,
+        0.46
+      ],
+      "right": true,
+      "textSha256": "f8b9736c7524e8ddc822e8bb7cb528b2299dc961adf1f3a852c3e1266e69306d"
+    },
+    {
+      "caseId": "H12",
+      "id": "doc:BasicUpscaler/DECISIONS.md",
+      "answer": "BasicUpscaler/DECISIONS.md › Decisions (line 1)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.18,
+        0.18,
+        0.19,
+        0.23
+      ],
+      "right": true,
+      "textSha256": "f8b9736c7524e8ddc822e8bb7cb528b2299dc961adf1f3a852c3e1266e69306d"
+    },
+    {
+      "caseId": "H17",
+      "id": "doc:docs/intake/2026-09-28-plan-v5-anchored-memory.md",
+      "answer": "docs/intake/2026-09-28-plan-v5-anchored-memory.md › 0. The one-paragraph version (line 13)",
+      "votes": [
+        true,
+        true,
+        true
+      ],
+      "recordings": [
+        0.83,
+        0.82,
+        0.82,
+        0.83
+      ],
+      "right": true,
+      "textSha256": "9a3390ad5211fb34aeb48d6103cdf3f61ef19a00f5bec4a53fa72789d88c9daf"
+    },
+    {
+      "caseId": "H20",
+      "id": "doc:docs/intake/2026-09-27-plan-v4-agent-experience.md",
+      "answer": "docs/intake/2026-09-27-plan-v4-agent-experience.md › 4.4 Capture and known fixes (tool_result, brain review) (line 148)",
+      "votes": [
+        false,
+        false,
+        true
+      ],
+      "recordings": [
+        0.53,
+        0.5,
+        0.53,
+        0.54
+      ],
+      "right": false,
+      "textSha256": "fce1276e174a478ad588f0875269ed4787494887fdbbb69b89b2022a86e5bf06"
+    }
+  ]
+}

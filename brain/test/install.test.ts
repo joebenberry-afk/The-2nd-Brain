@@ -5,9 +5,10 @@
  * the installed extension through its entry file, the way OMP does.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadNotes, staleEvidence } from "../src/notes.ts";
 import { PACKAGE_HOME } from "../src/util.ts";
@@ -16,6 +17,9 @@ const which = (cmd: string): string | undefined =>
   spawnSync(process.platform === "win32" ? "where" : "which", [cmd], { encoding: "utf8" }).stdout.split(/\r?\n/)[0]?.trim() || undefined;
 const PWSH = process.env.PWSH || which("pwsh") || (process.platform === "win32" ? which("powershell") : undefined);
 const BUN = which("bun");
+/** The test environment with PATH replaced (Windows spells it `Path`; both spellings in one environment clash). */
+const withPath = (path: string, extra: Record<string, string> = {}) =>
+  ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key))), TYPESAFE_API_KEY: undefined, PATH: path, ...extra });
 const sandbox = mkdtempSync(join(tmpdir(), "brain-install-"));
 const home = join(sandbox, "home");
 const shim = join(home, "brain", "bin", "brain.cmd");
@@ -138,6 +142,24 @@ describe("the sh shim for Git Bash and POSIX shells", () => {
     expect(spawnSync("git", ["-C", home, "ls-files", "-s", "brain/bin/brain"], { encoding: "utf8" }).stdout).toMatch(/^100755 /);
   });
 
+  // Every Claude Code hook and agent CLI call passes through this shim: probing `node --version`
+  // first cost a process on each of them.
+  it("starts node once, for the CLI, when node is on PATH, and Bun only when it is not", () => {
+    const bin = mkdtempSync(join(tmpdir(), "brain-shim-bin-"));
+    const log = join(bin, "calls.log").replace(/\\/g, "/");
+    for (const name of ["node", "bun"]) writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n[ "$1" = --version ] && echo v22.20.0\nexit 0\n`, { mode: 0o755 });
+    const shimSh = join(home, "brain", "bin", "brain").replace(/\\/g, "/");
+    const run = () => {
+      spawnSync(which("sh") as string, [shimSh, "help"], { env: withPath(bin) });
+      const calls = existsSync(log) ? readFileSync(log, "utf8").split(/\r?\n/).filter(Boolean) : [];
+      rmSync(log, { force: true });
+      return calls;
+    };
+    expect(run()).toEqual([`node ${dirname(shimSh)}/brain.mjs help`]);
+    rmSync(join(bin, "node"));
+    expect(run()).toEqual([`bun ${dirname(shimSh)}/brain.mjs help`]);
+  });
+
   // Git Bash rewrites arguments that look like POSIX paths before a native program sees them.
   it.skipIf(process.platform !== "win32" || !which("cygpath"))("passes slash-leading note text through Git Bash as typed", () => {
     const h = mkdtempSync(join(tmpdir(), "brain-shim-"));
@@ -188,5 +210,29 @@ describe("brain.mjs argv from BRAIN_ARGV (brain.ps1)", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("brain recall");
     expect(loadNotes(h).notes).toEqual([]);
+  });
+});
+
+describe("brain.mjs on a Node too old to strip types", () => {
+  const brainMjs = join(PACKAGE_HOME, "brain", "bin", "brain.mjs");
+  const old = join(sandbox, "old-node.mjs");
+  // The sh shim starts node without probing its version, so brain.mjs has to catch an old one itself.
+  // The preload makes this Node report an old version; a Bun it hands over to never loads it.
+  const run = (path: string, ...args: string[]) =>
+    spawnSync(process.execPath, [brainMjs, ...args], { encoding: "utf8", env: withPath(path, { NODE_OPTIONS: `--import=${pathToFileURL(old).href}` }) });
+  beforeAll(() => writeFileSync(old, 'Object.defineProperty(process.versions, "node", { value: "20.11.0" });\n'));
+
+  it("stops with one line on stderr when there is no Bun to hand over to", () => {
+    const r = run(mkdtempSync(join(tmpdir(), "brain-nobun-")), "help");
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr.trim().split(/\r?\n/)).toHaveLength(1);
+  });
+
+  it.skipIf(!BUN)("runs the command under Bun, with its arguments and its exit code", () => {
+    const ok = run(dirname(BUN as string), "help");
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.stdout).toContain("brain recall");
+    expect(run(dirname(BUN as string), "bogus-command").status).toBe(1);
   });
 });

@@ -141,9 +141,10 @@ describe("secrets never reach notes or working state", () => {
   it("masks credentials in the working state and its auto section", () => {
     const home = tmp();
     writeWork(home, "demo", "Goal: ship. api_key=sk-" + "a".repeat(30));
-    writeAuto(home, "demo", { failure: `curl -H "Authorization: Bearer ${"t".repeat(40)}" → 401`, ask: "use password: hunter2" });
+    writeAuto(home, "demo", { ask: "use password: hunter2" });
     const work = readFileSync(join(home, "work", "demo.md"), "utf8");
-    expect(work).not.toMatch(/sk-a{30}|hunter2|t{40}/);
+    expect(work).not.toMatch(/sk-a{30}|hunter2/);
+    expect(readWork(home, "demo")?.auto).toBe("- last ask: use password: ***");
     expect(readWork(home, "demo")?.text).toContain("Goal: ship.");
   });
 

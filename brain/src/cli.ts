@@ -7,20 +7,21 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { collectAsks, formatWeek, hostSessionRoots, weeklyAsks, windowStart } from "./asks.ts";
-import { acceptProposal, appendEvent, autoEvidence, captureUserRules, dismissError, errorSignature, eventsDir, EVENT_CAP_BYTES, findFix, hostNoise, listClaudeMemory, listProposals, parseEvent, rejectProposal, renderFix, safeSession, scanCommits, scanEvents, scrubCut, sessionEdits, toolEventFrom, unmatchedErrors, untag } from "./capture.ts";
+import { acceptProposal, appendEvent, autoEvidence, captureUserRules, dismissError, findFix, listClaudeMemory, listProposals, rejectProposal, renderFix, scanCommits, scanEvents, scrubCut, sessionEdits, toolEventFrom, unmatchedErrors } from "./capture.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
 import { convertV3 } from "./convert.ts";
 import { projectDocs, suggestDocs } from "./docs.ts";
-import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, markTested, retireNote, saveNote, staleAfterProblem, TESTERS, upgradeNote, type Kind } from "./notes.ts";
+import { createNote, differentBody, errorPatternProblem, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, markTested, retireNote, saveNote, staleAfterProblem, TESTERS, upgradeNote, type Kind } from "./notes.ts";
 import { exportOkf, OKF_VERSION } from "./okf.ts";
 import { addProjectDoc, docFile, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { pathHint } from "./paths.ts";
 import { silentRecallLines } from "./silent.ts";
 import { runMcp } from "./mcp.ts";
-import { judgedAnswer, typesafeJudge, typesafePairJudge } from "./judge.ts";
+import { judgedAnswer, typesafeJudge, typesafePairJudge, type ToraRecall } from "./judge.ts";
+import { toraScorer } from "./tora.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
-import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, type UseKind } from "./telemetry.ts";
+import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, toraVerdict, usageWindow, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 import { noteHint, tidyReport } from "./tidy.ts";
@@ -40,7 +41,7 @@ const USAGE = `brain — agent memory that survives compaction (V4)
 
   brain card                                   start card for this directory's project
   brain recall <query…|note id> [--all] [--history] [-n 1-3]
-  brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--stale-after DATE] [--global|--private]
+  brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--stale-after DATE] [--replaces ID] [--global|--private]
   brain fix <error text…>                      tested known fix, or silence
   brain state [<text…>]                        show or replace the working state
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
@@ -68,6 +69,7 @@ const OPTIONS = {
   evidence: { type: "string", multiple: true },
   tested: { type: "boolean" },
   "stale-after": { type: "string" },
+  replaces: { type: "string" },
   global: { type: "boolean" },
   private: { type: "boolean" },
   all: { type: "boolean" },
@@ -117,8 +119,8 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
-function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[], judged?: boolean, dropped?: number): void {
-  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID, hits, id, query, ids, judged, dropped });
+function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[], judged?: boolean, dropped?: number, tora?: ToraRecall): void {
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID, hits, id, query, ids, judged, dropped, tora });
 }
 
 /** Fixes that stopped helping (see demotedFixes): no longer fired until their note is edited. */
@@ -159,16 +161,16 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
 
   async recall(c) {
     const query = need(c.args.join(" "), "a query");
-    const { text, hits, ids, judged, dropped } = await judgedAnswer(loadNotes(c.home).notes, query, {
+    const { text, hits, ids, judged, dropped, tora } = await judgedAnswer(loadNotes(c.home).notes, query, {
       project: c.project,
       home: c.home,
       tools: false,
       all: c.opts.all === true,
       history: c.opts.history === true,
       limit: positiveInt(c.opts.limit, 3),
-    }, typesafeJudge(c.io.env));
+    }, typesafeJudge(c.io.env), toraScorer(c.io.env), c.io.env.BRAIN_TORA_SKIP === "on");
     c.io.out(text);
-    use(c, "recall", text, hits, undefined, query, ids, judged, dropped);
+    use(c, "recall", text, hits, undefined, query, ids, judged, dropped, tora);
     return 0;
   },
 
@@ -186,7 +188,12 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
     if (c.opts.global && c.opts.private) throw new UsageError("--global and --private exclude each other");
     const scope = c.opts.global ? GLOBAL : c.project.id;
-    const same = findSameHeadline(loadNotes(c.home).notes, text, scope, c.project.tags, c.opts.private === true);
+    const notes = loadNotes(c.home).notes;
+    const replaces = c.opts.replaces;
+    const old = replaces === undefined ? undefined : findNote(notes, replaces);
+    if (replaces !== undefined && !old) throw new UsageError(`no note ${replaces}`);
+    if (old?.retired) throw new UsageError(`${old.id} is already retired`);
+    const same = replaces === undefined ? findSameHeadline(notes, text, scope, scope === GLOBAL ? c.opts.tag : c.project.tags, c.opts.private === true) : undefined;
     if (same && differentBody(same, text)) {
       c.io.out(`not saved: ${same.id} has this headline with a different body; use a new headline, or \`brain retire ${same.id}\` first`);
       return 0;
@@ -224,7 +231,8 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       private: c.opts.private === true,
       source: "agent",
     });
-    c.io.out(`saved ${note.id}${untested}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env))}`);
+    if (old) retireNote(c.home, old.id, note.id);
+    c.io.out(`saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env))}`);
     use(c, "note", text);
     return 0;
   },
@@ -235,7 +243,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       return 0;
     }
     const work = writeWork(c.home, c.project.id, c.args.join(" "));
-    c.io.out(stateSaved(work));
+    c.io.out(stateSaved(work, c.home, c.project));
     use(c, "state", work.text);
     return 0;
   },
@@ -260,7 +268,9 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const note = findNote(loadNotes(c.home).notes, id);
     if (!note) throw new Error(`no note ${id}`);
     const project = note.project === GLOBAL ? c.project : projectById(c.home, note.project, c.io.cwd);
-    saveNote(c.home, markTested(note, "owner", [project.root, project.docRoot, c.home].filter((root): root is string => !!root)));
+    // Another repo's files are not this note's evidence: without the note's own checkout, only the Brain home resolves.
+    const checkout = note.project === GLOBAL || (!!project.root && resolveProject(c.home, project.root, {}).id === project.id);
+    saveNote(c.home, markTested(note, "owner", (checkout ? [project.root, project.docRoot, c.home] : [c.home]).filter((root): root is string => !!root)));
     c.io.out(`tested ${note.id}`);
     return 0;
   },
@@ -361,7 +371,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     }
     if (report.unused.length) {
       shown = true;
-      c.io.out("Unused " + days + "d");
+      c.io.out("Unused " + report.unusedWindow);
       for (const note of report.unused) c.io.out("  " + note.id + "  " + headline(note) + " · brain retire " + note.id);
     }
     if (!shown) c.io.out("nothing to tidy");
@@ -376,10 +386,13 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
     c.io.out(`recall: ${s.recallQueries.logged} queries logged, ${s.recallQueries.silent} silent`);
+    const t = s.tora;
+    c.io.out(`tora: ${t.recalls} recalls scored · ${t.added} candidates added, ${t.addedKept} kept by Jev · would skip Jev on ${t.wouldSkip} (lost ${t.lost}) · ${t.keptBelowFloor} of ${t.kept} kept scored below the floor`);
+    c.io.out(toraVerdict(t));
     const active = loadNotes(c.home).notes.filter(note => !note.retired);
     const usage = noteUsage(c.home, s.days);
-    const used = active.filter(note => usage.has(note.id)).length;
-    c.io.out(`notes used (${s.days}d): ${used} of ${active.length} active · never: ${active.length - used} (brain tidy)`);
+    const used = active.filter(note => usage.notes.has(note.id)).length;
+    c.io.out(`notes used (${usageWindow(usage, s.days)}): ${used} of ${active.length} active · never: ${active.length - used} (brain tidy)`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
     const schemas = toolSchemaUse(c.home, s.days);
@@ -423,6 +436,10 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       const problem = n.staleAfter ? staleAfterProblem(n.staleAfter) : null;
       if (problem) errors.push(`${n.path}: ${problem}; the note never goes stale`);
       if (n.testedBy && !(TESTERS as readonly string[]).includes(n.testedBy)) errors.push(`${n.path}: tested_by ${JSON.stringify(n.testedBy)} is not ${TESTERS.join(", ")}`);
+      if (!n.retired) for (const pattern of n.errors) {
+        const patternProblem = errorPatternProblem(pattern);
+        if (patternProblem) errors.push(`${n.path}: ${patternProblem}; the known fix never fires`);
+      }
     }
     const active = notes.filter((n) => !n.retired).length;
     c.io.out(`notes: ${notes.length} (${active} active) · projects: ${Object.keys(loadProjects(c.home)).length}`);
@@ -548,6 +565,26 @@ function hookTail(path: string, limit: number): string[] {
 }
 
 /**
+ * The model message that issued tool call `toolUseId`, from the transcript's tail. Claude Code writes
+ * each content block of a message as its own row, so parallel calls share one message id. Undefined
+ * when the transcript or the call's row is not there (the host writes transcripts asynchronously).
+ */
+function toolUseMessage(transcript: unknown, toolUseId: unknown): string | undefined {
+  if (typeof transcript !== "string" || !transcript || typeof toolUseId !== "string" || !toolUseId) return undefined;
+  try {
+    for (const line of hookTail(transcript, 262_144).reverse()) {
+      if (!line.includes(toolUseId)) continue;
+      let row: { type?: unknown; message?: { id?: unknown; content?: unknown } } | null;
+      try { row = JSON.parse(line); } catch { continue; }
+      const content = row?.message?.content;
+      if (row?.type !== "assistant" || typeof row.message?.id !== "string" || !Array.isArray(content)) continue;
+      if (content.some((block: { type?: unknown; id?: unknown } | null) => block?.type === "tool_use" && block.id === toolUseId)) return row.message.id;
+    }
+  } catch { /* an unreadable transcript leaves the call unplaced */ }
+  return undefined;
+}
+
+/**
  * Rows Claude Code writes as user rows although nobody typed them: task notifications, slash-command
  * wrappers and their output, interrupt markers, and skill expansions (`<create-pr-command>`).
  */
@@ -560,23 +597,6 @@ const SLASH_COMMAND = /^\s*\/[\w:-]+(?:\s|$)/;
 function saveHookAuto(home: string, project: Project, session: string, transcript: unknown, scratchpad: unknown): void {
   const edited = sessionEdits(home, session, project.root, typeof scratchpad === "string" && scratchpad ? [scratchpad] : []);
   const fields: AutoFields = { edited: edited.length ? edited : undefined };
-  try {
-    let failureKey: string | undefined;
-    for (const line of hookTail(join(eventsDir(home), safeSession(session) + ".jsonl"), EVENT_CAP_BYTES + 8192)) {
-      const event = parseEvent(line);
-      if (!event || event.session !== session) continue;
-      // The last failure stays until the same command (or tool) succeeds; host plumbing (an aborted
-      // or cancelled task) says nothing about the project. As OMP does.
-      const key = event.command || event.tool;
-      if (event.ok && key === failureKey) fields.failure = failureKey = undefined;
-      if (!event.ok && event.error && !hostNoise(event.tool, event.error)) {
-        fields.failure = `${untag(key)} → ${errorSignature(event.error)}`;
-        failureKey = key;
-      }
-    }
-  } catch {
-    // A session may contain only conversation, with no captured tool events.
-  }
   if (typeof transcript === "string" && transcript) {
     try {
       let lastPrompt: string | undefined, slashPrompt: string | undefined;
@@ -664,10 +684,9 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         if (p.source === "compact") {
           output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: LEAN_LINE } };
         } else if (p.source !== "resume") {
+          // No scanEvents here: catching up on earlier sessions' events took ~300 ms of every start
+          // card. SessionEnd and PreCompact run it, off any prompt's path.
           const { notes } = loadNotes(home);
-          if (!sub) {
-            try { scanEvents(home, notes); } catch (error) { failed(error); /* the card matters more than capture */ }
-          }
           const card = renderCard(home, notes, project, { tools: false, subagent: sub, host: "claude-code" });
           if (card) {
             output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: card } };
@@ -687,6 +706,9 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         const fields = toolEventFrom(p.tool_name, p.tool_input, event === "PostToolUseFailure", p.error);
         appendEvent(home, key, cwd, fields);
         const pendingPath = join(fixDir, sha(fields.command || fields.tool) + ".json");
+        // The model message that issued this call, read from the transcript at most once and only when needed.
+        let issuedBy: string | undefined | null = null;
+        const message = (): string | undefined => (issuedBy === null ? (issuedBy = toolUseMessage(p.transcript_path, p.tool_use_id)) : issuedBy);
         if (session) {
           const claimed = `${pendingPath}.${process.pid}.claimed`;
           try {
@@ -694,7 +716,15 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
             renameSync(pendingPath, claimed);
             const pending: unknown = JSON.parse(readFileSync(claimed, "utf8"));
             if (pending && typeof pending === "object" && "id" in pending && typeof pending.id === "string" && "project" in pending && typeof pending.project === "string") {
-              logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: logSession, via: "hook", sub });
+              // A call of the message that received the fix ran in the same batch: the model had not
+              // seen the fix yet, so that is no outcome. The firing waits for a call of a later message.
+              const fired = "message" in pending && typeof pending.message === "string" ? pending.message : undefined;
+              const current = fired === undefined ? undefined : message();
+              if (fired !== undefined && (current === undefined || current === fired)) {
+                if (!existsSync(pendingPath)) renameSync(claimed, pendingPath);
+              } else {
+                logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: logSession, via: "hook", sub });
+              }
             }
           } catch { /* missing or torn local pending state is unmeasured */ }
           finally {
@@ -713,7 +743,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
             logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session: logSession, via: "hook", sub, id: fix.id });
             if (session) {
               try {
-                writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id }));
+                writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id, message: message() }));
                 writeAtomic(shown, "");
               } catch { /* telemetry state must not suppress the fix */ }
             }
@@ -723,7 +753,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
             output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: hint } };
             logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(hint), ms: 0, session: logSession, via: "hook", sub, id: "pathhint" });
             if (session) {
-              try { writeAtomic(pendingPath, JSON.stringify({ id: "pathhint", project: project.id })); }
+              try { writeAtomic(pendingPath, JSON.stringify({ id: "pathhint", project: project.id, message: message() })); }
               catch { /* telemetry state must not suppress the hint */ }
             }
           }
@@ -731,7 +761,11 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
       } else if (session && (event === "SessionEnd" || event === "PreCompact" || event === "SubagentStop")) {
         try { rmSync(fixDir, { recursive: true, force: true }); }
         catch { /* pending telemetry cleanup must not suppress auto-save */ }
-        if (!sub) saveHookAuto(home, project, session, p.transcript_path, p.scratchpad_dir);
+        if (!sub) {
+          saveHookAuto(home, project, session, p.transcript_path, p.scratchpad_dir);
+          // Here, not at SessionStart: catching up on earlier sessions' events takes ~300 ms.
+          try { scanEvents(home, loadNotes(home).notes); } catch (error) { failed(error); /* capture never breaks the host */ }
+        }
       }
       if (!sub && session && (event === "PostToolUse" || event === "Stop") && typeof p.transcript_path === "string") {
         try {

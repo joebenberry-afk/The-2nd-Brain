@@ -17,7 +17,8 @@ export function projectDocs(home: string, project: Project): string[] {
   }))];
 }
 
-interface Section { heading: string; slug: string; level: number; line: number; text: string }
+/** One Markdown heading with the text under it. */
+export interface Section { heading: string; slug: string; level: number; line: number; text: string }
 
 /** Heading text as shown: links, HTML, backticks and emphasis stars removed. */
 const headingText = (text: string) => text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/<[^>]*>/g, "").replace(/[`*]/g, "");
@@ -74,9 +75,13 @@ export function anchorSection(root: string, anchor: string): Section | undefined
   if (!file) return undefined;
   let fragment = anchor.slice(hash + 1);
   try { fragment = decodeURIComponent(fragment); } catch { /* not percent-encoded: keep it as written */ }
-  // The exact slug first, so a duplicate's "foo-1" keeps its own section; then heading text or case.
+  // The exact slug first, so a duplicate's "foo-1" keeps its own section; then heading text or case;
+  // then a bare section number ("#17", "#§9.1") for the heading numbered that way ("## 17. Scoreboard").
   const all = sections(file);
-  return all.find(section => section.slug === fragment) ?? all.find(section => section.slug === slugOf(fragment));
+  const number = /^§?\s*(\d+(?:\.\d+)*)$/.exec(fragment)?.[1];
+  const numbered = number ? new RegExp(`^§?\\s*${number.replace(/\./g, "\\.")}\\.?(?:\\s|$)`) : undefined;
+  return all.find(section => section.slug === fragment) ?? all.find(section => section.slug === slugOf(fragment))
+    ?? (numbered ? all.find(section => numbered.test(section.heading)) : undefined);
 }
 
 /** Text under one heading, excluding the heading itself; missing targets never return stale text. */

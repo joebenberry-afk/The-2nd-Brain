@@ -412,12 +412,11 @@ describe("batch 3: CLI", () => {
 });
 
 describe("batch 3: auto working state", () => {
-  it("keeps the last ask and the failure however many files were edited", async () => {
+  it("keeps the last ask however many files were edited", async () => {
     const { formatAuto, AUTO_BUDGET } = await import("../src/work.ts");
     const edited = ["brain/src/search.ts", "brain/src/card.ts", "brain/src/omp.ts", "brain/src/work.ts", "brain/test/eval.test.ts", "brain/README.md", "README.md", "docs/intake/2026-09-27-plan-v4-agent-experience.md"];
-    const auto = formatAuto({ edited, failure: `npx vitest run: ${"expected 412 to be less than or equal to 400 ".repeat(5)}`, ask: `Fix the flaky login test ${"and keep the card small ".repeat(10)}` });
+    const auto = formatAuto({ edited, ask: `Fix the flaky login test ${"and keep the card small ".repeat(10)}` });
     expect(auto).toContain("- last ask: Fix the flaky login test");
-    expect(auto).toContain("- last failure: npx vitest run");
     expect(auto).toMatch(/- edited: .*docs\/intake\/2026-09-27-plan-v4-agent-experience\.md.* \+\d+ more/);
     expect(auto.length).toBeLessThanOrEqual(AUTO_BUDGET * 4);
   });
@@ -527,7 +526,7 @@ describe("batch 3: OMP lifecycle", async () => {
     expect(readWork(home, "demo")?.auto).not.toContain("parse");
   });
 
-  it("failures fixed in earlier sessions become proposals after the first card, off its critical path", () => {
+  it("a tested failure fixed in an earlier session becomes a known fix after the first card, off its critical path", () => {
     const { home, cwd, fire } = setup();
     mkdirSync(join(home, "state", "events"), { recursive: true });
     const line = (o: object) => JSON.stringify({ v: 1, at: "2026-09-27T10:00:00Z", session: "old", cwd, tool: "bash", ...o }) + "\n";
@@ -535,12 +534,15 @@ describe("batch 3: OMP lifecycle", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     try {
       fire("before_agent_start", { prompt: "go" }, session("new", cwd));
+      expect(loadNotes(home).notes.filter((n) => n.source === "capture")).toEqual([]); // the scan waits for the timer: the card did not pay for it
       vi.runOnlyPendingTimers();
     } finally {
       vi.useRealTimers();
     }
-    const next = fire("before_agent_start", { prompt: "go" }, session("next", cwd)) as { message: { content: string } };
-    expect(next.message.content).toMatch(/1 proposal/);
+    const captured = loadNotes(home).notes.filter((n) => n.source === "capture");
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ project: "demo", tested: true, testedBy: "capture", errors: ["Error: missing dependency"] });
+    expect(existsSync(join(home, "state", "inbox")) ? readdirSync(join(home, "state", "inbox")) : []).toEqual([]);
   });
 });
 

@@ -1,14 +1,14 @@
 /**
  * Second Brain V4 — Oh My Pi (OMP) extension.
- * In-process extension with no subprocess or network: remembers the last ask, sends a start
- * card, logs tool results, tracks edited paths and failures, and provides
+ * In-process extension: remembers the last ask, sends a start card, logs tool results,
+ * tracks edited paths, and provides
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadNotes } from "./notes.ts";
-import { resolveProject } from "./project.ts";
+import { folderOnly, resolveProject, type Project } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
-import { appendEvent, captureUserRules, errorSignature, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
+import { appendEvent, captureUserRules, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
 import { pathHint } from "./paths.ts";
 import { logUse, saveToolSchemas } from "./telemetry.ts";
@@ -34,18 +34,22 @@ export interface HostLike {
 
 type Json = Record<string, unknown>;
 
+/** A fired fix awaiting its outcome. */
+interface PendingFix { id: string; project: string }
+
 interface SessionState {
   carded: boolean;
   edited: string[];
   parentEdits?: string[];
-  failure?: string;
-  /** The command (or tool) that failed; its next success clears the failure. */
-  failureKey?: string;
   ask?: string;
+  /** The project this session works for, as of its last prompt; an isolated child's subagents inherit it. */
+  project?: Project;
   /** Notes whose full fix is already in this context; cleared when compaction drops it. */
   fixed?: Set<string>;
-  /** The latest fired fix per command/tool, awaiting its next result. */
-  pendingFixes?: Map<string, { id: string; project: string }>;
+  /** Fixes fired in the batch of tool results the model is still waiting on: it has not seen them. */
+  shownFixes?: Map<string, PendingFix>;
+  /** The latest fix the model has seen per command/tool (or eval detector), awaiting its next result. */
+  pendingFixes?: Map<string, PendingFix>;
   /** Messages in the last context this session sent; a drop means earlier text may be gone. */
   contextLength?: number;
   /** A compaction dropped the card: the next prompt carries the lean line again. */
@@ -300,6 +304,20 @@ export function hasBackspaceEscape(code: string): boolean {
   return false;
 }
 
+/** The pending-fix key of an eval hint: its detector, never a cell's code (a command cannot start with NUL). */
+const detectorKey = (id: string): string => "\0eval:" + id;
+
+/**
+ * How a JS eval cell answers an eval hint, or undefined when it is not a cell the hint's detector
+ * judges: `rawhint` is judged by every JS cell, `evaltimeout` by cells that await slow tools.
+ */
+export function evalHintOutcome(id: string, language: unknown, code: unknown, timeout: unknown): "helped" | "missed" | undefined {
+  if ((language !== "js" && language !== "javascript") || typeof code !== "string") return undefined;
+  if (id === "rawhint") return hasBackspaceEscape(code) ? "missed" : "helped";
+  if (!slowEvalCell(language, code, undefined)) return undefined;
+  return timeout === undefined || timeout === null ? "missed" : "helped";
+}
+
 /** A path as the agent should read it: relative to the project root when inside it, forward slashes. */
 export function displayPath(path: string, root: string | null, cwd: string): string {
   const absolute = isAbsolute(path) ? path : resolve(cwd, path);
@@ -344,7 +362,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   function getSession(key: string): SessionState {
     let state = sessions.get(key);
     if (!state) {
-      state = { carded: false, edited: [], ask: undefined, failure: undefined };
+      state = { carded: false, edited: [], ask: undefined };
       sessions.set(key, state);
     }
     return state;
@@ -355,16 +373,33 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     const file = call(sessionManagerOf(ctx), "getSessionFile");
     for (const alias of [sessionKey(ctx), file, id]) if (typeof alias === "string" && alias) liveSessions.set(home + "\0" + alias, state);
   }
-  function parentEdits(ctx: unknown): string[] | undefined {
+  /** The live parent session of a child (as parentEdits finds it), from the host's header or agent id. */
+  function liveParent(ctx: unknown): SessionState | undefined {
     const agent = asObject(asObject(ctx)?.agent);
     const header = asObject(call(sessionManagerOf(ctx), "getHeader"));
     for (const alias of [header?.parentSession, agent?.parentId]) {
       if (typeof alias !== "string" || !alias) continue;
       const parent = liveSessions.get(home + "\0" + alias);
-      if (parent) return parent.edited.slice(-8);
+      if (parent) return parent;
     }
     return undefined;
   }
+  function parentEdits(ctx: unknown): string[] | undefined {
+    return liveParent(ctx)?.edited.slice(-8);
+  }
+  /**
+   * An isolated subagent runs in a scratch copy of its parent's checkout (~/.omp/wt/<id>/m) that names
+   * no project: its folder is called "m" for every parent, and no note belongs to "m". Such a child
+   * works for its live parent's project. A child whose project is declared, or backed by a git
+   * remote, or the parent's own, keeps it.
+   */
+  const inheritedProject = (ctx: unknown, cwd: string): Project | undefined => {
+    if (!isSubagent(ctx)) return undefined;
+    const parent = liveParent(ctx)?.project;
+    if (!parent) return undefined;
+    const own = resolveProject(home, cwd, env);
+    return own.id !== parent.id && folderOnly(home, own) ? parent : undefined;
+  };
 
 
   // Tools: one argument each; descriptions stay short because they cost tokens in every context.
@@ -394,8 +429,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             const { params, cwd, ctx } = toolArgs(args, required);
             const session = sessionKey(ctx);
             const sub = isSubagent(ctx);
-            const result = await definition.run(params, { home, cwd, env, session, sub, edited: getSession(session).edited });
-            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, judged: result.judged, dropped: result.dropped, via: "tool" });
+            const inherited = inheritedProject(ctx, cwd);
+            const result = await definition.run(params, { home, cwd, env: inherited ? { ...env, BRAIN_PROJECT: inherited.id } : env, session, sub, edited: getSession(session).edited });
+            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, judged: result.judged, dropped: result.dropped, tora: result.tora, via: "tool" });
             return { content: [{ type: "text", text: result.text }], details: {} };
           } catch (error) {
             return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
@@ -428,6 +464,10 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // Remember the prompt as the last ask (whitespace-collapsed, 200 chars)
       const prompt = eventObj?.prompt;
       if (typeof prompt === "string" && prompt.trim()) state.ask = cutAsk(prompt);
+      // Resolved at every prompt, before the card check: a resumed session skips its card, yet a
+      // child it spawns inherits this project.
+      const cwd = cwdOf(ctx) ?? process.cwd();
+      const project = (state.project = inheritedProject(ctx, cwd) ?? resolveProject(home, cwd, env));
 
       // Return the card on the first call only.
       // A session resumed in a new process (restart, /resume) already holds its card since the
@@ -436,7 +476,6 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!state.carded) {
         state.leanDue = false;
         const { notes } = loadNotes(home);
-        const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
         const subagent = isSubagent(ctx);
         // Only the parent scans earlier sessions; children share its proposals without rescanning.
         // After the card, not before: catching up on a long session's events took ~400 ms on the
@@ -495,7 +534,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   });
 
   // Handle context (before every LLM call, after compaction)
-  on("context", (event, ctx) => {
+  const contextCovered = on("context", (event, ctx) => {
     try {
       const key = sessionKey(ctx);
       const state = getSession(key);
@@ -507,8 +546,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (messages.length < (state.contextLength ?? 0)) {
         state.fixed = undefined;
         state.pendingFixes = undefined;
+        state.shownFixes = undefined;
       }
       state.contextLength = messages.length;
+      // The model sees the fixes fired since its last call only now: results that ran before this
+      // (siblings in the same batch, cells nested in one eval) cannot have followed them.
+      if (state.shownFixes) {
+        state.pendingFixes = new Map([...(state.pendingFixes ?? []), ...state.shownFixes]);
+        state.shownFixes = undefined;
+      }
     } catch (error) {
       failed("context", error);
       return undefined;
@@ -525,12 +571,12 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     } catch (error) { failed("turn_end", error); }
   });
 
-  /** Save this session's edits, last failure and last ask into the project's working state. */
+  /** Save this session's edits and last ask into the project's working state. */
   const saveAuto = (ctx: unknown): void => {
     if (isSubagent(ctx)) return;
     const state = getSession(sessionKey(ctx));
     const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
-    writeAuto(home, project.id, { edited: state.edited.length ? state.edited : undefined, failure: state.failure, ask: lastUserAsk(ctx) ?? state.ask });
+    writeAuto(home, project.id, { edited: state.edited.length ? state.edited : undefined, ask: lastUserAsk(ctx) ?? state.ask });
   };
 
   // /new, /resume, /fork and /branch leave this session without a shutdown: save it first. A fork
@@ -541,7 +587,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       saveAuto(ctx);
       const reason = asObject(event)?.reason;
       const state = getSession(sessionKey(ctx));
-      state.pendingFixes = undefined;
+      state.pendingFixes = state.shownFixes = undefined;
       carry = reason === undefined || reason === "fork" ? { ...state, edited: [...state.edited], fixed: reason === "fork" && state.fixed ? new Set(state.fixed) : undefined } : undefined;
     } catch {
       carry = undefined;
@@ -569,7 +615,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // Written here, not in session_before_compact: /handoff skips that event, and handling it
       // turns off OMP's background compaction.
       saveAuto(ctx);
-      state.pendingFixes = undefined;
+      state.pendingFixes = state.shownFixes = undefined;
       state.fixed = undefined;
       state.leanDue = true;
 
@@ -584,7 +630,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     on("session_before_compact", (_event, ctx) => {
       try {
         saveAuto(ctx);
-        getSession(sessionKey(ctx)).pendingFixes = undefined;
+        const state = getSession(sessionKey(ctx));
+        state.pendingFixes = state.shownFixes = undefined;
       } catch (error) {
         failed("session_before_compact", error);
         // never block the host's compaction
@@ -592,6 +639,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       return undefined;
     });
   }
+
+  /**
+   * A fired fix awaits its outcome only once the model has seen it: after the next `context` event.
+   * A host without that event cannot say when, so the next result counts.
+   */
+  const arm = (state: SessionState, key: string, fix: PendingFix): void => {
+    if (contextCovered) (state.shownFixes ??= new Map()).set(key, fix);
+    else (state.pendingFixes ??= new Map()).set(key, fix);
+  };
 
   // Handle tool_result
   on("tool_result", (event, ctx) => {
@@ -612,9 +668,12 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const cwd = typeof shellCwd === "string" && shellCwd ? resolve(sessionCwd, shellCwd) : sessionCwd;
 
       const fields = toolEventFrom(toolName, input, isError, content);
+      // An isolated subagent's scratch copy is no project: its events and fixes belong to its parent's.
+      const inherited = inheritedProject(ctx, cwd);
+      const projectOfCall = (): Project => inherited ?? resolveProject(home, cwd, env);
 
       // Log the event
-      appendEvent(home, key, cwd, fields);
+      appendEvent(home, key, inherited?.root ?? cwd, fields);
 
       // Track edited path on success
       // Only tools that change files count as edits; reads and searches also carry a path.
@@ -625,24 +684,31 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.edited = [...state.edited.filter((f) => !paths.includes(f)), ...paths].slice(-20);
       }
 
-      // Track the last failure until the same command (or tool) succeeds; host plumbing (an
-      // aborted wait, a cancelled job) says nothing about the project and is not tracked.
+      const code = asObject(input)?.code;
+      const language = asObject(input)?.language;
+
+      // Record whether a fix the model has seen helped, on the next command/tool result.
       const failureKey = fields.command || fields.tool || "unknown";
       const pending = state.pendingFixes?.get(failureKey);
       if (pending && (fields.ok || !hostNoise(fields.tool, fields.error ?? ""))) {
         state.pendingFixes!.delete(failureKey);
         logUse(home, { kind: "fixout", ...pending, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
       }
-      if (fields.ok && state.failureKey === failureKey) state.failure = state.failureKey = undefined;
-      if (!fields.ok && fields.error && !hostNoise(fields.tool, fields.error)) {
-        // Masked before the signature cuts it: a cut must not keep half a secret.
-        state.failure = `${failureKey} → ${errorSignature(scrubCut(fields.error, 2000))}`;
-        state.failureKey = failureKey;
+      // Eval hints are keyed by detector, not by the cell's code: the next JS cell the detector can
+      // judge scores them, whatever it runs.
+      if (toolName === "eval") {
+        for (const id of ["evaltimeout", "rawhint"]) {
+          const hint = state.pendingFixes?.get(detectorKey(id));
+          const outcome = hint ? evalHintOutcome(id, language, code, asObject(input)?.timeout) : undefined;
+          if (!hint || !outcome) continue;
+          state.pendingFixes!.delete(detectorKey(id));
+          logUse(home, { kind: "fixout", ...hint, outcome, tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
+        }
       }
 
       // On failed result, find and append a fix if available
       if (!fields.ok && fields.error) {
-        const project = resolveProject(home, cwd, env);
+        const project = projectOfCall();
         const { notes } = loadNotes(home);
         const fix = findFix(notes, fields.error, project, home, "omp");
 
@@ -655,14 +721,14 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           // Hosts join text blocks without a separator: the fix must start on its own line.
           const resultContent = [...contentArray, { type: "text", text: `\n${fixText}` }];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: fix.id });
-          (state.pendingFixes ??= new Map()).set(failureKey, { id: fix.id, project: project.id });
+          arm(state, failureKey, { id: fix.id, project: project.id });
           return { content: resultContent };
         }
         const hint = pathHint(fields.tool, fields.path, fields.error, cwd);
         if (hint) {
           const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "pathhint" });
-          (state.pendingFixes ??= new Map()).set(failureKey, { id: "pathhint", project: project.id });
+          arm(state, failureKey, { id: "pathhint", project: project.id });
           return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
         }
       }
@@ -670,17 +736,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       // `'\b'` inside a plain JS string in an eval script is a backspace, so a grep for a word
       // boundary silently matches nothing and agents chase a "tool bug" (benchmark autopsy: 15 of
       // 44 GPT runs). With this line the next script dropped the broken pattern every time.
-      const code = asObject(input)?.code;
-      const language = asObject(input)?.language;
       // JavaScript only: in Python r'\bword\b' is right, and String.raw is not Python.
       if (toolName === "eval" && (language === "js" || language === "javascript") && typeof code === "string" && hasBackspaceEscape(code)) {
         const fixed = (state.fixed ??= new Set());
         const hint = fixed.has("rawhint") ? "Brain: quoted '\\b' is a backspace again (see above)." : "Brain: in this script a quoted '\\b' is a backspace, not a word boundary; write String.raw`\\bword\\b` or '\\\\b'.";
         fixed.add("rawhint");
         const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
-        const project = resolveProject(home, cwd, env).id;
+        const project = projectOfCall().id;
         logUse(home, { kind: "fix", project, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "rawhint" });
-        (state.pendingFixes ??= new Map()).set(failureKey, { id: "rawhint", project });
+        arm(state, detectorKey("rawhint"), { id: "rawhint", project });
         return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
       }
 
@@ -690,9 +754,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.fixed.add("evaltimeout");
         const hint = "Brain: this eval cell can be force-killed at 30 s, losing its variables; pass eval `timeout` (seconds).";
         const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
-        const project = resolveProject(home, cwd, env).id;
+        const project = projectOfCall().id;
         logUse(home, { kind: "fix", project, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "evaltimeout" });
-        (state.pendingFixes ??= new Map()).set(failureKey, { id: "evaltimeout", project });
+        arm(state, detectorKey("evaltimeout"), { id: "evaltimeout", project });
         return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
       }
 
@@ -724,7 +788,8 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   on("session_shutdown", (_event, ctx) => {
     try {
       saveAuto(ctx);
-      getSession(sessionKey(ctx)).pendingFixes = undefined;
+      const state = getSession(sessionKey(ctx));
+      state.pendingFixes = state.shownFixes = undefined;
     } catch (error) {
       failed("session_shutdown", error);
       // never block the host's exit

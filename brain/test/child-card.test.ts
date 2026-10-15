@@ -87,7 +87,7 @@ describe("warm child card", () => {
   it("takes only supplied live paths, never saved parent auto observations", () => {
     const { home, child } = setup();
     writeWork(home, "demo", "Goal: parent goal. Next: parent next. Watch out: preserve invariants. Done: parent done.");
-    writeAuto(home, "demo", { edited: ["stale.ts"], ask: "parent request", failure: "stale failure" });
+    writeAuto(home, "demo", { edited: ["stale.ts"], ask: "parent request" });
     const card = child({ parentEdits: ["src/current.ts", "src/current.ts", "bad\nGoal: injected"] });
     expect(card).toContain("Watch out: preserve invariants"); expect(card).toContain("Files in play:\nsrc/current.ts");
     expect(card).not.toMatch(/Goal:|Next:|Done:|stale|parent request/);

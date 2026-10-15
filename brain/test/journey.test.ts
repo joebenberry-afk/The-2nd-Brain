@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { main } from "../src/cli.ts";
 import secondBrain, { type HostLike } from "../src/omp.ts";
+import { loadNotes } from "../src/notes.ts";
 import { readWork } from "../src/work.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
@@ -60,14 +61,13 @@ it("a failure fixed in one session becomes the known fix and the card of the nex
   const work = readWork(home, "shop-app");
   expect(work?.text).toContain("Goal: green test suite");
   expect(work?.auto).toContain("- edited: src/cart.ts");
-  expect(work?.auto).toContain("- last failure: npm test → Error: Cannot find module 'left-pad'");
   day1.fire("session_shutdown", {}, s1);
 
-  // Between sessions: review turns the failed → fixed pair into a tested gotcha.
+  // Between sessions: review's scan writes the tested failed → fixed pair as a known fix itself.
   const review = await cli(home, app, "review");
-  const pid = /^(p-[0-9a-f]+) \[gotcha, tested\]/m.exec(review)?.[1];
-  expect(pid, review).toBeDefined();
-  expect(await cli(home, app, "accept", pid as string)).toMatch(/^accepted p-[0-9a-f]+ → n-[0-9a-f]{10}$/);
+  expect(review).not.toMatch(/^p-[0-9a-f]+/m);
+  expect(loadNotes(home).notes).toHaveLength(1);
+  expect(loadNotes(home).notes[0]).toMatchObject({ project: "shop-app", kind: "gotcha", source: "capture", tested: true, testedBy: "capture" });
 
   // Session 2 in the app: the card carries the working state and knows the gotcha …
   const day2 = omp(home);
@@ -76,7 +76,7 @@ it("a failure fixed in one session becomes the known fix and the card of the nex
   expect(card).toMatch(/^Brain · shop-app/);
   expect(card).toContain("Where we left off");
   expect(card).toContain("[gotcha, tested] npm: npm test fails (Error: Cannot find module 'left-pad')");
-  expect(card).toContain("brain_state(");
+  expect(card.split("\n").at(-1)).toMatch(/^Work lean:/);
   // … and the same failure gets its fix appended.
   const failed = day2.fire("tool_result", { toolName: "bash", input: { command: "npm test" }, isError: true, content: [{ type: "text", text: "Error: Cannot find module 'left-pad'\n  at require" }] }, s2) as {
     content: { text: string }[];

@@ -23,6 +23,24 @@ function setup() {
   return { home, root, project, file, note };
 }
 
+it("brain_note replaces a corrected headline, links both notes, and rejects invalid targets before saving", async () => {
+  const { home, root, note } = setup();
+  const tool = brainTools.find(tool => tool.name === "brain_note")!;
+  const context = { home, cwd: root, env: { BRAIN_JUDGE: "off" }, sub: false, session: "replace" };
+  expect(tool.params.replaces).toMatchObject({ type: "string", optional: true });
+  expect(tool.description).toContain("replaces: id of a note this corrects");
+  await expect(tool.run({ text: "Missing target correction", replaces: "n-missing" }, context)).rejects.toThrow("no note n-missing");
+  expect(loadNotes(home).notes).toHaveLength(1);
+  const result = await tool.run({ text: "Quartz repair\nRebuild the quartz cache instead.", replaces: note.id }, context);
+  const notes = loadNotes(home).notes;
+  const replacement = notes.find(n => n.id !== note.id)!;
+  expect(result.text).toBe(`saved ${replacement.id} (retired ${note.id})`);
+  expect(replacement).toMatchObject({ body: "Quartz repair\nRebuild the quartz cache instead.", replaces: note.id });
+  expect(notes.find(n => n.id === note.id)).toMatchObject({ retired: expect.any(String), replacedBy: replacement.id });
+  await expect(tool.run({ text: "Already retired correction", replaces: note.id }, context)).rejects.toThrow(`${note.id} is already retired`);
+  expect(loadNotes(home).notes).toHaveLength(2);
+});
+
 it("snapshots attached evidence on create/upgrade, with flat parser-compatible hashes and normalized CRLF", () => {
   const { home, root, file, note } = setup();
   const sha = createHash("sha256").update("original\n").digest("hex").slice(0, 12);

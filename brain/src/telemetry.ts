@@ -13,11 +13,31 @@ import { fileURLToPath } from "node:url";
 import { nowIso, writeAtomic } from "./util.ts";
 import { scrub } from "./scrub.ts";
 import { idQuery, type Note } from "./notes.ts";
+import type { ToraRecall } from "./judge.ts";
+import { TORA_FLOOR } from "./tora.ts";
 
-/** Per-note uses across builds; each retained telemetry file is read once. */
-export function noteUsage(home: string, days = 30, now = new Date()): Map<string, { recalled: number; opened: number; carded: number; fired: number; last: string }> {
-  const since = now.getTime() - days * 86_400_000;
-  const usage = new Map<string, { recalled: number; opened: number; carded: number; fired: number; last: string }>();
+export interface NoteUse { recalled: number; opened: number; carded: number; fired: number; last: string }
+
+const DAY = 86_400_000;
+
+/** Per-note uses over a window and the window the retained telemetry really covers. */
+export interface NoteUsage {
+  notes: Map<string, NoteUse>;
+  /** Start of the covered window: the asked one, or the oldest retained row when that is later; undefined without rows. */
+  from: number | undefined;
+  /** Whole days from `from` to now, never above the days asked. */
+  covered: number;
+}
+
+/**
+ * Per-note uses across builds; each retained telemetry file is read once. Rotation keeps one 1 MiB
+ * generation (about two weeks of rows), so a longer ask is answered only for the window the oldest
+ * retained row starts: absence from the rows says nothing about the days before it.
+ */
+export function noteUsage(home: string, days = 30, now = new Date()): NoteUsage {
+  const asked = now.getTime() - days * DAY;
+  const notes = new Map<string, NoteUse>();
+  let oldest = Infinity;
   for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
     let text: string;
     try { text = readFileSync(file, "utf8"); } catch { continue; }
@@ -26,24 +46,32 @@ export function noteUsage(home: string, days = 30, now = new Date()): Map<string
         const row = JSON.parse(line) as { at?: unknown; kind?: unknown; query?: unknown; ids?: unknown; id?: unknown } | null;
         if (!row || typeof row.at !== "string") continue;
         const at = Date.parse(row.at);
-        if (!(at >= since && at <= now.getTime())) continue;
+        if (at <= now.getTime() && at < oldest) oldest = at;
+        if (!(at >= asked && at <= now.getTime())) continue;
         const ids = row.kind === "fix" && typeof row.id === "string" ? [row.id]
           : (row.kind === "recall" || row.kind === "card") && Array.isArray(row.ids) ? row.ids.filter((id): id is string => typeof id === "string") : [];
         const opened = row.kind === "recall" && ids.length === 1 && typeof row.query === "string" && idQuery(row.query).toLowerCase() === ids[0]!.toLowerCase();
         for (const id of new Set(ids)) {
           if (!id || id.startsWith("doc:")) continue;
-          const counts = usage.get(id) ?? { recalled: 0, opened: 0, carded: 0, fired: 0, last: "" };
+          const counts = notes.get(id) ?? { recalled: 0, opened: 0, carded: 0, fired: 0, last: "" };
           if (row.kind === "fix") counts.fired++;
           else if (row.kind === "card") counts.carded++;
           else if (opened) counts.opened++;
           else counts.recalled++;
           if (!counts.last || at > Date.parse(counts.last)) counts.last = row.at;
-          usage.set(id, counts);
+          notes.set(id, counts);
         }
       } catch { /* torn or malformed local telemetry is skipped */ }
     }
   }
-  return usage;
+  const from = Number.isFinite(oldest) ? Math.max(asked, oldest) : undefined;
+  return { notes, from, covered: from === undefined ? 0 : Math.floor((now.getTime() - from) / DAY) };
+}
+
+/** The window a usage answer holds for: "30d", or what the telemetry covers when that is less than asked. */
+export function usageWindow(usage: NoteUsage, days: number): string {
+  if (usage.covered >= days) return `${days}d`;
+  return `${usage.covered}d, ${usage.from === undefined ? "no telemetry yet" : "telemetry since " + new Date(usage.from).toISOString().slice(0, 10)}; ${days}d asked`;
 }
 
 export type UseKind = "card" | "fix" | "fixout" | "recall" | "note" | "state" | "error";
@@ -62,6 +90,8 @@ export interface Use {
   ids?: string[];
   judged?: boolean;
   dropped?: number;
+  /** Tora's scores for the recall's candidates; present only when Tora answered. */
+  tora?: ToraRecall;
   outcome?: "helped" | "missed";
   /** The note behind a fix, so stats can say which fixes keep firing. */
   id?: string;
@@ -138,6 +168,12 @@ export interface Stats {
   cards: { main: number; sub: number };
   recalls: { calls: number; measured: number; matched: number };
   recallQueries: { logged: number; silent: number };
+  /**
+   * Tora's shadow data over the recalls that carry it: candidates it added and Jev kept; recalls whose
+   * candidates all scored under the floor (Jev calls the floor would save); Jev-kept candidates inside
+   * those (answers enforcing the floor would have lost); every Jev-kept candidate, and those under the floor.
+   */
+  tora: { recalls: number; added: number; addedKept: number; wouldSkip: number; lost: number; kept: number; keptBelowFloor: number };
   fixOutcomes: { id: string; firings: number; helped: number; missed: number }[];
   /** Sessions that called brain_recall, brain_note or brain_state, of all sessions in that role. */
   toolUse: { main: { sessions: number; using: number }; sub: { sessions: number; using: number } };
@@ -186,6 +222,39 @@ export function fixFires(home: string, sub: boolean, days = 7, now: Date = new D
   return new Map([...sessions].map(([id, seen]) => [id, seen.size]));
 }
 
+/** Enforcing the Tora floor needs this many Jev-kept candidates carrying a Tora score (recorded data had 12 positive pairs). */
+export const TORA_EVIDENCE = 150;
+
+/** `ready` only when no answer would have been lost and the evidence is large enough. */
+export function toraVerdict(t: Stats["tora"]): string {
+  if (t.lost > 0) return `skip floor: not ready (${t.lost} Jev-kept ${t.lost === 1 ? "candidate" : "candidates"} inside would-skip recalls)`;
+  if (t.kept < TORA_EVIDENCE) return `skip floor: not ready (${t.kept}/${TORA_EVIDENCE} Jev-kept candidates carry a Tora score)`;
+  return "skip floor: ready";
+}
+
+/** Adds one recall row's `tora` data to the totals; a malformed row counts for nothing. */
+function tallyTora(data: unknown, total: Stats["tora"]): void {
+  const row = data as { skip?: unknown; floor?: unknown; c?: unknown } | null;
+  if (!row || typeof row !== "object" || !Array.isArray(row.c)) return;
+  const floor = typeof row.floor === "number" && Number.isFinite(row.floor) ? row.floor : TORA_FLOOR;
+  total.recalls += 1;
+  const skipped = row.skip === true;
+  if (skipped) total.wouldSkip += 1;
+  for (const entry of row.c as unknown[]) {
+    if (!Array.isArray(entry) || typeof entry[0] !== "string" || typeof entry[1] !== "number" || !Number.isFinite(entry[1])) continue;
+    // The answer's own keep decision, recorded per candidate (null: Jev gave no verdict).
+    const kept = entry[4] === 1;
+    if (entry[3] === "t") {
+      total.added += 1;
+      if (kept) total.addedKept += 1;
+    }
+    if (!kept) continue;
+    total.kept += 1;
+    if (skipped) total.lost += 1;
+    if (entry[1] < floor) total.keptBelowFloor += 1;
+  }
+}
+
 /** Usage over the last days; old recall rows without hit counts are unmeasured, not misses. */
 export function stats(home: string, days = 7, now: Date = new Date(), opts: { allBuilds?: boolean } = {}): Stats {
   const since = now.getTime() - days * 86_400_000;
@@ -193,6 +262,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const cards = { main: 0, sub: 0 };
   const recalls = { calls: 0, measured: 0, matched: 0 };
   const recallQueries = { logged: 0, silent: 0 };
+  const tora: Stats["tora"] = { recalls: 0, added: 0, addedKept: 0, wouldSkip: 0, lost: 0, kept: 0, keptBelowFloor: 0 };
   const outcomes = new Map<string, Stats["fixOutcomes"][number]>();
   const toolCalls = { tool: 0, cli: 0, mcp: 0 };
   const sessions = new Set<string>();
@@ -208,7 +278,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
       // either file may be missing
     }
   }
-  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown; error?: unknown; query?: unknown; ids?: unknown; outcome?: unknown };
+  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown; error?: unknown; query?: unknown; ids?: unknown; outcome?: unknown; tora?: unknown };
   const rows: Row[] = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -245,14 +315,21 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const fired = new Map<string, Set<string>>();
   const errors: Stats["errors"] = [];
   let olderBuildRows = 0;
+  // demotedFixes' rule: an outcome within a second of its own fire ran before the model saw the fix.
+  const firedAt = new Map<string, number>();
   for (const row of rows) {
     if (typeof row.kind !== "string") continue;
+    const fire = typeof row.session === "string" && typeof row.id === "string" ? `${row.session}\0${row.id}` : undefined;
+    const at = Date.parse(row.at as string);
+    if (row.kind === "fix" && fire) firedAt.set(fire, at);
+    const fireAt = row.kind === "fixout" && fire ? firedAt.get(fire) : undefined;
+    const unseen = fireAt !== undefined && at - fireAt >= 0 && at - fireAt <= UNSEEN_MS;
     if (newest !== undefined && row.v !== newest) {
       olderBuildRows += 1;
       continue;
     }
     if (row.kind === "error" && typeof row.error === "string") errors.push({ at: String(row.at), error: row.error });
-    if (typeof row.id === "string" && (row.kind === "fix" || row.kind === "fixout")) {
+    if (typeof row.id === "string" && (row.kind === "fix" || (row.kind === "fixout" && !unseen))) {
       const counts = outcomes.get(row.id) ?? { id: row.id, firings: 0, helped: 0, missed: 0 };
       if (row.kind === "fix") counts.firings += 1;
       else if (row.outcome === "helped" || row.outcome === "missed") counts[row.outcome] += 1;
@@ -278,6 +355,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
         recalls.measured += 1;
         if (row.hits > 0) recalls.matched += 1;
       }
+      tallyTora(row.tora, tora);
     }
     if (typeof row.session === "string" && row.session) {
       sessions.add(row.session);
@@ -296,7 +374,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   }
   const fixes = [...fired].map(([id, seen]) => ({ id, sessions: seen.size })).sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
   const fixOutcomes = [...outcomes.values()].filter(f => f.helped + f.missed > 0).sort((a, b) => b.firings - a.firings || a.id.localeCompare(b.id));
-  return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors };
+  return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, tora, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors };
 }
 
 /** One tool the host sends the model on every request, with its schema size. */
@@ -367,9 +445,17 @@ export function pausedFixes(home: string, notes: Note[]): Set<string> {
 let outcomeCache: { key: string; rows: { id: string; at: number; helped: boolean }[] } | undefined;
 
 /**
+ * Rows are whole seconds, so a model cannot have seen a fix and answered within one: an outcome that
+ * close after its own fire is a sibling tool call or nested cell that ran before the model saw it.
+ */
+const UNSEEN_MS = 1000;
+
+/**
  * Fixes that stopped earning their place: helped less than half the time over 4+ judged runs since
  * the note last changed (`changed` gives a note's file mtime; editing the fix starts a new trial).
- * They are no longer fired and are listed for review; the note files are never touched.
+ * Outcomes scored within a second of their fire (older builds scored the next same-key result, which
+ * often ran before the model saw the fix) are not evidence. They are no longer fired and are listed
+ * for review; the note files are never touched.
  */
 export function demotedFixes(home: string, changed: (id: string) => number | undefined): Set<string> {
   const demoted = new Set<string>();
@@ -385,6 +471,9 @@ export function demotedFixes(home: string, changed: (id: string) => number | und
     }).join("|");
     if (outcomeCache?.key !== key) {
       const rows: { id: string; at: number; helped: boolean }[] = [];
+      // The latest fire of each (session, fix) so far; rows are in append order, an outcome is
+      // written before the re-fire that follows it.
+      const fired = new Map<string, number>();
       for (const file of files) {
         let text = "";
         try {
@@ -393,11 +482,17 @@ export function demotedFixes(home: string, changed: (id: string) => number | und
           continue;
         }
         for (const line of text.split("\n")) {
-          if (!line.includes('"fixout"')) continue;
+          if (!line.includes('"fixout"') && !line.includes('"kind":"fix"')) continue;
           try {
-            const row = JSON.parse(line) as { kind?: unknown; id?: unknown; at?: unknown; outcome?: unknown };
+            const row = JSON.parse(line) as { kind?: unknown; id?: unknown; at?: unknown; outcome?: unknown; session?: unknown };
             const at = typeof row.at === "string" ? Date.parse(row.at) : NaN;
-            if (row.kind === "fixout" && typeof row.id === "string" && Number.isFinite(at) && (row.outcome === "helped" || row.outcome === "missed")) rows.push({ id: row.id, at, helped: row.outcome === "helped" });
+            if (typeof row.id !== "string" || !Number.isFinite(at)) continue;
+            const fire = typeof row.session === "string" ? `${row.session}\0${row.id}` : undefined;
+            if (row.kind === "fix" && fire) fired.set(fire, at);
+            if (row.kind !== "fixout" || (row.outcome !== "helped" && row.outcome !== "missed")) continue;
+            const fireAt = fire ? fired.get(fire) : undefined;
+            if (fireAt !== undefined && at - fireAt >= 0 && at - fireAt <= UNSEEN_MS) continue;
+            rows.push({ id: row.id, at, helped: row.outcome === "helped" });
           } catch {
             // a torn line from a concurrent append
           }
