@@ -563,4 +563,8 @@ answer a rule changed. For scale, today's judged lexical answers had 78 of 81 sh
   skips 8%.
 - Where Obsidian still leads: raw coverage. Its semantic top three held the labelled note for 20 of
   27 questions, but candidates only embeddings find are right 61% of the time even after Jev, so the
-  Brain keeps them out. Tora's ledger (TI-11 to TI-15) holds the per-rule numbers.
+  Brain keeps them out. Owner follow-up, embedding-only search behind a stricter check: two stricter
+  Jev questions ("the same specific thing?", "gives what the query seeks?") did not separate them
+  (wrong notes reached 0.82; any zero-wrong bar kept 3 or fewer of 19 right), and on silent recalls
+  Tora's nearest note passing Jev was right 7 of 12. Not built: under 1% more answers, below the
+  lexical answers' precision. Tora's ledger (TI-11 to TI-16) holds the per-rule numbers.
