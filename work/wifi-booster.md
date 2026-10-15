@@ -1,5 +1,5 @@
 ---
-at: 2026-10-15T05:28:34Z
+at: 2026-10-15T12:48:39Z
 ---
 
-Goal: guarantee Zen downloads go to aria2. Finding: add-on fails to capture even when awake (pre-test 2 MB __down stayed in Zen; WebSocket from bg alive) so cold-start race was not the whole cause. User approved admin install + Zen restart. Plan: Program Files loader cfg -> %LOCALAPPDATA%\aria2-rpc\zen\zen-aria2.js (privileged: wake add-on, log add-on console errors, fallback handoff to aria2 after 2.5 s with pause/finalize/unpause). Test in headless temp-profile Zen first, then main Zen.
+Goal DONE (2026-10-15 08:45): best software download setup. Patched aria2 64 conns (~/.local/bin, daemon via supervisor, CLI conf, fast/hup); fast now does pip/uv (FastPyPI agent); Wi-Fi roaming Lowest + 5 GHz; DNS kept 8.8.8.8 (1.1.1.1 worse CDN mapping); WARP blocked on campus -> uninstalled; HF hf_xet already parallel; winget unchanged. Watch out: one paused orphan DO job (VS Code installer) left, harmless.

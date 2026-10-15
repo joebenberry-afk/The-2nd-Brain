@@ -1,5 +1,5 @@
 ---
-at: 2026-10-15T07:41:03Z
+at: 2026-10-15T14:17:31Z
 ---
 
-Goal: ROADMAP M1 gate. Main 67a07e4. Non-E1 = P3R QUALIFIED: inputs runs/frame_generation/20261015T073845Z_m1-cohortJ-nonE1-inputs.json (only ft7-camera-replay blocked). Queue17 (bg_4): J FT-1 b2,b3, static, X5, FT-4x3, FT-2 pan_slow x3, FT-5/9 x3, FT-8/11, FT-7 b1 x5, FT-3 x3. Next: when X5 + ft2-cyberpunk pan_slow done and FT-1/FT-4 pass → plan K on nonE1 inputs + thermal_pilot + camera inputs; run K full queue.
+Goal: ROADMAP M1 gate. K0 (cand f2a0d039, main 2dfde25): FT-1 b1 PASS, X5 78 C, windows 9/9. Blockers found: fit needs both axes (solve() requires smm_x&smm_y) → yaw-only FT-2 never trusts (PerAxisFit agent); W3 end-of-scene target check flaky, Palworld backup files added, Palworld label template flaky (SessionRobustness agent). Queue18 (bg_26) running ft4-witcher3. Next: integrate → rebuild → K0b probe (FT-2 all motions 1 game) → K.
