@@ -203,25 +203,31 @@ describe("OMP extension", () => {
     expect(start({ prompt: "later" }, c)).toBeUndefined();
   });
 
-  it("with a live Tora the first card waits for Tora's ranking; a failing Tora falls back to BM25's order", async () => {
+  it("with a live Tora the first card and the card a compaction brings back wait for Tora's ranking; a failing Tora falls back to BM25's order", async () => {
     const base = mkdtempSync(join(tmpdir(), "omp-tora-"));
     mkdirSync(join(base, "tora", "sessions"), { recursive: true });
     writeFileSync(join(base, "tora", "sessions", `${process.pid}.json`), JSON.stringify({ port: 9, token: "t", pid: process.pid, host_pid: process.pid, started: "2026-10-15T00:00:00Z" }));
     const literal = createNote(home, { project: "work", text: "Authentication cookie expiration checklist", kind: "fact" });
     const near = createNote(home, { project: "work", text: "Sessions end after an idle hour", kind: "fact" });
     const prompt = "authentication cookie expiration logs users out";
-    const order = (card: CardReply) => [literal.id, near.id].sort((a, b) => card!.message.content.indexOf(a) - card!.message.content.indexOf(b));
+    const order = (card: string) => [literal.id, near.id].sort((a, b) => card.indexOf(a) - card.indexOf(b));
     const env = { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work", LOCALAPPDATA: base };
     try {
       vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) => {
         const { notes } = JSON.parse(String(init!.body)) as { notes: { id: string }[] };
         return new Response(JSON.stringify({ scores: Object.fromEntries(notes.map(n => [n.id, n.id === near.id ? 0.84 : 0.61])) }));
       }));
-      const ranked = await load(env).handlers.get("before_agent_start")!({ prompt }, ctx("tora-card")) as CardReply;
-      expect(order(ranked)).toEqual([near.id, literal.id]);
+      const { handlers } = load(env);
+      const c = ctx("tora-card");
+      const ranked = await handlers.get("before_agent_start")!({ prompt }, c) as CardReply;
+      expect(order(ranked!.message.content)).toEqual([near.id, literal.id]);
+      handlers.get("session_compact")!({}, c);
+      const carried = await handlers.get("tool_result")!({ toolName: "read", input: { path: "a.ts" }, isError: false, content: [{ type: "text", text: "file body" }] }, c) as { content: { text: string }[] };
+      expect(carried.content[0]!.text).toBe("file body");
+      expect(order(carried.content.at(-1)!.text)).toEqual([near.id, literal.id]);
       vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("connect ECONNREFUSED"); }));
       const fallback = await load(env).handlers.get("before_agent_start")!({ prompt }, ctx("tora-down")) as CardReply;
-      expect(order(fallback)).toEqual([literal.id, near.id]);
+      expect(order(fallback!.message.content)).toEqual([literal.id, near.id]);
     } finally { vi.unstubAllGlobals(); }
   });
 
