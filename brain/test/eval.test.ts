@@ -108,13 +108,21 @@ function grade(c: Pick<RealCase, "id" | "expect">, result: Pick<Answer, "ids" | 
   return result.ids.length ? "right" : c.expect.length ? "miss" : "silence";
 }
 
+/** Live Tora's cosines (2026-10-15) for every note the judged path asks it about, frozen so the eval stays deterministic. */
+const toraCosines = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "recall-tora.json"), "utf8")) as Record<string, Record<string, number>>;
+
 async function replay(notes: Note[], query: string, opts: AnswerOptions, recordings: Record<string, Record<string, number>>, caseId: string, labels: DocLabel[] = []): Promise<Answer> {
   const sent: { id: string; text: string }[] = [];
+  const scored: string[] = [];
   const result = await judgedAnswer(notes, query, opts, async (_query, candidates) => {
     sent.push(...candidates);
     return new Map(candidates.map(c => [c.id, recordings[caseId]?.[c.id]!]));
+  }, async (_query, pool) => {
+    scored.push(...pool.map(n => n.id));
+    return { scores: new Map(pool.map(n => [n.id, toraCosines[caseId]?.[n.id]!])), ms: 0 };
   });
   // Outside the fail-open boundary, and over actual requests (including conditional fallbacks).
+  for (const id of scored) expect(typeof toraCosines[caseId]?.[id], `missing Tora cosine ${caseId}/${id}`).toBe("number");
   for (const { id, text } of sent) {
     const p = recordings[caseId]?.[id];
     expect(typeof p, `missing recorded pair ${caseId}/${id}`).toBe("number");
@@ -190,9 +198,10 @@ describe.skipIf(!hasNotes)("real queries", () => {
   });
   afterAll(() => { if (home) rmSync(home, { recursive: true, force: true }); });
 
+  // Judged held-out 5: H04 is answered only through Tora's second look at BM25's top three (frozen cosines).
   for (const [file, size, lexicalRight, lexicalWrong, judgedRight] of [
     ["recall-real.jsonl", 34, 15, 8, 7],
-    ["recall-real-heldout.jsonl", 20, 10, 6, 4],
+    ["recall-real-heldout.jsonl", 20, 10, 6, 5],
   ] as const) {
     for (const judged of [false, true]) it(`${judged ? "judged (every recorded run)" : "lexical"}: ${file} retains right answers and bounds wrong answers`, async () => {
      for (const recordings of judged ? runs : [undefined]) {

@@ -3,11 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CARD_BUDGET, cardCandidates, LEAN_LINE, rankForCard, renderCard } from "../src/card.ts";
+import { CARD_BUDGET, cardCandidates, cardSemantic, LEAN_LINE, rankForCard, renderCard } from "../src/card.ts";
 import { createNote, loadNotes, saveNote, type Note } from "../src/notes.ts";
 import type { Project } from "../src/project.ts";
 import { cutToTokens, estimateTokens } from "../src/util.ts";
 import { logUse, rotateTelemetry, saveToolSchemas, stats, telemetryPath, toolSchemaUse } from "../src/telemetry.ts";
+import type { ToraScorer } from "../src/tora.ts";
 import { writeAuto, writeWork } from "../src/work.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-card-"));
@@ -157,6 +158,31 @@ describe("card completeness and scope", () => {
     const card = renderCard(home, [unrelated, { ...relevant, at: "2025-01-01T00:00:00Z" }], project, { prompt: "Authentication cookie expiration", now: NOW });
     expect(card.indexOf(relevant.id)).toBeLessThan(card.indexOf(unrelated.id));
     expect(card).toContain(relevant.id);
+  });
+
+  it("ranks by Tora's cosines for a prompt that names a topic, never sending a private note; otherwise BM25 ranks", async () => {
+    const home = tmp();
+    const literal = createNote(home, { text: "Authentication cookie expiration checklist", project: "demo", kind: "fact" });
+    const near = createNote(home, { text: "Sessions end after an idle hour", project: "demo", kind: "fact" });
+    const secret = createNote(home, { text: "Authentication cookie signing detail", project: "demo", kind: "fact", private: true });
+    const notes = [literal, near, secret];
+    const prompt = "authentication cookie expiration logs users out";
+    const sent: string[][] = [];
+    const tora: ToraScorer = async (_query, pool) => {
+      sent.push(pool.map(n => n.id));
+      return { scores: new Map(pool.map(n => [n.id, n.id === near.id ? 0.84 : 0.61])), ms: 4 };
+    };
+    const order = (card: string) => [literal.id, near.id].sort((a, b) => card.indexOf(a) - card.indexOf(b));
+    expect(order(renderCard(home, notes, project, { prompt, now: NOW }))).toEqual([literal.id, near.id]);
+    const semantic = await cardSemantic(notes, project, prompt, tora);
+    expect(sent).toEqual([[literal.id, near.id]]);
+    expect(order(renderCard(home, notes, project, { prompt, semantic, now: NOW }))).toEqual([near.id, literal.id]);
+    // Nothing to wait for: no Tora, or a prompt that names no topic.
+    expect(cardSemantic(notes, project, prompt, undefined)).toBeUndefined();
+    expect(cardSemantic(notes, project, "continue", tora)).toBeUndefined();
+    expect(cardSemantic(notes, project, "fix the tests", tora)).toBeUndefined();
+    // A failing Tora leaves BM25's ranking.
+    expect(await cardSemantic(notes, project, prompt, async () => { throw new Error("down"); })).toBeUndefined();
   });
 
   it("shares only bounded parent warnings with children and ranks notes using them", () => {

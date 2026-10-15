@@ -54,7 +54,7 @@ export const brainTools: BrainTool[] = [
     async run(params, { home, cwd, env }) {
       const query = requireString(params.query, "query");
       const project = resolveProject(home, cwd, env);
-      return { ...await judgedAnswer(loadNotes(home).notes, query, { home, project, all: params.all === true }, typesafeJudge(env), toraScorer(env), env.BRAIN_TORA_SKIP === "on"), query, kind: "recall", project: project.id };
+      return { ...await judgedAnswer(loadNotes(home).notes, query, { home, project, all: params.all === true }, typesafeJudge(env), toraScorer(env)), query, kind: "recall", project: project.id };
     },
   },
   {
@@ -94,7 +94,7 @@ export const brainTools: BrainTool[] = [
       }
       const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });
       if (old) retireNote(home, old.id, note.id);
-      const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env));
+      const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env), toraScorer(env));
       return { text: `saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${hint}`, kind: "note", project: project.id };
     },
   },

@@ -8,6 +8,7 @@ import { JUDGE_THRESHOLD, typesafePairJudge, type PairJudge } from "../src/judge
 import { createNote, loadNotes, saveNote, type Note } from "../src/notes.ts";
 import { logUse, noteUsage } from "../src/telemetry.ts";
 import { noteHint, similarPairs, tidyReport } from "../src/tidy.ts";
+import type { ToraScorer } from "../src/tora.ts";
 import { brainTools } from "../src/tools.ts";
 
 const project = { id: "demo", tags: ["node"], root: null };
@@ -77,6 +78,26 @@ it("hints prioritize contradictions and fail silently for missing, failing or in
   expect(await noteHint(root, fresh, [old, fresh], semantic)).toBe(" (contradicts old: if it replaces it, brain retire old --by fresh)");
   expect(await noteHint(root, note("new-backup", "Database backup before schema deployment"), [note("old-backup", "Database backup before schema deployment always")], semantic)).toBe(" (same as old-backup: brain retire new-backup if redundant)");
   for (const judge of [undefined, async () => undefined, async () => { throw new Error("offline"); }, async () => new Map()]) expect(await noteHint(root, fresh, [old], judge)).toBe("");
+});
+
+it("the write-time hint also judges Tora's nearest notes the lexical shortlist missed; a private note never reaches Tora; a failing Tora keeps the lexical hint", async () => {
+  const root = home();
+  const fresh = note("fresh", "Sessions expire after two quiet hours");
+  const older = note("older", "Login cookies last sixty minutes", { at: "2026-01-01T00:00:00Z" });
+  const secret = note("secret", "Login cookies expire hourly", { private: true });
+  const judge: PairJudge = async pairs => new Map(pairs.map(p => [p.id, { same: 0, contradicts: p.a.includes("sixty minutes") ? 0.9 : 0 }]));
+  const pools: string[][] = [];
+  const tora: ToraScorer = async (_query, pool) => {
+    pools.push(pool.map(n => n.id));
+    return { scores: new Map(pool.map(n => [n.id, n.id === older.id ? 0.86 : 0.3])), ms: 3 };
+  };
+  const notes = [older, secret, fresh];
+  expect(await noteHint(root, fresh, notes, judge)).toBe("");
+  expect(await noteHint(root, fresh, notes, judge, tora)).toBe(" (contradicts older: if it replaces it, brain retire older --by fresh)");
+  expect(pools).toEqual([["older"]]);
+  const ascending = note("ascending", "Quartz migration uses ascending order", { at: "2026-01-01T00:00:00Z" });
+  const descending = note("descending", "Quartz migration uses descending order");
+  expect(await noteHint(root, descending, [ascending, descending], semantic, async () => { throw new Error("down"); })).toBe(" (contradicts ascending: if it replaces it, brain retire ascending --by descending)");
 });
 
 it("private text never reaches either semantic entry point and hints use only three visible candidates", async () => {

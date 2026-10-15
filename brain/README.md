@@ -81,25 +81,28 @@ parent's project — card, recall, notes, known fixes and logged events — inst
 (61 child sessions in one week had run with no project notes at all).
 
 **Tora (optional local scorer).** While a Tora session (a local EmbeddingGemma 2 scorer that lives
-as long as its agent session) is running, judged recall asks it to score the query against every
-visible, non-private, non-retired note (`%LOCALAPPDATA%\tora\sessions\<pid>.json` says where it
-listens; a stale file whose process is gone is ignored). The two best notes at or above Tora's own
-confidence cut that the lexical search missed join the lexical candidates in the same Jev request;
-they appear, after whatever recall would answer without Tora (a plan-doc heading included, still
-checked as before), only if Jev keeps them (0.78), within the usual three
-lines. Tora only adds: it never removes or replaces that answer, and it is **optional and fails open**:
-no session, a refused or slow (0.8 s) call, or a malformed answer leaves recall exactly as it was. `BRAIN_TORA=off` disables it.
-Jev still needs `TYPESAFE_API_KEY`; without a judge, Tora is not asked.
-When every candidate scores under the floor (0.70), the Jev call could be skipped. That is only
-logged (**shadow**) unless `BRAIN_TORA_SKIP=on` enforces it: then no Jev call is made for the
-candidates, they are dropped like a rejected batch (`judged` is false unless the doc check still ran), and the doc fallback applies as usual. Recall rows gain `tora` (`ms`, `cut`, `floor`,
-`skip`, `enforced`, and `c`: `[id, cosine, Jev probability, "l"exical | "t"ora-added, kept]` per candidate; `kept` is 1 when the
-answer kept it by its own rule (0.78, or the phrase floor), 0 when dropped, null when Jev gave no verdict)
-only when Tora answered. `brain stats` summarises them: recalls scored, candidates Tora added and
-Jev kept, recalls the floor would skip, `lost` (Jev-kept candidates inside those: answers enforcing
-would have lost), and kept candidates scoring under the floor. The last line is the verdict:
-`skip floor: ready` only when `lost` is 0 and at least 150 Jev-kept candidates carry a Tora score;
-otherwise `not ready` with the reason. Set `BRAIN_TORA_SKIP=on` only after it says ready.
+as long as its agent session; `%LOCALAPPDATA%\tora\sessions\<pid>.json` says where it listens, and a
+stale file whose process is gone is ignored) is running, it serves three places. It is **optional and
+fails open**: no session, a refused or slow call, or a malformed answer leaves each exactly as it was
+without Tora. `BRAIN_TORA=off` disables it; private notes are never sent to it.
+
+- **Judged recall.** Notes BM25 ranked in its top three (among visible, non-private, non-retired
+  notes) that the lexical answer gated out go to Tora; the two best at cosine 0.74 or more join the
+  lexical candidates in the same Jev request and appear, after whatever recall would answer without
+  Tora (a plan-doc heading included, still checked as before), only if Jev keeps them (0.78), within
+  the usual three lines. A note only Tora finds is never sent. On 566 real queries with three blind
+  judges per changed answer, such notes were right 15 of 15 (11 of 16 under 0.74); Tora-only notes,
+  the previous rule, 19 of 31. Tora waits at most 0.8 s and is not asked when no such note exists or
+  no judge is configured. Recall rows gain `tora`: `ms` and `c`, one `[id, cosine, Jev probability,
+  kept]` per note Tora scored (probability and kept are null when it was not sent: under the floor,
+  past the two, or no usable verdict). `brain stats` sums recalls, notes scored, sent to Jev and kept.
+- **The start card (OMP).** At the first prompt, and on the card a compaction brings back, a prompt
+  with three or more content words is ranked by Tora's cosine instead of BM25 when Tora answers within
+  0.3 s (45 real first prompts: precision@3 0.36 against 0.18). Without a live Tora the card renders at
+  once as before.
+- **The write-time hint.** `brain note` asks Jev about Tora's three nearest notes besides the three
+  lexical neighbours, in the same pair request (10 real replacements: one more contradiction caught;
+  40 ordinary writes: no extra hint).
 
 **Tidy and note usage.** `brain tidy [--all] [--days N]` is a read-only report of duplicate or
 contradictory notes and active notes older than N days (default 30) with no recent use. Without

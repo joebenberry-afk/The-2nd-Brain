@@ -9,10 +9,11 @@ import { loadNotes, type Note } from "./notes.ts";
 import { folderOnly, resolveProject, type Project } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
 import { appendEvent, captureUserRules, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
-import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
+import { cardIds, cardSemantic, LEAN_LINE, renderCard } from "./card.ts";
 import { pathHint } from "./paths.ts";
 import { logUse, saveToolSchemas } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
+import { toraScorer } from "./tora.ts";
 import { writeAuto } from "./work.ts";
 import { rolloverHint } from "./rollover.ts";
 
@@ -453,21 +454,34 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   });
 
   /** One session's card: the same at its first prompt and after each compaction. */
-  const sessionCard = (ctx: unknown, state: SessionState, project: Project, notes: Note[], prompt: string | undefined): string => {
+  const sessionCard = (ctx: unknown, state: SessionState, project: Project, notes: Note[], prompt: string | undefined, semantic?: Map<string, number>): string => {
     const subagent = isSubagent(ctx);
     // agentbench `on+nochild`: the child-card cost trial's control arm (plan §8.7 kill rule).
     if (subagent && (env.BRAIN_EXPERIMENT ?? "").split(",").includes("nochild")) return "";
-    return renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt, parentEdits: subagent ? parentEdits(ctx) ?? state.parentEdits : undefined });
+    return renderCard(home, notes, project, { tools: toolsOn, subagent, host: "omp", prompt, semantic, parentEdits: subagent ? parentEdits(ctx) ?? state.parentEdits : undefined });
   };
   /**
    * After a compaction the whole card comes back (owner decision 2026-10-15), not only the lean
    * line: OMP's summary keeps goal and next (§8 P4) but drops the notes, recurring fixes and plan
    * anchor. With nothing to say, the lean rule still comes back.
    */
-  const compactionCard = (ctx: unknown, state: SessionState, project: Project, prompt: string | undefined, started: number): string => {
-    const card = sessionCard(ctx, state, project, loadNotes(home).notes, prompt);
+  const compactionCard = (ctx: unknown, state: SessionState, project: Project, notes: Note[], prompt: string | undefined, started: number, semantic?: Map<string, number>): string => {
+    const card = sessionCard(ctx, state, project, notes, prompt, semantic);
     if (card) logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: performance.now() - started, session: sessionKey(ctx), sub: isSubagent(ctx), ids: cardIds(card) });
     return card || LEAN_LINE;
+  };
+  /**
+   * Renders with Tora's prompt ranking when a live Tora answers within its card budget; with no live
+   * Tora (or a prompt naming no topic) it renders at once, so such a host never waits. A failed render
+   * is logged and `fallback` returned: the hook never throws into the host.
+   */
+  const rankedCard = <T>(notes: Note[], project: Project, prompt: string | undefined, render: (semantic?: Map<string, number>) => T, fallback: T, where: string): T | Promise<T> => {
+    const pending = cardSemantic(notes, project, prompt, toraScorer(env));
+    if (!pending) return render();
+    return pending.then(render).catch((error: unknown) => {
+      failed(where, error);
+      return fallback;
+    });
   };
 
   // Handle before_agent_start
@@ -525,21 +539,24 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             }
           }, 0);
         }
-        const cardContent = sessionCard(ctx, state, project, notes, typeof prompt === "string" ? prompt : undefined);
-
-        if (cardContent) {
+        const ask = typeof prompt === "string" ? prompt : undefined;
+        return rankedCard(notes, project, ask, semantic => {
+          const cardContent = sessionCard(ctx, state, project, notes, ask, semantic);
           state.carded = true;
+          if (!cardContent) return undefined;
           logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key, sub: subagent, ids: cardIds(cardContent) });
           return buildCardMessage(cardContent);
-        }
-        state.carded = true;
-        return undefined;
+        }, undefined, "before_agent_start");
       }
       // A compaction no tool result followed: this prompt brings the card back, ranked by it.
       if (state.cardDue) {
         state.cardDue = false;
-        const text = compactionCard(ctx, state, project, typeof prompt === "string" ? prompt : undefined, started);
-        return buildCardMessage(text, text === LEAN_LINE ? LEAN_TYPE : CARD_TYPE);
+        const ask = typeof prompt === "string" ? prompt : undefined;
+        const notes = loadNotes(home).notes;
+        return rankedCard(notes, project, ask, semantic => {
+          const text = compactionCard(ctx, state, project, notes, ask, started, semantic);
+          return buildCardMessage(text, text === LEAN_LINE ? LEAN_TYPE : CARD_TYPE);
+        }, undefined, "before_agent_start");
       }
 
       return undefined;
@@ -795,11 +812,13 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const state = getSession(sessionKey(ctx));
       if (!state.cardDue) return result;
       state.cardDue = false;
+      const started = performance.now();
       const cwd = cwdOf(ctx) ?? process.cwd();
       const project = state.project ?? inheritedProject(ctx, cwd) ?? resolveProject(home, cwd, env);
       const original = asObject(event)?.content;
       const content = result?.content ?? (Array.isArray(original) ? original : typeof original === "string" && original ? [{ type: "text", text: original }] : []);
-      return { content: [...content, { type: "text", text: `\n${compactionCard(ctx, state, project, state.ask, performance.now())}` }] };
+      const notes = loadNotes(home).notes;
+      return rankedCard(notes, project, state.ask, semantic => ({ content: [...content, { type: "text", text: `\n${compactionCard(ctx, state, project, notes, state.ask, started, semantic)}` }] }), result, "tool_result");
     } catch (error) {
       failed("tool_result", error);
       return result;

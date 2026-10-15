@@ -14,7 +14,6 @@ import { nowIso, writeAtomic } from "./util.ts";
 import { scrub } from "./scrub.ts";
 import { idQuery, type Note } from "./notes.ts";
 import type { ToraRecall } from "./judge.ts";
-import { TORA_FLOOR } from "./tora.ts";
 
 export interface NoteUse { recalled: number; opened: number; carded: number; fired: number; last: string }
 
@@ -168,12 +167,8 @@ export interface Stats {
   cards: { main: number; sub: number };
   recalls: { calls: number; measured: number; matched: number };
   recallQueries: { logged: number; silent: number };
-  /**
-   * Tora's shadow data over the recalls that carry it: candidates it added and Jev kept; recalls whose
-   * candidates all scored under the floor (Jev calls the floor would save); Jev-kept candidates inside
-   * those (answers enforcing the floor would have lost); every Jev-kept candidate, and those under the floor.
-   */
-  tora: { recalls: number; added: number; addedKept: number; wouldSkip: number; lost: number; kept: number; keptBelowFloor: number };
+  /** Tora over the recalls that carry it: BM25 candidates it scored, those Jev judged (at or above the floor), those Jev kept. */
+  tora: { recalls: number; scored: number; judged: number; kept: number };
   fixOutcomes: { id: string; firings: number; helped: number; missed: number }[];
   /** Sessions that called brain_recall, brain_note or brain_state, of all sessions in that role. */
   toolUse: { main: { sessions: number; using: number }; sub: { sessions: number; using: number } };
@@ -222,36 +217,16 @@ export function fixFires(home: string, sub: boolean, days = 7, now: Date = new D
   return new Map([...sessions].map(([id, seen]) => [id, seen.size]));
 }
 
-/** Enforcing the Tora floor needs this many Jev-kept candidates carrying a Tora score (recorded data had 12 positive pairs). */
-export const TORA_EVIDENCE = 150;
-
-/** `ready` only when no answer would have been lost and the evidence is large enough. */
-export function toraVerdict(t: Stats["tora"]): string {
-  if (t.lost > 0) return `skip floor: not ready (${t.lost} Jev-kept ${t.lost === 1 ? "candidate" : "candidates"} inside would-skip recalls)`;
-  if (t.kept < TORA_EVIDENCE) return `skip floor: not ready (${t.kept}/${TORA_EVIDENCE} Jev-kept candidates carry a Tora score)`;
-  return "skip floor: ready";
-}
-
-/** Adds one recall row's `tora` data to the totals; a malformed row counts for nothing. */
+/** Adds one recall row's `tora` data to the totals; a malformed row, or an entry of another shape, counts for nothing. */
 function tallyTora(data: unknown, total: Stats["tora"]): void {
-  const row = data as { skip?: unknown; floor?: unknown; c?: unknown } | null;
+  const row = data as { c?: unknown } | null;
   if (!row || typeof row !== "object" || !Array.isArray(row.c)) return;
-  const floor = typeof row.floor === "number" && Number.isFinite(row.floor) ? row.floor : TORA_FLOOR;
   total.recalls += 1;
-  const skipped = row.skip === true;
-  if (skipped) total.wouldSkip += 1;
   for (const entry of row.c as unknown[]) {
-    if (!Array.isArray(entry) || typeof entry[0] !== "string" || typeof entry[1] !== "number" || !Number.isFinite(entry[1])) continue;
-    // The answer's own keep decision, recorded per candidate (null: Jev gave no verdict).
-    const kept = entry[4] === 1;
-    if (entry[3] === "t") {
-      total.added += 1;
-      if (kept) total.addedKept += 1;
-    }
-    if (!kept) continue;
-    total.kept += 1;
-    if (skipped) total.lost += 1;
-    if (entry[1] < floor) total.keptBelowFloor += 1;
+    if (!Array.isArray(entry) || entry.length !== 4 || typeof entry[0] !== "string" || typeof entry[1] !== "number" || !Number.isFinite(entry[1])) continue;
+    total.scored += 1;
+    if (typeof entry[2] === "number") total.judged += 1;
+    if (entry[3] === 1) total.kept += 1;
   }
 }
 
@@ -262,7 +237,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const cards = { main: 0, sub: 0 };
   const recalls = { calls: 0, measured: 0, matched: 0 };
   const recallQueries = { logged: 0, silent: 0 };
-  const tora: Stats["tora"] = { recalls: 0, added: 0, addedKept: 0, wouldSkip: 0, lost: 0, kept: 0, keptBelowFloor: 0 };
+  const tora: Stats["tora"] = { recalls: 0, scored: 0, judged: 0, kept: 0 };
   const outcomes = new Map<string, Stats["fixOutcomes"][number]>();
   const toolCalls = { tool: 0, cli: 0, mcp: 0 };
   const sessions = new Set<string>();

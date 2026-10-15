@@ -1,23 +1,33 @@
 /**
- * Optional local scorer (Tora, EmbeddingGemma 2) for recall: a second candidate source for the Jev
- * judge and a shadow-mode pre-filter. A live Tora publishes `<tora_pid>.json` (port, bearer token,
- * pid, host_pid, started) in `%LOCALAPPDATA%\tora\sessions`. Every failure yields undefined, so the
- * caller's answer is exactly what it would be without Tora. Nothing here logs or rethrows: an error
- * could carry the bearer token.
+ * Optional local scorer (Tora, EmbeddingGemma 2) for recall and the start card. A live Tora publishes
+ * `<tora_pid>.json` (port, bearer token, pid, host_pid, started) in `%LOCALAPPDATA%\tora\sessions`.
+ * Every failure yields undefined, so the caller's answer is exactly what it would be without Tora.
+ * Nothing here logs or rethrows: an error could carry the bearer token.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** Lowest Jev-relevant cosine on recorded data was 0.717. */
-export const TORA_FLOOR = 0.70;
-/** At most this many Tora-added candidates per recall. */
+/**
+ * A recall candidate Tora checks must score this. On 566 real queries (2026-10-15, three blind judges
+ * per changed answer) BM25-supported notes Jev kept were right 15 of 15 at 0.74 or more and 11 of 16
+ * under it; the floor was fitted on the first half (highest wrong 0.736) and held 6 of 6 on the second.
+ */
+export const TORA_FLOOR = 0.74;
+/** At most this many Tora-checked candidates join a recall's Jev request. */
 export const TORA_ADD = 2;
+/**
+ * Tora checks only notes BM25 ranked this high that the lexical answer left out: notes only Tora
+ * finds were right 19 of 31 times when Jev kept them, which no Jev bar could separate.
+ */
+export const TORA_SUPPORT = 3;
 /** A cold first call (model load) takes seconds; recall does not wait for it. */
 export const TORA_TIMEOUT_MS = 800;
+/** The start card waits less: warm scoring of a project's notes takes 20-70 ms; BM25 ranks otherwise. */
+export const TORA_CARD_TIMEOUT_MS = 300;
 
-export interface ToraScores { scores: Map<string, number>; cut: number; ms: number }
-export type ToraScorer = (query: string, notes: { id: string; text: string }[]) => Promise<ToraScores | undefined>;
+export interface ToraScores { scores: Map<string, number>; ms: number }
+export type ToraScorer = (query: string, notes: { id: string; text: string }[], timeoutMs?: number) => Promise<ToraScores | undefined>;
 
 interface Session { port: number; token: string; hostPid: number | null; started: number }
 
@@ -53,24 +63,24 @@ function findSession(dir: string): Session | undefined {
   return best;
 }
 
+/** A scorer bound to the live session (this host's Tora first, then the newest); undefined when Tora is off or none is live, so callers without Tora stay synchronous. */
 export function toraScorer(env: NodeJS.ProcessEnv): ToraScorer | undefined {
   if (env.BRAIN_TORA === "off") return undefined;
-  const dir = join(env.LOCALAPPDATA ?? tmpdir(), "tora", "sessions");
-  return async (query, notes) => {
+  const session = findSession(join(env.LOCALAPPDATA ?? tmpdir(), "tora", "sessions"));
+  if (!session) return undefined;
+  return async (query, notes, timeoutMs = TORA_TIMEOUT_MS) => {
     try {
       if (!notes.length) return undefined;
-      const session = findSession(dir);
-      if (!session) return undefined;
       const started = performance.now();
       const response = await fetch(`http://127.0.0.1:${session.port}/score`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session.token}` },
         body: JSON.stringify({ query, notes }),
-        signal: AbortSignal.timeout(TORA_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.status !== 200) return undefined;
-      const body = await response.json() as { scores?: unknown; cut?: unknown } | null;
-      if (!body || typeof body.cut !== "number" || !Number.isFinite(body.cut) || !body.scores || typeof body.scores !== "object") return undefined;
+      const body = await response.json() as { scores?: unknown } | null;
+      if (!body || !body.scores || typeof body.scores !== "object") return undefined;
       const raw = body.scores as Record<string, unknown>;
       const scores = new Map<string, number>();
       for (const { id } of notes) {
@@ -78,7 +88,7 @@ export function toraScorer(env: NodeJS.ProcessEnv): ToraScorer | undefined {
         if (typeof score !== "number" || !Number.isFinite(score)) return undefined;
         scores.set(id, score);
       }
-      return { scores, cut: body.cut, ms: Math.round((performance.now() - started) * 10) / 10 };
+      return { scores, ms: Math.round((performance.now() - started) * 10) / 10 };
     } catch {
       return undefined;
     }

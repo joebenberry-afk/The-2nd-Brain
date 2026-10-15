@@ -2,8 +2,10 @@
 import { childDocContext, projectDocs } from "./docs.ts";
 import { displayLine, firstLine, GLOBAL, testedCurrent, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
-import { recall, staleHere, verifiedHere } from "./search.ts";
+import { recall, staleHere, tokens, verifiedHere } from "./search.ts";
+import { scrub } from "./scrub.ts";
 import { fixFires, pausedFixes } from "./telemetry.ts";
+import { TORA_CARD_TIMEOUT_MS, type ToraScorer } from "./tora.ts";
 import { cutToTokens, estimateTokens } from "./util.ts";
 import { planFit, readWork, workText } from "./work.ts";
 
@@ -24,6 +26,12 @@ export const LEAN_LINE = "Work lean: batch independent tool calls in one turn ·
 const KIND_WEIGHT: Record<string, number> = { gotcha: 3, decision: 3, procedure: 2, fact: 1, note: 1 };
 const DAY_MS = 86_400_000;
 const RELEVANCE_WEIGHT = 6;
+/**
+ * A prompt with fewer content words ("continue", "fix the tests") names no topic: on 45 real first
+ * prompts Tora and BM25 ranked those equally, so the static order stays. With more, Tora's cosine
+ * ranking doubled the relevant notes in the top three (0.45 vs 0.20 precision, 32 prompts).
+ */
+const CARD_TOPIC_WORDS = 3;
 
 export interface CardOptions {
   /** The host exposes the brain_* tools (OMP); otherwise the card names the CLI. */
@@ -34,6 +42,8 @@ export interface CardOptions {
   host?: "omp" | "claude-code";
   /** First user prompt, used only for ranking, never persisted. */
   prompt?: string;
+  /** Tora's cosine of each public candidate against the prompt (cardSemantic); replaces BM25's prompt ranking. */
+  semantic?: Map<string, number>;
   /** Parent session edits supplied by the host, never the persisted project auto state. */
   parentEdits?: string[];
 }
@@ -50,16 +60,17 @@ export function cardCandidates(notes: Note[], project: Project): Note[] {
 /**
  * Prompt relevance first, then working-state relevance and the static tested/kind/recency rank.
  * Relevance is scored over the candidates alone: cheaper than the whole corpus, and notes the
- * card can never show cannot take the top-10 relevance slots.
+ * card can never show cannot take the top-10 relevance slots. Tora's cosines, when given, rank
+ * by prompt instead of BM25.
  */
-export function rankForCard(candidates: Note[], project: Project, workText: string, now: Date, home: string, prompt = ""): Note[] {
+export function rankForCard(candidates: Note[], project: Project, workText: string, now: Date, home: string, prompt = "", semantic?: Map<string, number>): Note[] {
   const relevance = new Map<string, number>();
   if (workText.trim()) {
     const hits = recall(candidates, workText, { project, limit: 10 });
     const top = hits.reduce((max, hit) => Math.max(max, hit.score), 0);
     for (const hit of hits) if (top > 0) relevance.set(hit.note.id, hit.score / top);
   }
-  const promptScores = new Map(prompt.trim()
+  const promptScores = semantic ?? new Map(prompt.trim()
     ? recall(candidates, prompt, { project, limit: candidates.length }).map((hit) => [hit.note.id, hit.score])
     : []);
   const score = (n: Note, stale: boolean): number => {
@@ -74,6 +85,18 @@ export function rankForCard(candidates: Note[], project: Project, workText: stri
   // Stale notes sit behind live ones even under a prompt match, as in recall.
   scored.sort((a, b) => Number(a.stale) - Number(b.stale) || b.p - a.p || b.s - a.s || (a.n.at < b.n.at ? 1 : a.n.at > b.n.at ? -1 : 0) || (a.n.id < b.n.id ? -1 : 1));
   return scored.map((x) => x.n);
+}
+
+/**
+ * Tora's cosine of every public card candidate and standing rule against the prompt, or nothing to
+ * wait for (undefined): no live Tora, or a prompt naming no topic. The promise resolves to undefined
+ * when Tora fails or misses TORA_CARD_TIMEOUT_MS; BM25 then ranks, and Tora is warm for recall.
+ */
+export function cardSemantic(notes: Note[], project: Project, prompt: string | undefined, tora: ToraScorer | undefined): Promise<Map<string, number> | undefined> | undefined {
+  if (!tora || !prompt || tokens(prompt, false, false).length < CARD_TOPIC_WORDS) return undefined;
+  const pool = [...new Set([...cardCandidates(notes, project), ...briefNotes(notes, project)])].filter(note => !note.private);
+  if (!pool.length) return undefined;
+  return tora(scrub(prompt).text, pool.map(note => ({ id: note.id, text: note.body })), TORA_CARD_TIMEOUT_MS).then(found => found?.scores, () => undefined);
 }
 
 /** Never turn an essential fact into a clipped pointer requiring a second recall. */
@@ -133,7 +156,7 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
     if (line && add(label + "- " + count + line.slice(2))) said.add(note.id);
   }
   const rules: string[] = [];
-  for (const note of rankForCard(briefNotes(notes, project), project, warning, now, home, opts.prompt)) {
+  for (const note of rankForCard(briefNotes(notes, project), project, warning, now, home, opts.prompt, opts.semantic)) {
     if (said.has(note.id)) continue;
     const line = noteLine(note, 80 * 4 - ["Rules:", ...rules].join("\n").length - 1);
     if (!line || ["Rules:", ...rules, line].join("\n").length > room()) continue;
@@ -154,7 +177,7 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
   // Existing project memories remain eligible only after the child-specific blocks.
   let known = 0;
   const candidates = cardCandidates(notes, project).filter(note => !note.tags.includes("brief"));
-  for (const note of rankForCard(candidates, project, warning, now, home, opts.prompt)) {
+  for (const note of rankForCard(candidates, project, warning, now, home, opts.prompt, opts.semantic)) {
     if (said.has(note.id)) continue;
     const label = known ? "" : "Known here:\n";
     const line = noteLine(note, room() - label.length);
@@ -185,7 +208,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
     .filter((n) => !n.retired && verifiedHere(n, project, home) && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project) && !(opts.host && n.host && n.host !== opts.host))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
-  const ranked = rankForCard(candidates, project, work?.text ?? "", now, home, opts.prompt);
+  const ranked = rankForCard(candidates, project, work?.text ?? "", now, home, opts.prompt, opts.semantic);
   const head = `Brain · ${cutToTokens(project.id.replace(/[\r\n]/g, " "), 16)} — what prior sessions learned; the repo wins on conflict`;
   // Owner-facing counts (pending proposals) stay in `brain review`; resident tools describe themselves.
   const tail = opts.tools === true ? [LEAN_LINE] : [LEAN_LINE, footer(false)];

@@ -21,7 +21,7 @@ import { judgedAnswer, typesafeJudge, typesafePairJudge, type ToraRecall } from 
 import { toraScorer } from "./tora.ts";
 import { scrub } from "./scrub.ts";
 import { shareNote, sync } from "./sync.ts";
-import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, toraVerdict, usageWindow, type UseKind } from "./telemetry.ts";
+import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, usageWindow, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 import { noteHint, tidyReport } from "./tidy.ts";
@@ -168,7 +168,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       all: c.opts.all === true,
       history: c.opts.history === true,
       limit: positiveInt(c.opts.limit, 3),
-    }, typesafeJudge(c.io.env), toraScorer(c.io.env), c.io.env.BRAIN_TORA_SKIP === "on");
+    }, typesafeJudge(c.io.env), toraScorer(c.io.env));
     c.io.out(text);
     use(c, "recall", text, hits, undefined, query, ids, judged, dropped, tora);
     return 0;
@@ -232,7 +232,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       source: "agent",
     });
     if (old) retireNote(c.home, old.id, note.id);
-    c.io.out(`saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env))}`);
+    c.io.out(`saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env), toraScorer(c.io.env))}`);
     use(c, "note", text);
     return 0;
   },
@@ -387,8 +387,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
     c.io.out(`recall: ${s.recallQueries.logged} queries logged, ${s.recallQueries.silent} silent`);
     const t = s.tora;
-    c.io.out(`tora: ${t.recalls} recalls scored · ${t.added} candidates added, ${t.addedKept} kept by Jev · would skip Jev on ${t.wouldSkip} (lost ${t.lost}) · ${t.keptBelowFloor} of ${t.kept} kept scored below the floor`);
-    c.io.out(toraVerdict(t));
+    c.io.out(`tora: ${t.recalls} recalls · ${t.scored} BM25 candidates scored · ${t.judged} sent to Jev · ${t.kept} kept`);
     const active = loadNotes(c.home).notes.filter(note => !note.retired);
     const usage = noteUsage(c.home, s.days);
     const used = active.filter(note => usage.notes.has(note.id)).length;
