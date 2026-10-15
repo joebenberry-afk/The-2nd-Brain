@@ -12,7 +12,7 @@ usable from any shell or agent through the `brain` command.
 
 | Moment | The agent gets | Cost |
 |---|---|---|
-| **Session start** | a *start card*: where we left off, the 5 notes that matter for this project and the current work | ≤ 400 tokens, nothing when there is nothing to say |
+| **Session start** | a *start card*: where we left off, the 5 notes that matter for this project and the current work | ≤ 320 tokens, nothing when there is nothing to say |
 | **Compaction** | nothing: the host's own summary carries goal and next (measured, V5 §8 P4); the working state is saved and feeds the next session's start card | 0 |
 | **Working** | `brain_recall(query)` · `brain_note(text)` · `brain_state(goal/done/next)` — one argument each; recall a note id to read it in full; a retired answer comes back marked as retired, with its replacement | ≤ 3 lines per recall |
 | **A tool fails** | the one known, tested fix for that error, appended to the result | ≤ 80 tokens, or nothing |

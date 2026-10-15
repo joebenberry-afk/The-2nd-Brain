@@ -397,3 +397,85 @@ external memory systems (agent://ext-survey). Built:
   CLAUDE.md/registered docs dropped); one file answering ≥2 queries in ≥2 sessions, or a query silent ≥2×,
   prints ≤4 lines `→ brain project docs add <md>` or `→ brain note "<what answered it>"`. Smoke (this
   project, 14 examined): 2 queries, 2 sessions, then read `brain/src/notes.ts` → `brain note`; `--all`: 204 examined.
+
+### 8.9 Lean card and a self-closing fix loop (2026-10-14)
+
+Owner: retrieve quickly, work optimally, lean card; no interest in reviewing what the Brain holds.
+
+- **Lean card.** Only lines the agent can act on: `N proposals waiting` left the card (`brain review`
+  still lists them); the when-to-act footer is dropped where the `brain_*` tools are resident (OMP main
+  and child), since their descriptions carry it; attachment placeholders (`[Image #1, …]`) are no
+  longer an auto "last ask"; main budget 400 → 320. Live home, 20 projects: OMP main −19 %, CLI main
+  −17 %, OMP child −8 % tokens; no project lost its card.
+- **Tested capture pairs become notes** without `brain review` (project scope, specific error pattern — tightened in §8.10;
+  rejected, dismissed or covered pairs skipped; the paused-fix rule unchanged). Live events: 2
+  proposals, 0 tested, so no new fixes today. A "setup command, then identical rerun" pairing was
+  measured first: 0 strict candidates in 563 failed commands, so it was not built.
+- **CLI startup:** Node compile cache in `bin/brain.mjs`: recall 343 → 296 ms, fix 325 → 278 ms, card
+  357 → 341 ms (median of 7, judge off). Loading 472 note files (~180 ms) is now the largest CLI cost.
+- **Measured, left alone:** judged recall is bound by the Jev round trip (median 460–840 ms vs 80–190 ms
+  unjudged); exact repeat queries were 4.8 % of a week's recalls, too few for a persistent verdict
+  cache; the Tora skip floor is still `not ready` (3 lost).
+
+### 8.10 Foundation hardening pass (2026-10-15)
+
+Five read-only audits (agent://Audit-CardState, -Recall, -NotesModel, -Learning, -Hosts) reported 31
+findings with evidence (29 distinct); six owners fixed 28 of them with regression tests
+(agent://HostLatency, FixOutcomes, CaptureQuality, NotesModel, CardState, RecallGate) and one was
+declined (below). Full gate after integration: 943 tests, recall eval gates held.
+
+- **Never block the host.** The missing-path hint walked whole trees synchronously inside OMP's
+  `tool_result` (one result held 24.7 s; 33 of 145 hint rows over 300 ms): listing now shares a 150 ms
+  budget and never walks a drive, home or temp root. Claude Code hooks: the shim no longer spawns
+  `node --version` (−45 ms per hook), `captureUserRules` checks for a rule cue before loading notes
+  (−50 ms per prompt), the capture scan left SessionStart (~820 → ~410 ms on a 949-log home), and the
+  failure hook now covers Read/Grep/Glob/LS/NotebookEdit, which the path hint was built for.
+- **Fix outcomes were mis-scored.** Siblings in the same parallel batch and calls nested in one eval
+  cell scored a fix before the model saw it: 80 of 429 outcomes in 7 days (47 of 60 "missed"), which
+  paused the working global `Path …:N not found` fix (true record 3/0). Outcomes now count only after
+  the model saw the fix (OMP `context` event; Claude Code transcript message order), old rows within
+  1 s of their fire are discounted, and `evaltimeout`/`rawhint` (19 % of fires, never scorable) are
+  judged by the next JS cell their detector checks. Attributable 7-day record: 336 helped / 13 missed.
+- **Capture.** Unreviewed notes need a whole diagnostic pattern (a cut prefix would have fired on
+  every missing-module error), get proposal-derived ids (overlapping scans wrote duplicates), honour
+  `brain dismiss` of printed signatures, and never come from OMP isolated worktrees. Signatures no
+  longer fall back to a stdout line (3 of the top 5 unmatched errors were a JSON line, a banner and a
+  usage text). Owner-rule capture drops pasted markdown, ≥3-cue messages, narrative and task
+  requests: 8 of the 15 pending rule proposals were such noise.
+- **Isolated subagents** (`~/.omp/wt/<id>/m`, 61 sessions a week) resolved to a phantom project `m`
+  with no notes; they now work for the live parent's project.
+- **Notes and secrets.** V3 import scrubs; a regex error pattern broken by masking is refused and
+  `brain check` lists invalid ones; headline dedupe compares masked headlines and tagged globals;
+  `brain tested` outside the checkout keeps evidence hashes; `brain sync` refuses a detached HEAD or a
+  rebase/merge/bisect in progress (it had committed notes that vanished on checkout); the scrubber
+  masks eight more token formats and keeps env references, booleans and settings readable (a
+  reference followed by a literal stays masked).
+- **Card and state.** Inline `See:` anchors (9 of 22 real anchors) are moved onto their own line so they
+  render and are checked; the Brain's own notes/work commits no longer mark its plan stale; stale
+  notes rank behind live ones under a prompt match.
+- **Recall gate.** The eval never graded plan-doc answers (15 counted as silence). Four docs are frozen,
+  30 doc sections carry majority-of-three blind labels with four recorded runs, and unexpected doc
+  answers count wrong: frozen right 7–8, held-out right 4–5, judged wrong 0 on every run (two lexical
+  held-out doc headings now count as the wrong answers they were). A conditional doc fallback joins the
+  notes' judge request (44 → 39 requests on the 54-query replay). The narrow headline-gate rescue (+1
+  held-out case) was not shipped: it would add a judge call to silent recalls.
+- **Judge prompt: rejected (agent://JudgePrompt).** Both remaining miss kinds end at the judge
+  (labelled-right notes score 0.34–0.75 under the 0.78 bar). Three rewordings of the relevance
+  question were screened live, two runs each over all 92 candidates the eval sends (552 questions):
+  "would it help the agent act" and "direct answer" lost right answers and let H17 through (wrong 1
+  per run); "lookup" recovered R01, R02 and R17 but admitted four wrong answers per run (R10, R15,
+  H07, H17). None met wrong 0 with ≥ 2 more right, so the prompt, recordings and thresholds stay:
+  at this judge, recall is on its precision frontier. Each variant also cost 44–79 more tokens per
+  question.
+- **Measured, left alone:** a persistent parsed-note cache (CLI and hooks are 13 of 348 brain tool
+  calls in 30 days; OMP holds notes in process); a custom judge connection pool (no reliable gain
+  between recalls minutes apart). On a copy of the live home `brain stats` fell ~3.2 → 2.4 s and
+  `brain review` ~3.1 → 1.9 s: the unmatched-error scan fell 1.84 → 1.19 s (successes are described
+  only when a failure needs them); the rest is asks-by-week reading host session files, owner-facing
+  and off every agent path. `brain stats` fix-outcome lines now apply the pause rule's 1 s artifact
+  discount in every build view (7 days: edit-anchor fix 145/8 → 130/3, path hint 91/23 → 73/2).
+- **Test hygiene.** Each full vitest run left ~1,000 `brain-*` folders in the OS temp directory
+  (26,488 folders by 2026-10-15). The suite now points `TMPDIR`/`TEMP`/`TMP` at one per-run folder
+  that a global teardown removes: a full run leaves zero folders. The old folders were deleted at
+  the owner's request; Git Bash `du` had estimated 17.4 GB, but deleting them freed only ~10 MB
+  (almost all were tiny files that NTFS keeps inside the MFT).
