@@ -1,5 +1,5 @@
 ---
-at: 2026-10-15T03:40:16Z
+at: 2026-10-15T06:25:38Z
 ---
 
-Goal: ROADMAP M1 gate. Main d2d6300 = FT1Diag3 fixes (71b7aae) + gate v1 (FG-283j). Candidate J bufg_m1_4a8ee773; cohort J runs/frame_generation/20261015T033930Z_m1-cohortJ; queue17 runs/frame_generation/20261015T033955Z_m1-live-queue17 (bg_36): J FT-1 b1, gs3-p3r, b2, b3, static G3 check, X5, FT-4x3, FT-8/11, FT-3/5/9, FT-2, FT-7. GameSetup3 running (P3R; its tools/game_driver edits uncommitted). Next: score J FT-1 + static + FT-4; then refresh(+non-E1) cohort.
+Goal: ROADMAP M1 gate. Resumed 06:25Z. Main 0cbff9a (P3R settings proof). Queue17 restarted (bg_2): J FT-1 b2, P3R gameplay acq, b3, static, X5, FT-4x3, FT-2 pan_slow x3, FT-5/9 x3, FT-8/11, FT-7 b1 x5, FT-3 x3. GameSetup4 agent: P3R non-E1 → runs/frame_generation/<UTC>_m1-cohortJ-nonE1-inputs.json. Next: cohort K = cand J + X5 receipt + FT-2 camera inputs + non-E1.
