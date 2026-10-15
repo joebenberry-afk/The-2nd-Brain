@@ -1,6 +1,6 @@
 ---
-at: 2026-10-15T05:49:19Z
+at: 2026-10-15T07:06:00Z
 ---
 
-Goal: hardening pass shipped: this checkout is on main at 03e3d39, pushed (origin/main in sync); brain sync now commits notes to main. Next: owner restarts OMP windows to load the new code; other machines git pull main.
-See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#8.10
+Goal: close the Brain's recall gap vs Obsidian MCP using Tora (hybrid BM25 + Tora candidates into Jev, agreement rule), also test Tora for card ranking and tidy; adopt only measured wins. Next: record live Jev verdicts for 247 new candidate pairs (key is in bash env, not the eval kernel). Watch out: tune on frozen 34, validate on held-out 20 + V3.
+See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#8.12
