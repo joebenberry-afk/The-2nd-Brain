@@ -1,6 +1,6 @@
 ---
-at: 2026-10-15T05:39:45Z
+at: 2026-10-15T05:49:19Z
 ---
 
-Goal: foundation hardening pass done (uncommitted on brain/speed-pass-2); gate 943/943; old brain-* temp folders deleted (26,488; ~10 MB freed). Next: owner restarts OMP to load the new code.
+Goal: hardening pass shipped: this checkout is on main at 03e3d39, pushed (origin/main in sync); brain sync now commits notes to main. Next: owner restarts OMP windows to load the new code; other machines git pull main.
 See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#8.10
