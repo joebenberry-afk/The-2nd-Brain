@@ -520,3 +520,47 @@ API 5.4.0 (built-in MCP, 20 tools), release files checked against GitHub's SHA-2
   Brain's judged answer finds 8; the judge is what keeps answers free of wrong notes. Semantic
   candidates in front of the judge is the lever: Tora does this, but adds at most 2 candidates and
   only while a Tora session runs. Not built here.
+
+### 8.13 Tora where Obsidian was ahead, measured on real traffic (2026-10-15)
+
+Owner: improve the Brain where it lacks against Obsidian MCP, and Tora's part in it; drop what is
+worse. The labelled sets proved too small to decide: a candidate rule with 0 wrong on all four recorded
+runs there gave 11 wrong in 58 new answers on real traffic. Every rule was therefore replayed on the
+566 distinct queries logged 1–15 Oct, with a Jev verdict for every candidate and three blind judges
+(majority, §8.1: query, project and up to 8 candidates in id order, never the answer) for every
+answer a rule changed. For scale, today's judged lexical answers had 78 of 81 shown notes relevant
+(60 sampled answers).
+
+| Notes Tora added to real answers (566 queries) | right | wrong |
+|---|---|---|
+| Before: Tora's best two the lexical search missed, at Tora's cut 0.7605 | 22 | 6 |
+| BM25's top 3 that the lexical gate left out, at cosine ≥ 0.70 | 26 | 5 |
+| **Built:** the same at cosine ≥ 0.74 | **15** | **0** |
+
+- **Recall.** Tora now re-checks only notes BM25 ranked in its top three but the lexical gate dropped;
+  the best two at 0.74 or more join the same Jev request (0.78 unchanged). Notes only Tora finds were
+  right 19 of 31 when Jev kept them, and no Jev bar separated them (wrong ones reached 0.88), so they
+  are never sent. The 0.74 floor was fitted on the first half of the queries (highest wrong 0.736) and
+  held 6 of 6 on the second; under 0.70 Jev kept 1 of 150 sampled candidates. Dropped after measuring:
+  Tora's best missed note at 0.70, and a lower Jev bar (0.65) when Tora's and BM25's first notes agree
+  (together 47 right, 11 wrong). Frozen eval, cosines frozen in `test/fixtures/recall-tora.json`:
+  judged held-out 4–5 → 5–6 right (H04), frozen 7–8, V3 13/15 and 8/8, 0 wrong on every run; the
+  held-out gate rises to 5.
+- **Start card (OMP).** 45 real first prompts, the union of each ranker's top five labelled blind:
+  Tora's cosine ranking had precision@3 0.36 against BM25's 0.18 (prompts with 3+ content words 0.45
+  against 0.20; a relevant note in the top three for 23 against 13 of 32); vague prompts tied. Built
+  for such prompts with a 0.3 s wait, BM25 otherwise; the card shows as many notes as before.
+- **Write-time hint.** On the 10 notes that replaced an older one Jev's pair judge flags 5 pairs; the
+  lexical shortlist held 3, Tora's three nearest added a contradiction (0.91). 40 ordinary writes: 116
+  Tora-only pairs, no hint. Built for `brain note`; `brain tidy` is unchanged.
+- **Availability.** 74 of 246 recalls (11–15 Oct) carried Tora data. Of the 164 without it after Tora's
+  first answer, 120 were silent recalls, which the old code logged without Tora's data even when Tora
+  had answered, and 41 had waited out the 0.8 s timeout: a session's first call loads llama-server
+  (1.1–1.3 s). Tora now loads at session start (Tora IDEAS TS-09), and a query over its 512-token
+  context, an HTTP 500 before, is cut to fit with llama-server's own tokenizer (TM-22).
+- **Dropped:** the shadow skip floor (`BRAIN_TORA_SKIP`, the `skip floor` verdict in `brain stats`).
+  At 0.70 it would skip 24% of judged recalls and lose 2 Jev-kept answers; at 0.66 it loses none but
+  skips 8%.
+- Where Obsidian still leads: raw coverage. Its semantic top three held the labelled note for 20 of
+  27 questions, but candidates only embeddings find are right 61% of the time even after Jev, so the
+  Brain keeps them out. Tora's ledger (TI-11 to TI-15) holds the per-rule numbers.
