@@ -105,6 +105,9 @@ Brain home (a git repo)
 3. Budgets are enforced in code (truncate, then refuse), never in a document.
 4. The Brain never blocks, vetoes, steers or continues host work. It adds context or nothing.
    *`BRAIN_STOP_NUDGE` exception withdrawn: measured and deleted (V5 §8 P3, `421beaa`).*
+   *Layer 4 exception (owner, 2026-10-17): reversible rendering may replace old tool output in the
+   request a model receives with a recall-id stub; history is never edited
+   (`docs/intake/2026-10-17-layer4-reversible-rendering.md`).*
 5. Files are the truth. Anything derived is rebuilt from files on start; nothing derived is
    committed.
 6. Node built-ins only in the library and the extension. No dependency is added without a

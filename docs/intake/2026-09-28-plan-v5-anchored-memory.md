@@ -377,6 +377,13 @@ external memory systems (agent://ext-survey). Built:
   12); stats +0.6 s (2.6 → 3.2 s). First readings, second-brain, turns median (p75) · wall median:
   w09-14 12 (34) · 3.0 min; w09-21 11.5 (38) · 2.8 min; w09-28 5.5 (17) · 0.9 min; w10-05 (to
   date, 14 asks) 11 (33) · 1.7 min. Judge a change by weeks after it against the weeks before.
+  Scan cache (2026-10-17, `brain/src/asks.ts`, `state/asks-cache.json`, derived, never committed): the cwd
+  and parsed asks of each transcript are kept by path with its size/mtime/ctime (no transcript text;
+  deleted files and anything past 12 weeks dropped; a project's files parsed only once a scan accepts
+  them), so only new or changed transcripts are read; which project a cwd belongs to is asked afresh
+  on every run, never stored. Measured on this machine (4 weeks, second-brain, 447 transcripts, 91 cwds, 345
+  asks, identical output): 1369 ms uncached → 703 ms first cached run → 158 ms warm, of which ~127 ms
+  is `resolveProject`.
 - **agentbench mixes recallq with other tasks (2026-10-06)** (`brain/scripts/agentbench.ts`):
   `planPasses` runs the other tasks as one pass and recallq (Brain-enabled conditions only) as a
   second, same invocation and label, one summary each; recallq never shares a home. Checked with
@@ -568,3 +575,22 @@ answer a rule changed. For scale, today's judged lexical answers had 78 of 81 sh
   (wrong notes reached 0.82; any zero-wrong bar kept 3 or fewer of 19 right), and on silent recalls
   Tora's nearest note passing Jev was right 7 of 12. Not built: under 1% more answers, below the
   lexical answers' precision. Tora's ledger (TI-11 to TI-16) holds the per-rule numbers.
+- **Local judge in place of Jev (owner: cost; built, owner's choice).** Tora runs Qwen3-Reranker-0.6B
+  (0.64 GB) beside its embedder and judges recall at `/judge`; Jev is called only when Tora gives no
+  verdict and a key is set (`BRAIN_JUDGE=tora`: never). Its scores are mapped onto Jev's scale (0.999
+  → 0.78, 0.5 → the phrase floor 0.55). On the 276 blind-labelled October candidates it keeps 116
+  right / 3 wrong against Jev's 113 / 5; on the frozen hand-labelled eval it is weaker (real 2 right /
+  2 wrong against 7-8 / 0, held-out 6 / 1 against 5-6 / 0, V3 dev 10/15 against 13): its mistakes
+  are on-topic notes that do not answer, and no bar fixes both sets. The owner chose it over Jev's
+  quality on that set; the eval gates Tora's GPU and CPU recordings at what they measured, listing its
+  known wrong answers, and Jev's runs keep 0 wrong. Qwen3-Reranker-4B, bge-reranker-v2-m3 and a
+  Qwen3-4B-Instruct yes/no judge did worse. `brain stats` counts judged recalls by judge (Tora TJ-02).
+- **Local recall candidate cutover (RECALL-02, 2026-10-17).** For the local Tora judge only, BM25's
+  top-three visible, public, non-retired candidates gated out lexically now join `/judge` directly,
+  capped at two; no `/score` prefilter. The 0.999 reranker bar, privacy and scope stay unchanged.
+  The Jev path retains the cosine ≥0.74 prefilter described above. A temp-home replay of 788
+  deduplicated real queries from 14 days changed eight answers: eight notes added, none removed.
+  A blind TypeSafe Jev judge rated all eight relevant (p=0.77–0.97). `/score` requests: 487 → 0;
+  `/judge`: +0.26/query. Observed latency p50 77 → 88 ms, p95 194 → 201 ms; both arms shared the
+  old failure-cooldown state, so this does not isolate latency impact. Caller-budget exhaustion
+  no longer cools down a healthy server; genuine full-budget timeouts and server failures still do.
