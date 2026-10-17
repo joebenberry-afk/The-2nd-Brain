@@ -202,7 +202,7 @@ export async function noteHint(home: string, note: Note, notes: Note[], judge?: 
       const candidate = pair(note, other, left, new Set(tokens(other.body)));
       return candidate ? [candidate] : [];
     }).sort(bySimilarity).slice(0, 3);
-    const found = tora && others.length ? await tora(note.body, others.map(other => ({ id: other.id, text: other.body }))).catch(() => undefined) : undefined;
+    const found = tora && others.length ? await tora(judgeText(note), others.map(other => ({ id: other.id, text: judgeText(other) }))).catch(() => undefined) : undefined;
     if (found) {
       const near = [...others].sort((a, b) => found.scores.get(b.id)! - found.scores.get(a.id)!).slice(0, 3);
       pairs.push(...near.filter(other => !pairs.some(p => p.a === other || p.b === other)).map(other => ordered(note, other, found.scores.get(other.id)!, "tora")));

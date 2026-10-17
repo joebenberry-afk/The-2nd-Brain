@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -112,6 +112,31 @@ describe("sync", () => {
     expect(gitCmd(bare, "rev-parse", "refs/heads/main")).toBe(remoteHead);
     expect(gitCmd(b, "diff", "--name-only", "--diff-filter=U")).toContain("outside.txt");
     expect(gitCmd(b, "stash", "list")).toContain("autostash");
+  });
+
+  it("refuses to commit an unmerged note left by an autostash conflict", () => {
+    const home = tmp();
+    setupRepo(home);
+    const note = createNote(home, { text: "base", project: "demo" });
+    const rel = note.path.slice(home.length + 1).replace(/\\/g, "/");
+    gitCmd(home, "add", "-A");
+    gitCmd(home, "commit", "-m", "base");
+    const branch = gitCmd(home, "symbolic-ref", "--short", "HEAD").trim();
+    gitCmd(home, "branch", "side");
+    writeFileSync(note.path, readFileSync(note.path, "utf8").replace("base", "main"));
+    gitCmd(home, "commit", "-am", "main");
+    gitCmd(home, "checkout", "side");
+    writeFileSync(note.path, readFileSync(note.path, "utf8").replace("base", "side"));
+    gitCmd(home, "commit", "-am", "side");
+    gitCmd(home, "checkout", branch);
+    // An autostash conflict leaves unmerged index entries but no merge marker.
+    const merge = spawnSync("git", ["merge", "side"], { cwd: home, encoding: "utf8" });
+    expect(merge.status).not.toBe(0);
+    rmSync(join(home, ".git", "MERGE_HEAD"));
+    const before = gitCmd(home, "rev-parse", "HEAD");
+    expect(() => sync(home)).toThrow(/unresolved conflicts/);
+    expect(gitCmd(home, "rev-parse", "HEAD")).toBe(before);
+    expect(gitCmd(home, "diff", "--name-only", "--diff-filter=U")).toContain(rel);
   });
 
   it("raises when not a git repository", () => {

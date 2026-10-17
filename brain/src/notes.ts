@@ -54,12 +54,15 @@ export interface Note {
   body: string;
   /** Absolute path of the file ("" before the first save). */
   path: string;
+  /** Unknown frontmatter fields, verbatim and in file order; a save writes them back unchanged. */
+  extra?: string[];
 }
 
 export class NoteError extends Error {}
 
 const LIST_KEYS = new Set(["tags", "errors", "evidence", "evidence_sha"]);
 const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "evidence_sha", "tested", "tested_by", "tested_at", "tested_sha", "host", "stale_after", "replaces", "replaced_by", "retired"];
+const NOTE_KEYS: Record<string, true> = Object.fromEntries(ORDER.map((key) => [key, true]));
 
 /**
  * Who verified a note, lowest trust first: `convert` (a V3 grade), `agent` (its own claim),
@@ -221,7 +224,7 @@ function stripComment(value: string): string {
  * Also read, as Agent Skills files use them: `# comments`, a `key:` followed by an indented map
  * (kept as an empty value) and `>` / `|` block scalars (folded to one line / kept as lines).
  */
-export function parseFrontmatter(text: string): { fields: Map<string, string | string[]>; body: string } {
+export function parseFrontmatter(text: string, known?: Record<string, true>): { fields: Map<string, string | string[]>; body: string; extra: string[] } {
   const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   if (!normalized.startsWith("---\n")) throw new NoteError("missing frontmatter");
   const end = normalized.indexOf("\n---", 4);
@@ -230,6 +233,8 @@ export function parseFrontmatter(text: string): { fields: Map<string, string | s
   const afterFence = normalized.indexOf("\n", end + 1);
   const body = afterFence < 0 ? "" : normalized.slice(afterFence + 1);
   const fields = new Map<string, string | string[]>();
+  const extra: string[] = [];
+  let keep = false;
   let listKey: string | null = null;
   let block: { key: string; folded: boolean; lines: string[] } | null = null;
   const endBlock = () => {
@@ -239,6 +244,9 @@ export function parseFrontmatter(text: string): { fields: Map<string, string | s
     block = null;
   };
   for (const line of head.split("\n")) {
+    const top = /^([A-Za-z_][\w-]*):/.exec(line);
+    if (top) keep = known !== undefined && !Object.hasOwn(known, top[1] as string);
+    if (keep) extra.push(line);
     if (block && (!line.trim() || /^\s/.test(line))) {
       block.lines.push(line.replace(/^\s+/, ""));
       continue;
@@ -269,7 +277,8 @@ export function parseFrontmatter(text: string): { fields: Map<string, string | s
     }
   }
   endBlock();
-  return { fields, body: body.replace(/^\n+/, "") };
+  while (extra.length && !extra[extra.length - 1]!.trim()) extra.pop();
+  return { fields, body: body.replace(/^\n+/, ""), extra };
 }
 
 /** A frontmatter value is one line: line breaks of every kind (\r, \u2028 …) and control characters become spaces. */
@@ -296,7 +305,7 @@ function asScalar(value: string | string[] | undefined): string | undefined {
 
 /** Build a Note from file text. `project` and `isPrivate` come from the file's location. */
 export function parseNote(text: string, path: string, project: string, isPrivate: boolean): Note {
-  const { fields, body } = parseFrontmatter(text);
+  const { fields, body, extra } = parseFrontmatter(text, NOTE_KEYS);
   const id = asScalar(fields.get("id"));
   if (!id) throw new NoteError("missing id");
   const kindRaw = asScalar(fields.get("kind")) ?? "note";
@@ -324,6 +333,7 @@ export function parseNote(text: string, path: string, project: string, isPrivate
     retired: asScalar(fields.get("retired")),
     body: body.trimEnd(),
     path,
+    ...(extra.length ? { extra } : {}),
   };
 }
 
@@ -360,6 +370,8 @@ export function formatNote(note: Note): string {
       lines.push(`${key}: ${scalarOut(oneLine(value))}`);
     }
   }
+  // Hand-added fields the Brain does not own (owner:, related:) survive a rewrite verbatim.
+  for (const line of note.extra ?? []) lines.push(line);
   lines.push("---", "", note.body.trim(), "");
   return lines.join("\n");
 }

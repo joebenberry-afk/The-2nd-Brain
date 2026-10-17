@@ -330,6 +330,10 @@ describe("OMP extension", () => {
     branch.push({ type: "compaction", summary: "…" });
     const after = load().handlers.get("before_agent_start")!({ prompt: "continue" }, resumed) as { message?: { customType?: string } } | undefined;
     expect(after?.message?.customType).toBe(CARD_TYPE);
+
+    // The lean line is a delivered card too: resuming after one must not send a second card.
+    branch.push({ type: "custom_message", customType: "brain.lean", content: LEAN_LINE, details: { v: 4 } });
+    expect(load().handlers.get("before_agent_start")!({ prompt: "continue" }, resumed)).toBeUndefined();
   });
 
   it("brings the card back after a compaction on the next tool result, else with the next prompt", () => {

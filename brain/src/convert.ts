@@ -118,8 +118,9 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
   }
 
   // Every note file already present counts, even one that no longer parses: never overwrite it.
-  const existingIds = new Set(loadNotes(toHome).notes.map((n) => n.id));
-  for (const file of listMarkdown(join(toHome, "notes"))) existingIds.add(basename(file, ".md"));
+  // Ids are case-insensitive (findNote folds case), so the collision check is too.
+  const existingIds = new Set(loadNotes(toHome).notes.map((n) => n.id.toLowerCase()));
+  for (const file of listMarkdown(join(toHome, "notes"))) existingIds.add(basename(file, ".md").toLowerCase());
 
   // projects.json is merged into as written (raw, under its claim), and never rewritten when it does not parse.
   const projectsFile = join(toHome, "projects.json");
@@ -163,7 +164,7 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
           report.errors.push(`${path}: not a V3 record id: ${JSON.stringify(id)}`);
           continue;
         }
-        if (existingIds.has(id)) {
+        if (existingIds.has(id.toLowerCase())) {
           report.skipped++;
           continue;
         }
@@ -214,7 +215,10 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
 
         if (!opts?.dryRun) {
           const saved = saveNote(toHome, note);
-          existingIds.add(saved.id);
+          existingIds.add(saved.id.toLowerCase());
+        } else {
+          // A dry run must predict the same duplicates as the real run.
+          existingIds.add(id.toLowerCase());
         }
 
         report.written++;

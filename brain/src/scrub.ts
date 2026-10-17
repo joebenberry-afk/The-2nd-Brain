@@ -193,6 +193,24 @@ export function scrub(text: string, opts: { longRuns?: boolean; tagRuns?: boolea
     return inner ? match : name + sep + value.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)((?:[^\s,;}&?]|\?(?![A-Za-z0-9_.-]+["']?\s*[=:]))+)/g, pair(true));
   };
   result = result.replace(/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;}]+)/g, pair(false));
+  // A reference with a quoted literal fallback: `api_key = process.env.API_KEY || "hunter2"`. The
+  // reference itself stays (it is not a secret), but a credential-named pair's fallback is masked.
+  result = result.replace(
+    /(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)((?:process\.env(?:\.\w+|\[["']?\w+["']?\])|os\.(?:environ(?:\[["']?\w+["']?\]|\.get\(["']?\w+["']?\))|getenv\(["']?\w+["']?\))|Deno\.env\.get\(["']?\w+["']?\)|\$\{?[A-Z_][A-Z0-9_]*\}?|%[A-Za-z_][A-Za-z0-9_]*%|\$env:\w+))\s*(\|\||\?\?|\bor\b|,)\s*(["'])((?:\\.|(?!\5)[^\\\n])*)\5/g,
+    (match, name: string, sep: string, ref: string, op: string, quote: string, literal: string, offset: number, text: string) =>
+      credentialAssignment(name, literal, sep, offset, text) ? `${name}${sep}${ref} ${op} ${quote}***${quote}` : match,
+  );
+  // A label before the pair ("Next: password: hunter2") must not hide its key: the scan above
+  // consumes the first pair only. Read the last pair in a run and mask it when its key is a credential.
+  result = result.replace(
+    /(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]+["']?\s*[=:]\s*)+)([A-Za-z0-9_.-]+)(["']?\s*[=:]\s*)([^\s,;}]+)/g,
+    (match, _labels: string, name: string, sep: string, value: string, offset: number, text: string) => {
+      if (/^["']?\*\*\*["']?$/.test(value)) return match;
+      const at = offset + match.length - (name.length + sep.length + value.length);
+      if (value.startsWith("//") || !credentialAssignment(name, value, sep, at, text)) return match;
+      return match.slice(0, match.length - value.length) + "***";
+    },
+  );
 
   if (opts.longRuns === false) return { text: result, scrubbed: result !== original };
 

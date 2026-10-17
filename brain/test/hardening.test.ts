@@ -177,6 +177,13 @@ describe("secrets never reach notes or working state", () => {
     expect(readWork(home, "demo")?.text).toContain("Goal: ship.");
   });
 
+  it("masks a credential pair after a label on the same line", () => {
+    expect(scrub("Next: password: hunter2")).toEqual({ text: "Next: password: ***", scrubbed: true });
+    expect(scrub("Next: password: hunter2 then done").text).toBe("Next: password: *** then done");
+    expect(scrub("Goal: token: abc123def456ghi789").text).toBe("Goal: token: ***");
+    expect(scrub("Unexpected: token: identifier")).toEqual({ text: "Unexpected: token: identifier", scrubbed: false });
+  });
+
   it("leaves ordinary words, paths and parser errors alone", () => {
     for (const text of [
       "Use the disk-usage-analyzer-config-v2 for this",

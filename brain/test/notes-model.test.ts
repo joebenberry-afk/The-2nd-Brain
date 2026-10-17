@@ -47,6 +47,7 @@ describe("scrub: references and settings are not secrets", () => {
     "encryption_key_size=256",
     "PWD=/home/me/app",
     "password=${{secrets.DB_PASSWORD}}",
+    'timeout = process.env.TIMEOUT || "30"',
   ])("keeps %s", (text) => {
     expect(scrub(text, { longRuns: false })).toEqual({ text, scrubbed: false });
   });
@@ -61,6 +62,7 @@ describe("scrub: references and settings are not secrets", () => {
     ["PWD=hunter2", "hunter2"],
     ['password="os.environ.get(\'DB_PASSWORD\', \'hunter2\')"', "hunter2"],
     ['apiKey=process.env["OPENAI_API_KEY"]||"hunter2"', "hunter2"],
+    ['api_key = process.env.API_KEY || "hunter2"', "hunter2"],
     ['password="${{ secrets.DB_PASSWORD }}hunter2"', "hunter2"],
   ])("still masks %s", (text, secret) => {
     const out = scrub(text, { longRuns: false }).text;
@@ -139,6 +141,25 @@ describe("convertV3 masks like createNote", () => {
     // The masked pattern no longer compiles as intended: reported, not stored as a dead fix.
     expect(report.errors.join("\n")).toMatch(/secret masking/);
     expect(loadNotes(to).notes[0]?.errors).toEqual(["login failed for the service account"]);
+  });
+});
+
+describe("unknown frontmatter fields survive a rewrite", () => {
+  it("keeps hand-added fields verbatim, including a nested map and a comment", () => {
+    const home = tmp();
+    const note = createNote(home, { project: "demo", text: "Original body" });
+    const original = readFileSync(note.path, "utf8").replace(
+      "---\n",
+      "---\nowner: alice\nconstructor: keep me\ntoString: keep me too\nmetadata:\n  compatibility: v4\n# keep me\n",
+    );
+    writeFileSync(note.path, original);
+    const loaded = loadNotes(home).notes[0]!;
+    expect(loaded.extra).toEqual(["owner: alice", "constructor: keep me", "toString: keep me too", "metadata:", "  compatibility: v4", "# keep me"]);
+    saveNote(home, { ...loaded, body: "Changed body" });
+    const saved = readFileSync(note.path, "utf8");
+    expect(saved).toContain("owner: alice\nconstructor: keep me\ntoString: keep me too\nmetadata:\n  compatibility: v4\n# keep me\n");
+    expect(loadNotes(home).notes[0]!.body).toBe("Changed body");
+    expect(loadNotes(home).notes[0]!.extra).toEqual(["owner: alice", "constructor: keep me", "toString: keep me too", "metadata:", "  compatibility: v4", "# keep me"]);
   });
 });
 

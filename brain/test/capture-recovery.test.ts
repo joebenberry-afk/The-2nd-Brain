@@ -105,6 +105,13 @@ describe("capture recovery and matching", () => {
       .toBe(errors.filter((error) => !findFix(notes, error, null)).length);
   });
 
+  it("names an existing untested note instead of suggesting a duplicate", () => {
+    const home = tmp();
+    const note = createNote(home, { text: "Install the demo module", project: "global", kind: "gotcha", errors: ["No module named 'demo'"] });
+    appendEvent(home, "s", home, { tool: "bash", command: "python app.py", ok: false, error: "ModuleNotFoundError: No module named 'demo'" });
+    expect(unmatchedErrors(home, [note])).toMatchObject([{ candidate: note.id }]);
+  });
+
   it("revalidates edited note content on the next unmatched batch", () => {
     const home = tmp();
     const error = "ModuleNotFoundError: No module named 'demo'";

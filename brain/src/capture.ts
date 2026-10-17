@@ -1250,7 +1250,7 @@ export function findFix(
 function findFixIn(
   notes: Note[], errorText: string, project: Project | null,
   home?: string, host?: "omp" | "claude-code", command?: string,
-  validation?: Map<Note, boolean>,
+  validation?: Map<Note, boolean>, allowUntested = false,
 ): Note | null {
   if (!errorText.trim()) return null;
 
@@ -1278,8 +1278,8 @@ function findFixIn(
       valid = testedCurrent(note);
       validation?.set(note, valid);
     }
-    if (!valid) continue;
-    if ((note.project === GLOBAL || (note.project === project?.id && project.root)) && changedEvidence(note, [project?.root, project?.docRoot, home].filter((root): root is string => !!root), note.testedAt)) continue;
+    if (!valid && !allowUntested) continue;
+    if (!allowUntested && (note.project === GLOBAL || (note.project === project?.id && project.root)) && changedEvidence(note, [project?.root, project?.docRoot, home].filter((root): root is string => !!root), note.testedAt)) continue;
     if (note.source === "capture") {
       const paragraphs = note.body.split(/\n\s*\n/);
       const original = paragraphs[3]?.startsWith("Error:") ? paragraphs[1] : undefined;
@@ -1367,6 +1367,8 @@ export interface UnmatchedError {
   pattern?: string;
   tool?: string;
   then?: string;
+  /** An existing note whose pattern names this error but whose fix is untested or stale. */
+  candidate?: string;
 }
 
 /**
@@ -1390,7 +1392,7 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
   const latest = new Map<string, number>();
   const rejected = readRejected(home);
   const projects = new Map<string, Project>();
-  const fixes = new Map<string, boolean>();
+  const fixes = new Map<string, { fix: Note | null; candidate: Note | null }>();
   const validation = new Map<Note, boolean>();
   let names: string[];
   try { names = readdirSync(dir); } catch { return []; }
@@ -1426,9 +1428,14 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
       const scope = project?.id ?? GLOBAL;
       if (opts.project && opts.project !== scope && !(opts.global && scope === GLOBAL)) continue;
       const fixKey = `${event.cwd}\0${event.command}\0${event.error}`;
-      let fix = fixes.get(fixKey);
-      if (fix === undefined) fixes.set(fixKey, fix = findFixIn(notes, event.error, project, undefined, undefined, event.command, validation) !== null);
-      if (fix) continue;
+      let found = fixes.get(fixKey);
+      if (found === undefined) {
+        const fix = findFixIn(notes, event.error, project, undefined, undefined, event.command, validation);
+        const candidate = fix ? null : findFixIn(notes, event.error, project, undefined, undefined, event.command, validation, true);
+        found = { fix, candidate };
+        fixes.set(fixKey, found);
+      }
+      if (found.fix) continue;
       const signature = unmatchedSignature(event.error);
       // A bare exit status groups unrelated failures: nothing a note could match.
       if (!signature || EXIT_WRAPPER.test(signature) || rejected.has(rejectKey("e", signature))) continue;
@@ -1443,6 +1450,7 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
         row = { signature, count: 0, ...(pattern ? { pattern } : {}) };
         rows.set(signature, row);
       }
+      if (found.candidate) row.candidate ??= found.candidate.id;
       row.count++;
       if (!latest.has(signature) || at > latest.get(signature)!) {
         latest.set(signature, at);

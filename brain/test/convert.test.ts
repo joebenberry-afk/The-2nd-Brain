@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { convertV3 } from "../src/convert.ts";
-import { loadNotes } from "../src/notes.ts";
+import { createNote, loadNotes } from "../src/notes.ts";
 import { visibleTo } from "../src/project.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-convert-"));
@@ -332,6 +332,30 @@ describe("convert", () => {
 
     expect(firstReport.skipped).toBe(1);
     expect(firstReport.written).toBe(0);
+  });
+
+  it("skips a record whose id differs only in case", () => {
+    const from = tmp();
+    const to = tmp();
+    mkdirSync(join(from, "records"), { recursive: true });
+    createNote(to, { id: "n-abcdef0123", project: "demo", text: "Existing note" });
+    writeFileSync(join(from, "records", "mem-1.md"), createV3Record("N-ABCDEF0123", {}));
+    const report = convertV3(from, to);
+    expect(report.written).toBe(0);
+    expect(report.skipped).toBe(1);
+    expect(loadNotes(to).notes.map((n) => n.id)).toEqual(["n-abcdef0123"]);
+  });
+
+  it("a dry run counts duplicates in its own batch", () => {
+    const from = tmp();
+    const to = tmp();
+    mkdirSync(join(from, "records", "private"), { recursive: true });
+    writeFileSync(join(from, "records", "mem-1.md"), createV3Record("mem-1", {}));
+    writeFileSync(join(from, "records", "private", "mem-1.md"), createV3Record("mem-1", {}));
+    const report = convertV3(from, to, { dryRun: true });
+    expect(report.written).toBe(1);
+    expect(report.skipped).toBe(1);
+    expect(loadNotes(to).notes).toHaveLength(0);
   });
 
   it("reports errors for malformed records", () => {

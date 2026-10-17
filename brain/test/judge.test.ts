@@ -37,6 +37,41 @@ it("a note holding the whole query as a phrase needs only the phrase floor", asy
   expect(holdsPhrase("Café migration", "cafe migration?")).toBe(true);
 });
 
+it("the phrase floor and eligibility cover a gated addition", async () => {
+  const notes = [
+    note("a", { body: "probe alpha guidance" }),
+    note("b", { body: "probe alpha notes" }),
+    note("phrase", { body: "intro probe alpha beta outro" }),
+  ];
+  const seen: string[] = [];
+  const judge: Judge = async (_query, candidates) => {
+    seen.push(...candidates.map(c => c.id));
+    return new Map(candidates.map(c => [c.id, 0.6]));
+  };
+  const tora = async (_query: string, candidates: { id: string; text: string }[]) => ({ scores: new Map(candidates.map(c => [c.id, 0.75])), ms: 1 });
+  const result = await judgedAnswer(notes, "probe alpha beta", { project, exclude: new Set(["phrase"]) }, judge, tora, true);
+  expect(seen).toContain("phrase");
+  expect(result.ids).toEqual(["phrase"]);
+  expect(result.recall?.stages).toContainEqual(["phrase", "addition"]);
+});
+
+it("sends only scrubbed, cut note text to Tora's /score", async () => {
+  const notes = [
+    note("a", { body: "probe alpha guidance" }),
+    note("b", { body: "probe alpha notes" }),
+    note("secret", { body: "probe alpha DB_PASSWORD=abc123def456ghi789 " + "x".repeat(3000) }),
+  ];
+  const seen: { id: string; text: string }[] = [];
+  const tora = async (_query: string, candidates: { id: string; text: string }[]) => {
+    seen.push(...candidates);
+    return { scores: new Map(candidates.map(c => [c.id, 0.75])), ms: 1 };
+  };
+  await judgedAnswer(notes, "probe alpha beta", { project, exclude: new Set(["secret"]) }, async (_query, candidates) => new Map(candidates.map(c => [c.id, 0.9])), tora);
+  expect(seen).toHaveLength(1);
+  expect(seen[0]!.text).not.toContain("abc123def456");
+  expect(seen[0]!.text.length).toBeLessThanOrEqual(2000);
+});
+
 it("all dropped uses normal silence and cross-project hints", async () => {
   const notes = [note("local")];
   expect(await judgedAnswer(notes, "quartz migration", { project }, rejectAll)).toMatchObject({ text: "no match; note it once you learn it", ids: [], judged: true, dropped: 1 });

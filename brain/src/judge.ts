@@ -102,10 +102,15 @@ export function recallJudge(env: NodeJS.ProcessEnv): Judge | undefined {
   return Object.assign(async (query: string, candidates: { id: string; text: string }[]) => await local(query, candidates) ?? await paid(query, candidates), { scorer: local.scorer, attempts: local.attempts });
 }
 
+/** Tora for recall and the write-time hint; BRAIN_JUDGE=jev/off forbids it there, while the card keeps toraScorer. */
+export function judgeScorer(env: NodeJS.ProcessEnv): ToraScorer | undefined {
+  return env.BRAIN_JUDGE === "jev" || env.BRAIN_JUDGE === "off" ? undefined : toraScorer(env);
+}
+
 /** Shared CLI/OMP/MCP wiring, including diagnostics when no local session is running. */
 export async function recallFor(notes: Note[], query: string, opts: AnswerOptions, env: NodeJS.ProcessEnv): Promise<Answer> {
   const judge = recallJudge(env);
-  const result = await judgedAnswer(notes, query, opts, judge, judge?.scorer ? undefined : toraScorer(env), true);
+  const result = await judgedAnswer(notes, query, opts, judge, judge?.scorer ? undefined : judgeScorer(env), true);
   if (result.recall && !result.recall.local.length && !judge?.scorer && env.BRAIN_TORA !== "off" && env.BRAIN_JUDGE !== "off" && env.BRAIN_JUDGE !== "jev") {
     result.recall.local.push({ route: "/judge", outcome: "no-session", ms: 0 });
   }
@@ -256,14 +261,13 @@ async function judgeAnswer(notes: Note[], query: string, opts: AnswerOptions, ju
     const note = notes.find(n => n.id === id);
     return note && !note.private ? [{ id, text: judgeText(note) }] : [];
   });
-  const phrased = new Set(candidates.filter(c => holdsPhrase(notes.find(n => n.id === c.id)!.body, query)).map(c => c.id));
   let found: ToraScores | undefined;
   let additions: Note[] = [];
   if (judge.scorer && supported.length) {
     additions = supported.slice(0, TORA_ADD);
   } else if (tora && supported.length) {
     try {
-      found = await tora(scrub(query).text, supported.map(n => ({ id: n.id, text: n.body })));
+      found = await tora(scrub(query).text, supported.map(n => ({ id: n.id, text: judgeText(n) })));
     } catch {
       found = undefined;
     }
@@ -272,6 +276,9 @@ async function judgeAnswer(notes: Note[], query: string, opts: AnswerOptions, ju
       additions = supported.filter(n => scores.get(n.id)! >= TORA_FLOOR).sort((a, b) => scores.get(b.id)! - scores.get(a.id)!).slice(0, TORA_ADD);
     }
   }
+  // The phrase floor covers every note sent, including gated additions.
+  const phrased = new Set([...candidates.map(c => notes.find(n => n.id === c.id)!), ...additions]
+    .filter(note => holdsPhrase(note.body, query)).map(note => note.id));
   const bar = (id: string) => phrased.has(id) ? PHRASE_FLOOR : JUDGE_THRESHOLD;
   let verdicts: Verdicts | undefined;
   const done = (answer: Answer): Answer => {

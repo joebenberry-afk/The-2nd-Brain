@@ -31,6 +31,13 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     throw new SyncError("HEAD is detached, or a rebase, merge or bisect is in progress; check out your branch and finish it, then run brain sync (nothing was committed)");
   }
 
+  // An autostash conflict is resolved in the index, not by a merge marker: without this guard the
+  // next sync stages the conflict markers and commits them.
+  const conflicted = unmerged(home);
+  if (conflicted.length) {
+    throw new SyncError(`unresolved conflicts in ${conflicted.join(", ")} from an earlier sync; resolve them, then run brain sync again (nothing was committed)`);
+  }
+
   // The SYNC_PATHS that exist on disk or are tracked (so deleting all of notes/ is committed too).
   // One git process lists the tracked ones; the top folder is compared in lower case because an
   // index made on a case-insensitive filesystem may spell it differently.

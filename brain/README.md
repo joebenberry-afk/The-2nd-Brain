@@ -63,7 +63,8 @@ instead: `docs/LOOP.md › Goals (line 12)`.
 with a judge: **Tora's local reranker** (Qwen3-Reranker-0.6B, free) whenever a Tora session runs,
 and TypeSafe Jev (`jev-latest`, paid) only when Tora gives no verdict and `TYPESAFE_API_KEY` is set.
 `BRAIN_JUDGE=tora` never calls Jev (recall or the write-time pair hint), `BRAIN_JUDGE=jev` skips
-Tora, `BRAIN_JUDGE=off` judges nothing. Notes scoring below **0.78** on Jev's scale are dropped
+Tora for judging (recall and that hint) while the start card's cosine ranking still uses a live
+Tora, and `BRAIN_JUDGE=off` judges nothing; `BRAIN_TORA=off` disables Tora everywhere. Notes scoring below **0.78** on Jev's scale are dropped
 (0.75 let 1-2 wrong answers through on reruns of the same 54 queries: Jev drifts about ±0.02
 between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual
 doc-heading or no-match fallback still applies. Tora's reranker scores saturate near 1, so they are
@@ -277,8 +278,10 @@ Recall searches the whole registered section, preferring more distinct query ter
 
    Review also lists the five most frequent unmatched errors from the last 14 days, for this
    project and global scope (`--all` includes other projects), with the last tool and next
-   successful step as context. Save a real repair with the suggested literal `--error` and
-   `--tested` to close the loop, or `brain dismiss "<signature>"` to ignore it; dismissal hashes
+   successful step as context. When an untested or stale note already names the error, review
+   shows its id and `brain tested <id>` instead of suggesting a duplicate note. Otherwise save a
+   real repair with the suggested literal `--error` and `--tested` to close the loop, or
+   `brain dismiss "<signature>"` to ignore it; dismissal hashes
    sync in `rejected.json`, without the error text. New `brain note`/`brain_note` notes without
    explicit evidence attach up to three existing repo-relative files named in the text, or
    session edits named by basename; private, outside-root and scratch files are excluded.
@@ -438,7 +441,8 @@ Budgets count tokens with `outputTokens` (about 5% from o200k; chars/4 runs 33�
 and JSON). The newest 30 000 tokens of tool output stay verbatim; older output is elided in
 epochs of 50 000 tokens, so the request prefix, and with it the provider’s prompt cache, stays
 byte-identical between epochs; output under 500 tokens is never touched. `brain stats` counts
-epochs, elided outputs, tokens saved per later request and restores.
+epochs, elided outputs, tokens saved per later request and restores; the same content counts as
+fresh once per conversation, even if a shrunken history clears the sticky set.
 - OMP: on by default; `BRAIN_RENDER=off` turns it off. OMP floors its compaction trigger by the
   stored history, so here layer 4 saves request tokens and cost, not compactions.
 - Claude Code and Codex: run `brain proxy` (127.0.0.1:47830, `--port N`; needs

@@ -19,7 +19,7 @@ import { writeAtomic } from "./util.ts";
 /** One tool output as the host sent it, in conversation order. `key` is the host's call id. */
 export interface ToolOutput { key: string; text: string; tool?: string }
 
-/** An output to send as `stub`; `fresh` when this call elided it first (the epoch moved). */
+/** An output to send as `stub`; `fresh` when this conversation first elided this content. */
 export interface Elision { index: number; id: string; stub: string; tokens: number; fresh: boolean }
 
 /** Token budgets, counted by outputTokens: newest `keep` tokens of tool output stay verbatim; epochs advance by `step`; outputs under `min` are never elided. */
@@ -43,6 +43,7 @@ const STUB_PREFIX = "[Second Brain elided this ";
 const HEAD_CHARS = 100;
 // Slicing can split a surrogate pair; a lone surrogate is invalid UTF-16 that providers may reject.
 const LONE_HIGH = /[\ud800-\udbff]$/;
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 // Re-running these only reads, so the stub may suggest it; re-running anything else repeats its effects.
 const READ_ONLY = /^(?:read|read_file|grep|glob|find|ls|list_dir)$/i;
 const RETENTION_MS = 14 * 86_400_000;
@@ -89,10 +90,15 @@ export function storeElided(home: string, id: string, text: string): boolean {
       }
     }
     const path = join(dir, `${id}.txt`);
-    if (readElided(home, id) === text) {
+    const existing = readElided(home, id);
+    if (existing === text) {
       utimesSync(path, now / 1000, now / 1000);
       return true;
     }
+    // A hash collision or a stale id must keep the output full: the stored original is not this one.
+    if (existing !== undefined) return false;
+    // Never store text that cannot be valid UTF-8; the renderer leaves that output full.
+    if (LONE_SURROGATE.test(text)) return false;
     writeAtomic(path, text);
     return true;
   } catch {
@@ -141,6 +147,8 @@ export class Renderer {
   readonly #home: string | null;
   readonly #elided = new Map<string, { id: string; stub: string }>();
   readonly #sizes = new Map<string, { text: string; tokens: number }>();
+  /** Ids elided at any point in this conversation: a shrink can forget the sticky map, not the saving. */
+  readonly #seen = new Set<string>();
   #count = 0;
   #tokens = 0;
 
@@ -194,7 +202,8 @@ export class Renderer {
       const again = READ_ONLY.test(tool) ? "; re-running the tool also shows it" : "";
       const stub = `${STUB_PREFIX}${tool} output to save context: ${lines} line${lines === 1 ? "" : "s"}, ~${tokens} tokens. Recall id ${id} returns it in full${again}. It began: ${head}]`;
       this.#elided.set(output.key, { id, stub });
-      elisions.push({ index, id, stub, tokens, fresh: true });
+      elisions.push({ index, id, stub, tokens, fresh: !this.#seen.has(id) });
+      this.#seen.add(id);
     }
     return elisions;
   }

@@ -159,7 +159,7 @@ function cardSinceCompaction(ctx: unknown): boolean {
   for (let i = branch.length - 1; i >= 0; i--) {
     const entry = asObject(branch[i]);
     if (entry?.type === "compaction") return false;
-    if (entry?.customType === CARD_TYPE) return true;
+    if (entry?.customType === CARD_TYPE || entry?.customType === LEAN_TYPE) return true;
   }
   return false;
 }

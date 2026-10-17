@@ -1,8 +1,7 @@
 /** Shared Brain tools; transports supply identity, rendering and telemetry. */
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, upgradeNote, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { recallFor, typesafePairJudge, type JudgeName, type ToraRecall, type RecallTrace } from "./judge.ts";
-import { toraScorer } from "./tora.ts";
+import { judgeScorer, recallFor, typesafePairJudge, type JudgeName, type ToraRecall, type RecallTrace } from "./judge.ts";
 import type { UseKind } from "./telemetry.ts";
 import { stateSaved, writeWork } from "./work.ts";
 import { noteHint } from "./tidy.ts";
@@ -95,7 +94,7 @@ export const brainTools: BrainTool[] = [
       }
       const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });
       if (old) retireNote(home, old.id, note.id);
-      const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env), toraScorer(env));
+      const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env), judgeScorer(env));
       return { text: `saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${fixCutHint(note)}${hint}`, kind: "note", project: project.id };
     },
   },

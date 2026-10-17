@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { judgedAnswer, JUDGE_THRESHOLD, onJevScale, PHRASE_FLOOR, recallJudge, TORA_JUDGE_BAR, TORA_PHRASE_FLOOR, type Judge, type ToraRecall } from "../src/judge.ts";
+import { judgeScorer, judgedAnswer, JUDGE_THRESHOLD, onJevScale, PHRASE_FLOOR, recallJudge, TORA_JUDGE_BAR, TORA_PHRASE_FLOOR, type Judge, type ToraRecall } from "../src/judge.ts";
 import type { Note } from "../src/notes.ts";
 import { answerWithHits } from "../src/search.ts";
 import { logUse, stats } from "../src/telemetry.ts";
@@ -199,7 +199,7 @@ it("discovery: skips dead pids, prefers this host's session, then the newest, an
   expect(String(own.mock.calls[0]![0])).toContain(":4444/");
 });
 
-it("discovery: only dead sessions, no directory, or BRAIN_TORA=off mean no scorer at all, so callers never wait", async () => {
+it("discovery: only dead sessions, no directory or BRAIN_TORA=off mean no scorer, and BRAIN_JUDGE=jev gates judging while the card keeps Tora", async () => {
   const { env, dir } = sessions();
   session(dir, 2 ** 30, {});
   const fetched = stubFetch({ scores: { a: 1, b: 1 }, ms: 1 });
@@ -207,6 +207,9 @@ it("discovery: only dead sessions, no directory, or BRAIN_TORA=off mean no score
   expect(toraScorer({ LOCALAPPDATA: join(env.LOCALAPPDATA, "missing") })).toBeUndefined();
   session(dir, process.pid, {});
   expect(toraScorer({ ...env, BRAIN_TORA: "off" })).toBeUndefined();
+  expect(judgeScorer({ ...env, BRAIN_JUDGE: "jev" })).toBeUndefined();
+  expect(judgeScorer({ ...env, BRAIN_JUDGE: "off" })).toBeUndefined();
+  expect(toraScorer({ ...env, BRAIN_JUDGE: "jev" })).toBeDefined();
   expect(toraScorer(env)).toBeDefined();
   expect(fetched).not.toHaveBeenCalled();
 });

@@ -148,6 +148,17 @@ describe("render core", () => {
     expect(renderer.render(outputs.slice(0, 5))).toEqual([]);
   });
 
+  it("does not count the same output as fresh again after the host shrinks and restores the history", () => {
+    const renderer = new Renderer(null, SMALL);
+    const outputs = history(40);
+    const first = renderer.render(outputs);
+    expect(first.some(e => e.fresh)).toBe(true);
+    renderer.render(outputs.slice(0, 20));
+    const restored = renderer.render(outputs);
+    expect(restored.length).toBeGreaterThan(0);
+    expect(restored.every(e => !e.fresh)).toBe(true);
+  });
+
   it("never puts half a surrogate pair in a stub", () => {
     const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
     for (const lead of ["a".repeat(99), "a".repeat(399), " ".repeat(399)]) {
@@ -167,6 +178,20 @@ describe("render core", () => {
 });
 
 describe("restore", () => {
+  it("keeps the first original under an id and refuses a second, different one", () => {
+    const home = tmp();
+    expect(storeElided(home, "t-1111111111", "first original")).toBe(true);
+    expect(storeElided(home, "t-1111111111", "first original")).toBe(true);
+    expect(storeElided(home, "t-1111111111", "a colliding output")).toBe(false);
+    expect(readElided(home, "t-1111111111")).toBe("first original");
+  });
+
+  it("never stores an ill-formed string", () => {
+    const home = tmp();
+    expect(storeElided(home, "t-2222222222", "cut \ud800")).toBe(false);
+    expect(readElided(home, "t-2222222222")).toBeUndefined();
+  });
+
   it("keeps a reused original recallable after a later retention sweep", async () => {
     const home = tmp(), outputs = history(40);
     const first = new Renderer(home, SMALL).render(outputs)[0]!;

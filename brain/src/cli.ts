@@ -184,8 +184,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
 
   async note(c) {
     const { noteHint } = await import("./tidy.ts");
-    const { typesafePairJudge } = await import("./judge.ts");
-    const { toraScorer } = await import("./tora.ts");
+    const { judgeScorer, typesafePairJudge } = await import("./judge.ts");
     const text = need(c.args.join(" "), "note text");
     const kind = c.opts.kind ?? "note";
     if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
@@ -235,7 +234,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       source: "agent",
     });
     if (old) retireNote(c.home, old.id, note.id);
-    c.io.out(`saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${fixCutHint(note)}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env), toraScorer(c.io.env))}`);
+    c.io.out(`saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${fixCutHint(note)}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env), judgeScorer(c.io.env))}`);
     use(c, "note", text);
     return 0;
   },
@@ -326,7 +325,8 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       // Double-quoted shell arguments must also escape substitution syntax in error text.
       const pattern = error.pattern ? JSON.stringify(error.pattern).replace(/[$`]/g, "\\$&") : "";
       const signature = JSON.stringify(error.signature).replace(/[$`]/g, "\\$&");
-      const fix = pattern ? `fix: brain note "<what to do>" --kind gotcha --error ${pattern}  ·  ` : "";
+      if (error.candidate) c.io.out(`  named by ${error.candidate}: brain tested ${error.candidate}`);
+      const fix = !error.candidate && pattern ? `fix: brain note "<what to do>" --kind gotcha --error ${pattern}  ·  ` : "";
       c.io.out(`  ${fix}ignore: brain dismiss ${signature}`);
     }
     for (const line of silent.lines) c.io.out(line);
@@ -437,7 +437,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const unmatched = unmatchedErrors(c.home, loadNotes(c.home).notes, { days: s.days }).slice(0, 5);
     if (unmatched.length) {
       c.io.out("Unmatched errors:");
-      for (const error of unmatched) c.io.out(`${error.count} × ${error.signature}`);
+      for (const error of unmatched) c.io.out(`${error.count} × ${error.signature}${error.candidate ? ` — named by ${error.candidate}; brain tested ${error.candidate}` : ""}`);
     }
     return 0;
   },
