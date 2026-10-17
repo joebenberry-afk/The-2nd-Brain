@@ -54,10 +54,18 @@
       "paths": [
         "C:/Users/assas/Documents/BasicUpscaler"
       ],
+      "tags": ["capture"],
       "docs": [
         "BasicUpscaler/PLAN.md",
         "BasicUpscaler/DECISIONS.md"
       ]
+    },
+    "basicupscaler-frame-gen": {
+      "paths": [
+        "C:/Users/assas/Documents/BasicUpscaler Frame-Gen"
+      ],
+      "tags": ["capture"],
+      "docs": ["architecture/ARCHITECTURE.md", "architecture/TOOLS.md", "Frame Gen.md"]
     },
     "the-basic-upscaler": {
       "paths": [
@@ -67,7 +75,8 @@
     "dragon-ball-sz-modding": {
       "aliases": [
         "ultimate-ai",
-        "dbsz-ultimate-ai"
+        "dbsz-ultimate-ai",
+        "dragon-ball-sparking-zero-ultimate-ai"
       ]
     }
   }

@@ -5,6 +5,8 @@ at: 2026-08-28T10:30:53.080554+00:00
 source: convert
 evidence:
   - DBSZ Telemetry/SZ-CPU-Lab/.superpowers/sdd/Sparking_Zero_Telemetry_OMP_Resume_Plan/progress.md
+replaced_by: mem-46205483dd56
+retired: 2026-10-17T09:17:59Z
 ---
 
 TEL-BLAST-SIGNATURE trial 3 baseline

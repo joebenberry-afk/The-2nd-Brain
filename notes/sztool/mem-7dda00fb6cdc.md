@@ -5,6 +5,8 @@ at: 2026-08-28T21:05:06.051094+00:00
 source: convert
 evidence:
   - DBSZ Telemetry/SZ-CPU-Lab/.superpowers/sdd/Sparking_Zero_Telemetry_OMP_Resume_Plan/progress.md
+replaced_by: mem-75ef9bf9e33f
+retired: 2026-10-17T09:18:00Z
 ---
 
 T1 production integration implemented and deployed (pending in-game reload for live canary)

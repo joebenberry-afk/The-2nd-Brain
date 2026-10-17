@@ -1,5 +1,6 @@
 ---
-at: 2026-10-15T14:17:31Z
+at: 2026-10-17T06:00:48Z
 ---
 
-Goal: ROADMAP M1 gate. K0 (cand f2a0d039, main 2dfde25): FT-1 b1 PASS, X5 78 C, windows 9/9. Blockers found: fit needs both axes (solve() requires smm_x&smm_y) → yaw-only FT-2 never trusts (PerAxisFit agent); W3 end-of-scene target check flaky, Palworld backup files added, Palworld label template flaky (SessionRobustness agent). Queue18 (bg_26) running ft4-witcher3. Next: integrate → rebuild → K0b probe (FT-2 all motions 1 game) → K.
+Goal: M1 gate (D29). Done: FG-324 (overlay race + FT-8 exit fix, 372 tests); queue22 = bg_30 since 05:52:17Z, waiting for admission, session-bound (a new session kills it unless detached). JPEG XL never adopted (decision note n-e9cdb9f3c1). Next: first quieted item's receipt (closed/running_now); diagnose held items; MHW route; final cohort.
+See: architecture/ROADMAP.md#4-milestones

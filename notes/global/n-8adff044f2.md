@@ -11,6 +11,6 @@ tested: "true"
 host: omp
 ---
 
-OMP hashline edits use [path#tag] then PUT N.=M: with +content, not unified diffs.
+OMP edit takes no apply_patch or diff: for `*** Add File` use the write tool; for `*** Update File` read the file, then send `[path#TAG]` with the tag that read printed and ops such as `PUT 12.=14:` followed by `+new line` rows.
 
-An input-header rejection means the wrong edit grammar; copy the read tag and use anchored PUT rows.
+Telemetry: 76 of 82 header rejections were apply_patch input (60 Update File, 16 Add File).

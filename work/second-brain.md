@@ -1,6 +1,5 @@
 ---
-at: 2026-10-15T14:21:36Z
+at: 2026-10-17T09:05:17Z
 ---
 
-Goal: embedding-only search (owner follow-up) — tested 15 Oct, not built (Tora IDEAS TI-16, note n-5d46887e7a). Next: owner restarts OMP sessions to load the Tora recall/card/hint changes; watch the tora line in brain stats. Labels kept locally in state/tora-eval/2026-10-15.json.
-See: docs/intake/2026-09-28-plan-v5-anchored-memory.md#8.13
+Goal: perfect Second Brain (token-efficient, fast, reliable; knowledge+context). Done: baseline 978 tests green; 6 read-only audits dispatched (agent://RecallAudit, CardAudit, CaptureAudit, PerfAudit, OmpAudit, KnowledgeAudit) with schema into eval ledger. Next: triage findings, dispatch fixes by file ownership, full gate, commit by category. Watch out: uncommitted layer4/tora work on main.
