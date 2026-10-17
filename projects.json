@@ -1,15 +1,5 @@
 {
   "projects": {
-    "p22-project-delta": {
-      "paths": [
-        "C:/tmp/omp-p22-delta"
-      ]
-    },
-    "p22-project-gamma": {
-      "paths": [
-        "C:/tmp/omp-p22-gamma"
-      ]
-    },
     "second-brain": {
       "paths": [
         "C:/Users/assas/Documents/The-Second-Brain"
