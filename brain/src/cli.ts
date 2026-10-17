@@ -216,7 +216,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
         testedBy: "agent",
         staleAfter: c.opts["stale-after"],
       });
-      c.io.out(`${changed ? "updated" : "already noted"} ${same.id}${untested}`);
+      c.io.out(`${changed ? "updated" : "already noted"} ${same.id}${untested}${changed ? fixCutHint(changed) : ""}`);
       use(c, "note", text);
       return 0;
     }

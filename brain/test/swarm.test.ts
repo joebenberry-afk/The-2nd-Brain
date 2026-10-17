@@ -519,7 +519,8 @@ describe("batch 3: OMP lifecycle", async () => {
     fire("before_agent_start", { prompt: "Ship CSV export" }, parent);
     fire("session_shutdown", {}, parent);
     const sub = session("sub", cwd, { hasUI: false, header: { parentSession: "/sessions/p.jsonl" } });
-    expect(fire("before_agent_start", { prompt: "Write unit tests for parse.ts; does demo use pnpm or npm?" }, sub)).toBeDefined();
+    const card = fire("before_agent_start", { prompt: "Write unit tests for parse.ts; does demo use pnpm or npm?" }, sub) as { message: { content: string } } | undefined;
+    expect(card?.message.content).toContain("Demo uses pnpm, not npm");
     fire("tool_result", { toolName: "edit", input: { path: "test/parse.test.ts" }, isError: false, content: [] }, sub);
     fire("session_shutdown", {}, sub);
     expect(readWork(home, "demo")?.auto).toContain("Ship CSV export");

@@ -91,7 +91,7 @@ export const brainTools: BrainTool[] = [
         : wantsTested && !tested ?" (untested: the owner confirms a global fix with `brain tested <id>`)" : "";
       if (same) {
         const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root) });
-        return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}`, kind: "note", project: project.id };
+        return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}${upgraded ? fixCutHint(upgraded) : ""}`, kind: "note", project: project.id };
       }
       const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });
       if (old) retireNote(home, old.id, note.id);

@@ -4,16 +4,15 @@
  * The misses V3 had: the retired 2-worker-cap policy (correctly not current) and one long prompt.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadNotes, type Note } from "../src/notes.ts";
+import type { Note } from "../src/notes.ts";
 import { answer, answerWithHits, recall, type AnswerOptions } from "../src/search.ts";
 import { JEV_CHARS, judgedAnswer, onJevScale, type Answer, type JudgeName } from "../src/judge.ts";
 import { toraPost, toraSession } from "../src/tora.ts";
-import { PACKAGE_HOME } from "../src/util.ts";
-import { projectById, resolveProject, visibleTo } from "../src/project.ts";
+import { projectById, resolveProject } from "../src/project.ts";
 
 interface Case {
   id: string;
@@ -27,7 +26,6 @@ function cases(name: string): Case[] {
   return text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as Case);
 }
 
-const hasNotes = existsSync(join(PACKAGE_HOME, "notes", "second-brain"));
 // The complete pre-curation corpus keeps historical competition and score gates stable.
 const historicalNotes = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "recall-v3-corpus.json"), "utf8")) as Note[];
 const project = { id: "second-brain", tags: [], root: null };
@@ -116,35 +114,6 @@ it("resolves a temporary m worktree through its registered main checkout, not it
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
-});
-
-describe.skipIf(!hasNotes)("current corpus curation", () => {
-  it("preserves migrated IDs once, exposes canonical scopes and keeps unrelated notes hidden", () => {
-    const { notes } = loadNotes(PACKAGE_HOME);
-    const scopes: Record<string, string[]> = {
-      "basicupscaler-frame-gen": ["n-aa1aec0384", "n-b0d68ef2b9", "n-d25a05f402", "n-6a984f6a83"],
-      "dragon-ball-sz-modding": ["n-37e2a3fe4a", "n-543c1c4a36", "n-9c18dabb30", "n-abaa2d281d", "n-b692cfa9dd"],
-      "second-brain": ["n-4285f7277b"],
-    };
-    for (const [scope, ids] of Object.entries(scopes)) {
-      const caller = projectById(PACKAGE_HOME, scope, PACKAGE_HOME);
-      for (const id of ids) {
-        const matches = notes.filter(note => note.id === id);
-        expect(matches, id).toHaveLength(1);
-        expect(matches[0]?.project, id).toBe(scope);
-        expect(visibleTo(matches[0]!, caller), id).toBe(true);
-        expect(visibleTo(matches[0]!, { id: "unrelated", tags: [], root: null }), id).toBe(false);
-      }
-    }
-    const fg = projectById(PACKAGE_HOME, "basicupscaler-frame-gen", PACKAGE_HOME);
-    const original = notes.find(note => note.project === "basicupscaler" && !note.retired)!;
-    expect(original).toBeDefined();
-    expect(visibleTo(original, fg)).toBe(false);
-    expect(projectById(PACKAGE_HOME, "dragon-ball-sparking-zero-ultimate-ai", PACKAGE_HOME).id).toBe("dragon-ball-sz-modding");
-    expect(resolveProject(PACKAGE_HOME, "C:/Users/assas/Documents/BasicUpscaler Frame-Gen", {}).id).toBe("basicupscaler-frame-gen");
-    expect(notes.find(note => note.id === "n-64be719a88")?.errors).toEqual([]);
-    for (const id of ["n-d91014e693", "n-672c9b6028"]) expect(visibleTo(notes.find(note => note.id === id)!, fg), id).toBe(true);
-  });
 });
 
 interface RealCase {

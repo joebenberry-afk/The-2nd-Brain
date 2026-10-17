@@ -1357,7 +1357,7 @@ export function fixCutHint(note: Note): string {
   if (!note.errors.length || note.source === "capture") return "";
   const shown = renderFix(note).slice("Brain: ".length, -` [${note.id}]`.length);
   if (!shown.endsWith("…")) return "";
-  return `; its fix line is cut at "${shown.split(" ").slice(-6).join(" ")}": fixes show ${FIX_BUDGET} tokens, so lead the first line with the remedy (\`replaces\` rewrites it)`;
+  return `; its fix line is cut at "${shown.split(" ").slice(-6).join(" ")}": fixes show ${FIX_BUDGET} tokens, so lead the first line with the remedy in a note that replaces ${note.id}`;
 }
 
 

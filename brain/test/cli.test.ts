@@ -315,11 +315,15 @@ describe("brain cli", () => {
     const { io } = setup();
     const long = `The nightly export fails because ${"the staging bucket rotates its credentials every hour and ".repeat(6)}the fix is to run export-refresh first`;
     const cut = await run(["note", long, "--error", "export: credentials expired", "--tested"], io);
-    expect(cut.out).toMatch(/^saved n-[0-9a-f]{10}; its fix line is cut at ".*…": fixes show 80 tokens, so lead the first line with the remedy/);
+    expect(cut.out).toMatch(/^saved (n-[0-9a-f]{10}); its fix line is cut at ".*…": fixes show 80 tokens, so lead the first line with the remedy in a note that replaces \1$/);
     expect((await run(["fix", "export: credentials expired"], io)).out).not.toContain("export-refresh");
     // A remedy-first headline fits, and a note without an error pattern is not a fix at all.
     expect((await run(["note", "Run export-refresh before the nightly export", "--error", "export: token expired", "--tested"], io)).out).toMatch(/^saved n-[0-9a-f]{10}$/);
-    expect((await run(["note", long.replace("nightly", "weekly")], io)).out).toMatch(/^saved n-[0-9a-f]{10}$/);
+    const weekly = long.replace("nightly", "weekly");
+    const id = (await run(["note", weekly], io)).out.replace("saved ", "");
+    expect(id).toMatch(/^n-[0-9a-f]{10}$/);
+    // Adding an error pattern to that note makes it a fix: the update says so too.
+    expect((await run(["note", weekly, "--error", "export: weekly credentials expired"], io)).out).toMatch(new RegExp(`^updated ${id}; its fix line is cut at ".*…": .* in a note that replaces ${id}$`));
   });
 
   it("never marks a global fix tested from an agent's note", async () => {
