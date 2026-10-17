@@ -2,8 +2,8 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { cleanErrors, loadNotes, maskText, parseFrontmatter, saveNote, type Note, GLOBAL } from "./notes.ts";
-import { idFor, loadProjects } from "./project.ts";
-import { nowIso, slug, writeAtomic } from "./util.ts";
+import { idFor, loadProjects, updateProjects } from "./project.ts";
+import { nowIso, slug } from "./util.ts";
 
 export interface ConvertReport {
   written: number;
@@ -121,18 +121,14 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
   const existingIds = new Set(loadNotes(toHome).notes.map((n) => n.id));
   for (const file of listMarkdown(join(toHome, "notes"))) existingIds.add(basename(file, ".md"));
 
-  // projects.json is merged into as written (raw), and never rewritten when it does not parse.
+  // projects.json is merged into as written (raw, under its claim), and never rewritten when it does not parse.
   const projectsFile = join(toHome, "projects.json");
-  let rawFile: Record<string, unknown> = {};
-  let rawProjects: Record<string, unknown> = {};
   let projectsWritable = true;
   if (existsSync(projectsFile)) {
     try {
       const parsed: unknown = JSON.parse(readFileSync(projectsFile, "utf8").replace(/^\uFEFF/, ""));
       const inner = (parsed as { projects?: unknown } | null)?.projects;
-      if (!inner || typeof inner !== "object") throw new Error('expected { "projects": { … } }');
-      rawFile = parsed as Record<string, unknown>;
-      rawProjects = inner as Record<string, unknown>;
+      if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error('expected { "projects": { … } }');
     } catch (error) {
       projectsWritable = false;
       report.errors.push(`${projectsFile}: ${error instanceof Error ? error.message : String(error)} — left untouched`);
@@ -289,10 +285,15 @@ export function convertV3(fromHome: string, toHome: string, opts?: { dryRun?: bo
     }
   }
 
-  // Merge new entries into projects.json exactly as it was written (never through the normalized copy)
+  // Merge new entries into projects.json exactly as it was written (never through the normalized copy),
+  // under its claim: an entry another process added meanwhile (under any spelling) is kept as is
   if (projectsWritable) {
     if (!opts?.dryRun && Object.keys(newProjectEntries).length > 0) {
-      writeAtomic(projectsFile, JSON.stringify({ ...rawFile, projects: { ...rawProjects, ...newProjectEntries } }, null, 2) + "\n");
+      updateProjects(toHome, (data) => {
+        const fresh = Object.entries(newProjectEntries).filter(([id]) => !Object.keys(data.projects).some((key) => idFor(key) === id));
+        for (const [id, entry] of fresh) data.projects[id] = entry;
+        return fresh.length > 0;
+      });
     }
     report.projects = Object.keys(newProjectEntries).length;
   }

@@ -7,12 +7,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { LEAN_LINE } from "../src/card.ts";
-import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, slowEvalCell, type HostLike } from "../src/omp.ts";
+import secondBrain, { CARD_TYPE, editedPaths, hasBackspaceEscape, schemaCost, slowEvalCell, type HostLike } from "../src/omp.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 import { appendEvent, listProposals } from "../src/capture.ts";
 import { resolveProject } from "../src/project.ts";
 import { readWork, writeWork } from "../src/work.ts";
 import { stats } from "../src/telemetry.ts";
+import { brainTools, jsonSchema } from "../src/tools.ts";
+import { estimateTokens } from "../src/util.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 /** What before_agent_start returns: a hidden custom message, or nothing. */
@@ -29,6 +31,72 @@ beforeEach(() => {
 
 afterEach(() => {
   // cleanup in real sessions; here we just leave temp dirs
+});
+
+it("estimates callable schemas rather than dropping their parameters", () => {
+  const schema = { type: "object", properties: { query: { type: "string" } } };
+  const parameters = Object.assign(() => undefined, {
+    toJsonSchema: (options: { target: string; fallback: (ctx: { base: unknown }) => unknown }) => {
+      expect(options.target).toBe("draft-2020-12");
+      expect(options.fallback({ base: "base" })).toBe("base");
+      return schema;
+    },
+  });
+  const cost = schemaCost({ name: "fixture", description: "", parameters });
+  expect(cost).toBe(estimateTokens("fixture" + JSON.stringify(schema)));
+  expect(cost).toBeGreaterThan(estimateTokens("fixture"));
+});
+
+it.each(["missing", "throwing"])("saves every tool's schema estimate when a third-party converter is %s", (conversion) => {
+  const parameters = () => undefined;
+  if (conversion === "throwing") Object.assign(parameters, { toJsonSchema: () => { throw new Error("cannot convert"); } });
+  const owned = brainTools.find(tool => tool.name === "brain_recall")!;
+  const schema = { type: "object", properties: { path: { type: "string" } } };
+  const tools = [
+    { name: "read", description: "Read a file.", parameters: schema },
+    { name: owned.name, description: owned.description, parameters: () => undefined },
+    { name: "third_party", description: "Unknown callable schema.", parameters },
+  ];
+  const handlers = new Map<string, Handler>();
+  secondBrain({
+    on: (event, handler) => void handlers.set(event, handler),
+    getActiveTools: () => tools.map(tool => tool.name),
+    getAllTools: () => tools,
+  }, { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "work" });
+  const context = ctx(`schema-${conversion}`);
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  try {
+    handlers.get("before_agent_start")!({ prompt: "continue" }, context);
+    vi.runOnlyPendingTimers();
+    const snapshot = JSON.parse(readFileSync(join(home, "state", "tool-schemas-omp.json"), "utf8"));
+    expect(snapshot.tools).toEqual([
+      { name: "read", source: "unknown", tokens: estimateTokens("readRead a file." + JSON.stringify(schema)) },
+      { name: owned.name, source: "unknown", tokens: estimateTokens(owned.name + owned.description + JSON.stringify(jsonSchema(owned.params))) },
+      { name: "third_party", source: "unknown", tokens: estimateTokens("third_partyUnknown callable schema.") },
+    ]);
+  } finally {
+    vi.useRealTimers();
+    handlers.get("session_shutdown")!({}, context);
+  }
+});
+
+it("marks semantic and storage failures as errors without throwing", async () => {
+  const { tools } = load({ SECOND_BRAIN_HOME: home }, true);
+  const registered = tools as { name: string; execute(...args: unknown[]): Promise<{ isError?: boolean; content: { text: string }[] }> }[];
+  const note = registered.find(value => value.name === "brain_note")!;
+  const invalid = await note.execute("invalid", { text: "probe", kind: "bogus" }, ctx("errors"));
+  expect(invalid.isError).toBe(true);
+  expect(invalid.content[0]?.text).toContain("unknown kind");
+  writeFileSync(join(home, "notes"), "not a directory");
+  const storage = await note.execute("storage", { text: "probe" }, ctx("errors"));
+  expect(storage.isError).toBe(true);
+});
+
+it("keeps shutdown fail-open when context accessors throw", () => {
+  const { handlers } = load();
+  expect(handlers.get("session_shutdown")!({}, {
+    get sessionManager() { throw new Error("bad manager"); },
+  })).toBeUndefined();
 });
 
 function load(
@@ -109,8 +177,25 @@ describe("OMP extension", () => {
     }
     expect(outcomes()).toEqual([]);
     result("help", "ok", false);
-    result("miss", "real failure", true);
+    result("miss", "runtime mismatch", true);
     expect(outcomes()).toEqual([["help", note.id, "helped"], ["miss", note.id, "missed"]]);
+  });
+
+  it("follows the repaired operation: a prepared retry helps, the same error persisting misses, another error scores nothing", () => {
+    const note = createNote(home, { project: "global", text: "Install runtime", tested: true, errors: ["runtime mismatch"] });
+    const { handlers } = load();
+    const run = (session: string, command: string, content: string, isError: boolean) => handlers.get("tool_result")!({ toolName: "bash", input: { command }, isError, content }, ctx(session));
+    const seen = (session: string) => handlers.get("context")!({ messages: [] }, ctx(session));
+    const outcomes = () => readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => row.kind === "fixout").map(row => [row.session, row.outcome]);
+    for (const session of ["prepared", "same", "other"]) {
+      run(session, "python app.py", "runtime mismatch", true);
+      seen(session);
+    }
+    run("prepared", "PYTHONPATH=. python app.py", "ok", false);
+    run("same", "PYTHONPATH=. python app.py", "runtime mismatch", true);
+    run("other", "PYTHONPATH=. python app.py", "ModuleNotFoundError: no module named widgets", true);
+    expect(outcomes()).toEqual([["prepared", "helped"], ["same", "missed"]]);
+    expect(note.id).toBeTruthy();
   });
 
   it("scores only the next same-key result in the same session and drops untried fixes", () => {

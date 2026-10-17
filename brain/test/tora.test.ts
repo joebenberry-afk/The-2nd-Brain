@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { judgedAnswer, JUDGE_THRESHOLD, type Judge, type ToraRecall } from "../src/judge.ts";
+import { judgedAnswer, JUDGE_THRESHOLD, onJevScale, PHRASE_FLOOR, recallJudge, TORA_JUDGE_BAR, TORA_PHRASE_FLOOR, type Judge, type ToraRecall } from "../src/judge.ts";
 import type { Note } from "../src/notes.ts";
 import { answerWithHits } from "../src/search.ts";
 import { logUse, stats } from "../src/telemetry.ts";
@@ -70,6 +70,20 @@ it("never shows Tora a note BM25 did not rank, nor a private, retired or other-p
   expect(pools).toEqual([["ok"]]);
   expect(jev.calls).toEqual([["lex", "ok"]]);
   expect(result.ids).toEqual(["lex", "ok"]);
+});
+
+it("local recall judges gated BM25 candidates directly without /score, preserving privacy, scope, cap and bar", async () => {
+  const { env, dir } = sessions();
+  session(dir, process.pid, { port: 1300 });
+  const notes = [gated("a"), gated("b"), gated("c"), gated("hidden", { private: true }), gated("old", { retired: "2026-09-28" }), gated("away", { project: "other" }), note("unranked", { body: "schema versions only" })];
+  const fetched = stubFetch({ scores: { a: 0.999, b: 0.998, c: 1 } });
+  const result = await judgedAnswer(notes, NO_HIT, { project }, recallJudge({ ...env, BRAIN_JUDGE: "tora" }), undefined, true);
+  expect(fetched).toHaveBeenCalledTimes(1);
+  expect(String(fetched.mock.calls[0]![0])).toMatch(/\/judge$/);
+  expect(JSON.parse(String(fetched.mock.calls[0]![1]!.body)).notes.map((n: { id: string }) => n.id)).toEqual(["a", "b"]);
+  expect(result.ids).toEqual(["a"]);
+  expect(result.recall?.local).toMatchObject([{ route: "/judge", outcome: "ok" }]);
+  expect(result.tora).toBeUndefined();
 });
 
 it("sends at most TORA_ADD, best cosine first, and orders kept ones by Jev probability; no BM25 rank left means no Tora call", async () => {
@@ -199,7 +213,6 @@ it("discovery: only dead sessions, no directory, or BRAIN_TORA=off mean no score
 
 it("a failed, non-200 or malformed Tora response is undefined and never leaks the token", async () => {
   const { env, dir } = sessions();
-  session(dir, process.pid, { token: "secret-token" });
   const bad: [unknown, number?][] = [
     [{ scores: { a: 0.8, b: 0.7 } }, 401],
     ["not json"],
@@ -208,12 +221,79 @@ it("a failed, non-200 or malformed Tora response is undefined and never leaks th
     [{ scores: { a: 0.8, b: "0.7" } }],
     [{ scores: { a: 0.8, b: 1e999 } }],
   ];
-  for (const [body, status] of bad) {
-    stubFetch(body, status);
-    expect(await toraScorer(env)!("q", POOL)).toBeUndefined();
+  for (const [i, [body, status]] of bad.entries()) {
+    session(dir, process.pid, { token: "secret-token", port: 1000 + i });
+    const fetched = stubFetch(body, status);
+    const scorer = toraScorer(env)!;
+    expect(await scorer("q", POOL)).toBeUndefined();
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect(scorer.attempts?.[0]?.outcome).toBe(i === 0 ? "http" : "malformed");
   }
   const log = vi.spyOn(console, "error");
-  vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("connect ECONNREFUSED Bearer secret-token"); }));
-  expect(await toraScorer(env)!("q", POOL)).toBeUndefined();
+  for (const [i, code] of ["ECONNREFUSED", "ECONNRESET"].entries()) {
+    session(dir, process.pid, { token: "secret-token", port: 1100 + i });
+    const fetched = vi.fn(async () => { throw new Error("connect Bearer secret-token", { cause: { code } }); });
+    vi.stubGlobal("fetch", fetched);
+    const scorer = toraScorer(env)!;
+    expect(await scorer("q", POOL)).toBeUndefined();
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect(scorer.attempts?.[0]?.outcome).toBe(i === 0 ? "refused" : "transport");
+  }
+  session(dir, process.pid, { port: 1200 });
+  const fetched = stubFetch({ scores: { a: 1.2, b: 0.5 } });
+  const judge = recallJudge({ ...env, BRAIN_JUDGE: "tora" })!;
+  expect(await judge("q", POOL)).toBeUndefined();
+  expect(fetched).toHaveBeenCalledTimes(1);
+  expect(judge.attempts?.[0]?.outcome).toBe("malformed");
   expect(log).not.toHaveBeenCalled();
+});
+
+it("Tora's reranker scores land on Jev's bars: its bar is the judge threshold, its phrase floor the phrase floor, order kept", () => {
+  expect(onJevScale(TORA_JUDGE_BAR)).toBeCloseTo(JUDGE_THRESHOLD, 9);
+  expect(onJevScale(TORA_PHRASE_FLOOR)).toBeCloseTo(PHRASE_FLOOR, 9);
+  expect(onJevScale(TORA_JUDGE_BAR + 0.0001)).toBeGreaterThan(JUDGE_THRESHOLD);
+  expect(onJevScale(TORA_JUDGE_BAR - 0.0001)).toBeLessThan(JUDGE_THRESHOLD);
+  const raw = [0, 1e-6, 0.2, 0.5, 0.9, 0.99, 0.998, 0.999, 0.99999, 1];
+  const mapped = raw.map(onJevScale);
+  expect(mapped.every((p, i) => p >= 0 && p <= 1 && (i === 0 || p > mapped[i - 1]!))).toBe(true);
+});
+
+it("recall judge: Tora's /judge first and Jev never called; Jev only when Tora gives no verdict; BRAIN_JUDGE picks or forbids either", async () => {
+  const { env, dir } = sessions();
+  session(dir, process.pid, { port: 5555, token: "tok" });
+  const paid = { ...env, TYPESAFE_API_KEY: "synthetic-test-credential", TYPESAFE_BASE_URL: "https://judge.invalid" };
+  const calls: string[] = [];
+  const respond = (toraStatus: number) => vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/judge")) return new Response(JSON.stringify({ scores: { a: 0.9995, b: 0.2 } }), { status: toraStatus });
+    return new Response(JSON.stringify({ answers: { rel_0: { noul: 0.9 }, rel_1: { noul: 0.1 } } }), { status: 200 });
+  }));
+  respond(200);
+  const local = await recallJudge(paid)!("q", POOL);
+  expect(calls).toEqual(["http://127.0.0.1:5555/judge"]);
+  expect(local?.by).toBe("tora");
+  expect(local!.get("a")!).toBeGreaterThan(JUDGE_THRESHOLD);
+  expect(local!.get("b")!).toBeLessThan(PHRASE_FLOOR);
+  calls.length = 0; respond(503);
+  const fallback = await recallJudge(paid)!("q2", POOL);
+  expect(calls).toEqual(["http://127.0.0.1:5555/judge", "https://judge.invalid/v1/systemone"]);
+  expect(fallback?.by).toBe("jev");
+  expect(fallback?.get("a")).toBe(0.9);
+  calls.length = 0;
+  expect(await recallJudge({ ...paid, BRAIN_JUDGE: "tora" })!("q3", POOL)).toBeUndefined();
+  // The preceding failed /judge route is briefly cooled down; tora-only still never pays.
+  expect(calls).toEqual([]);
+  calls.length = 0; respond(200);
+  expect((await recallJudge({ ...paid, BRAIN_JUDGE: "jev" })!("q4", POOL))?.by).toBe("jev");
+  expect(calls).toEqual(["https://judge.invalid/v1/systemone"]);
+  expect(recallJudge({ ...paid, BRAIN_JUDGE: "off" })).toBeUndefined();
+  // No live Tora and no key: no judge, so recall stays synchronous and lexical.
+  expect(recallJudge({ LOCALAPPDATA: join(env.LOCALAPPDATA, "missing") })).toBeUndefined();
+});
+
+it("stats count judged recalls by the judge that answered", () => {
+  const home = mkdtempSync(join(tmpdir(), "brain-judges-"));
+  roots.push(home);
+  for (const judge of ["tora", "tora", "jev", undefined] as const) logUse(home, { kind: "recall", project: "test", tokens: 1, ms: 1, judged: judge !== undefined, judge });
+  expect(stats(home).judges).toEqual({ tora: 2, jev: 1 });
 });

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createNote, differentBody, formatNote, headline, loadNotes, parseNote, retireNote, saveNote, staleEvidence, type Note } from "../src/notes.ts";
+import { createNote, differentBody, formatNote, headline, loadNotes, loadVisibleNotes, parseNote, retireNote, saveNote, staleEvidence, type Note } from "../src/notes.ts";
 import { addProjectDoc, addProjectTag, loadProjects, normalizePath, normalizeRemote, projectById, resolveProject, visibleTo } from "../src/project.ts";
 import { anchorSection, docAnswer, projectDocs } from "../src/docs.ts";
 import { staleHere } from "../src/search.ts";
@@ -141,6 +141,46 @@ describe("lossless bodies and cached file truth", () => {
     expect(broken.errors).toEqual([expect.stringContaining("missing frontmatter")]);
     writeFileSync(original.path, formatNote(original));
     expect(loadNotes(home)).toEqual({ notes: [original], errors: [] });
+  });
+
+  it("loads only the global and the named project's directories, and keeps other cached notes valid", () => {
+    const home = tmp();
+    const own = createNote(home, { text: "Own rule", project: "demo", errors: ["own failure"] });
+    const hidden = createNote(home, { text: "Own private rule", project: "demo", private: true });
+    const shared = createNote(home, { text: "Shared rule", project: "global", tags: ["node"] });
+    const other = createNote(home, { text: "Other rule", project: "other" });
+    writeFileSync(join(home, "notes", "other", "broken.md"), "no frontmatter");
+    expect(loadNotes(home).notes.map((n) => n.id).sort()).toEqual([own.id, hidden.id, shared.id, other.id].sort());
+
+    // Another project's directory is never read: its broken file is not even reported.
+    const scoped = loadVisibleNotes(home, "demo");
+    expect(scoped.errors).toEqual([]);
+    expect(scoped.notes.map((n) => n.id).sort()).toEqual([own.id, hidden.id, shared.id].sort());
+    expect(scoped.notes.find((n) => n.id === shared.id)?.tags).toEqual(["node"]);
+    expect(loadVisibleNotes(home, "global").notes.map((n) => n.id)).toEqual([shared.id]);
+    expect(loadVisibleNotes(home, "absent").notes.map((n) => n.id)).toEqual([shared.id]);
+
+    // Edits, additions and deletions inside the scope are seen at once, as with the full loader.
+    const before = statSync(own.path);
+    writeFileSync(own.path, formatNote({ ...own, body: "Own rulf" }));
+    utimesSync(own.path, before.atimeMs / 1000, before.mtimeMs / 1000);
+    expect(loadVisibleNotes(home, "demo").notes.find((n) => n.id === own.id)?.body).toBe("Own rulf");
+    const added = createNote(home, { text: "Added rule", project: "demo" });
+    rmSync(hidden.path);
+    expect(loadVisibleNotes(home, "demo").notes.map((n) => n.id).sort()).toEqual([own.id, shared.id, added.id].sort());
+
+    // A scoped load keeps the cache of the directories it skipped: an in-place edit there is still seen.
+    const otherBefore = statSync(other.path);
+    writeFileSync(other.path, formatNote({ ...other, body: "Other rulf" }));
+    utimesSync(other.path, otherBefore.atimeMs / 1000, otherBefore.mtimeMs / 1000);
+    loadVisibleNotes(home, "demo");
+    const full = loadNotes(home);
+    expect(full.notes.find((n) => n.id === other.id)?.body).toBe("Other rulf");
+    expect(full.notes.map((n) => n.id).sort()).toEqual([own.id, shared.id, other.id, added.id].sort());
+    expect(full.errors).toHaveLength(1);
+
+    // A name that is not one plain directory loads everything rather than guessing a path.
+    expect(loadVisibleNotes(home, "../demo").notes).toHaveLength(4);
   });
 });
 
@@ -526,9 +566,11 @@ describe("util", () => {
     const held = join(tmp(), "held");
     mkdirSync(held);
     writeFileSync(join(held, "x"), "x");
+    // The held directory stands in for the old copy, so it must be the note's only one.
+    rmSync(note.path);
     expect(() => saveNote(home, { ...note, project: "beta", path: held })).toThrow(/not moved/);
     expect(existsSync(join(home, "notes", "beta", `${note.id}.md`))).toBe(false);
-    expect(existsSync(note.path)).toBe(true);
+    expect(existsSync(held)).toBe(true);
   });
 });
 

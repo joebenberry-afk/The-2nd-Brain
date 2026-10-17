@@ -291,6 +291,16 @@ describe("capture.appendEvent", () => {
     expect(aws?.command).not.toContain("EXAMPLEKEY");
   });
 
+  it("masks authentication cookies and ASIA ids in persisted command and error", () => {
+    const home = tmp();
+    const sid = "q8Zr3kLm0Pw7Xv2NbT5yHc9DaE4sUf1G";
+    appendEvent(home, "s", "", { tool: "bash", command: `curl -H "Cookie: sessionid=${sid}; theme=dark" https://h/`, ok: false, error: `Set-Cookie: PHPSESSID=${sid}; Path=/; HttpOnly\nkey ASIAABCDEFGHIJKLMNOP` });
+    const line = JSON.parse(readFileSync(join(eventsDir(home), "s.jsonl"), "utf8").trim()) as ToolEvent;
+    expect(JSON.stringify(line)).not.toContain(sid);
+    expect(JSON.stringify(line)).not.toContain("ASIAABCDEFGHIJKLMNOP");
+    expect(line.error).toContain("Path=/; HttpOnly");
+  });
+
   const SHA_A = "0123456789abcdef0123456789abcdef01234567";
   const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
   const cherryPickFails = (home: string) => appendEvent(home, "s", home, { tool: "bash", command: `git cherry-pick ${SHA_A}`, ok: false, error: "error: could not apply 0123456... conflict in src/x.ts" });

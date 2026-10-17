@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
-import { cutToTokens, nowIso, writeAtomic } from "./util.ts";
+import { claimPath, cutToTokens, nowIso, withClaim, writeAtomic } from "./util.ts";
 import { pausedFixes } from "./telemetry.ts";
 
 export { scrub };
@@ -471,7 +471,7 @@ function ephemeralCommand(command: string): boolean {
 }
 
 /** A changed command is a candidate only while it still targets the failed operation. */
-function keepsCommand(failed: string, fixed: string): boolean {
+export function keepsCommand(failed: string, fixed: string): boolean {
   const original = commandIdentity(failed);
   const args = positionals(original.argv);
   const segments = commandSegments(fixed);
@@ -813,20 +813,22 @@ function readRejected(home: string): Set<string> {
   return keys;
 }
 
-/** Preserve both synced and legacy rejection keys; never replace unreadable owner data. */
+/** Preserve both synced and legacy rejection keys; never replace unreadable owner data. Merged under a claim: two rejections never drop each other's keys. */
 function writeRejected(home: string, keys: string[]): void {
   const path = rejectedPath(home);
-  let current = "";
-  try {
-    current = readFileSync(path, "utf8");
-  } catch (error) {
-    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") throw error;
-  }
-  if (current.trim()) {
-    try { parseRejected(current); }
-    catch { throw new CaptureError(`${path} is not valid JSON; fix or remove it before rejecting`); }
-  }
-  writeAtomic(path, formatRejected([...readRejected(home), ...keys]));
+  withClaim(claimPath(home, "rejected.json.lock"), () => {
+    let current = "";
+    try {
+      current = readFileSync(path, "utf8");
+    } catch (error) {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") throw error;
+    }
+    if (current.trim()) {
+      try { parseRejected(current); }
+      catch { throw new CaptureError(`${path} is not valid JSON; fix or remove it before rejecting`); }
+    }
+    writeAtomic(path, formatRejected([...readRejected(home), ...keys]));
+  });
 }
 
 /** Dismiss a normalized unmatched signature everywhere, without syncing its text. */
@@ -841,11 +843,14 @@ interface Seen {
   rejected: Set<string>;
 }
 
-function readJson<T>(path: string, fallback: T): T {
+function readCursor<T>(path: string, valid: (value: unknown) => value is T): Record<string, T> {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as T;
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+      !Object.values(value).every(valid)) return {};
+    return value as Record<string, T>;
   } catch {
-    return fallback;
+    return {};
   }
 }
 
@@ -904,7 +909,7 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
   const dir = eventsDir(home);
   if (!existsSync(dir)) return [];
   const cursorFile = join(home, "state", "capture-cursor.json");
-  const cursor = readJson<Record<string, number>>(cursorFile, {});
+  const cursor = readCursor(cursorFile, (value): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
   // A copy: notes written during this scan count for de-duplication, not for the caller's list.
   const seen = { ...seenBefore(home, notes), notes: [...notes] };
   const rejected = seen.rejected;
@@ -994,7 +999,8 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
           // Only a whole diagnostic line is specific enough to fire on its own without review; a cut
           // prefix ("ModuleNotFoundError: No module named") would match every unrelated failure.
           const whole = signatureOf(masked, Infinity);
-          const specific = whole.diagnostic && whole.text.length >= 12 && whole.text.length <= 120 && !errorPatternProblem(whole.text);
+          const specific = whole.diagnostic && whole.text.length >= 12 && whole.text.length <= 120 && !errorPatternProblem(whole.text) &&
+            !/(?:pi-natives:command:|syntax error at line|ParserError|(?:bash|sh|pwsh|powershell):.*(?:syntax error|unexpected token|unterminated))/i.test(whole.text);
           const errors = specific ? [whole.text] : sig && !errorPatternProblem(sig) ? [sig] : [];
           const projectId = project?.id ?? GLOBAL;
           // A tested repair of a project's own error with a specific pattern needs no owner: it is
@@ -1039,7 +1045,7 @@ export function scanEvents(home: string, notes: Note[], opts?: { now?: Date }): 
  */
 export function scanCommits(home: string, repoRoot: string, project: string, notes: Note[]): Proposal[] {
   const cursorFile = join(home, "state", "git-cursor.json");
-  const cursor = readJson<Record<string, string>>(cursorFile, {});
+  const cursor = readCursor(cursorFile, (value): value is string => typeof value === "string" && /^[a-f0-9]{40,64}$/i.test(value));
   const last = cursor[repoRoot];
   const range = last ? [`${last}..HEAD`] : ["-50"];
   const log = (r: string[]) => spawnSync("git", ["-C", repoRoot, "log", ...r, "--format=%H%x00%B%x1e"], { encoding: "utf8", timeout: 30_000 });
@@ -1235,7 +1241,16 @@ export function findFix(
   /** The Brain home whose telemetry judges fixes: given, a fix that stopped helping is skipped. */
   home?: string,
   /** The host whose tool failed: given, a note scoped to another host is skipped. */
-  host?: "omp" | "claude-code"
+  host?: "omp" | "claude-code",
+  command?: string,
+): Note | null {
+  return findFixIn(notes, errorText, project, home, host, command);
+}
+
+function findFixIn(
+  notes: Note[], errorText: string, project: Project | null,
+  home?: string, host?: "omp" | "claude-code", command?: string,
+  validation?: Map<Note, boolean>,
 ): Note | null {
   if (!errorText.trim()) return null;
 
@@ -1253,11 +1268,28 @@ export function findFix(
   const lines = () => (split ??= `${errorText}\n${scrubbed}\n${flat(errorText)}`.split("\n").map((l) => l.slice(0, 500)));
   let best: { len: number; id: string; note: Note } | null = null;
   let demoted: Set<string> | undefined;
+  let currentCommand: string | undefined;
 
   for (const note of notes) {
-    if (!isActive(note) || !testedCurrent(note) || !note.errors.length || expired(note)) continue;
+    if (!isActive(note) || !note.errors.length || expired(note)) continue;
     if (!visibleTo(note, project) || (host && note.host && note.host !== host)) continue;
+    let valid = validation?.get(note);
+    if (valid === undefined) {
+      valid = testedCurrent(note);
+      validation?.set(note, valid);
+    }
+    if (!valid) continue;
     if ((note.project === GLOBAL || (note.project === project?.id && project.root)) && changedEvidence(note, [project?.root, project?.docRoot, home].filter((root): root is string => !!root), note.testedAt)) continue;
+    if (note.source === "capture") {
+      const paragraphs = note.body.split(/\n\s*\n/);
+      const original = paragraphs[3]?.startsWith("Error:") ? paragraphs[1] : undefined;
+      if (original && command) {
+        currentCommand ??= untag(scrub(command).text).replace(/\s+/g, " ").trim();
+        // The displayed failed command may end mid-argument; only compare retained whole tokens.
+        const retained = original.endsWith("…") ? original.replace(/\s*\S*…$/, "") : original;
+        if (!keepsCommand(retained, currentCommand)) continue;
+      }
+    }
     if (echoed.includes(note.id.toLowerCase())) continue;
     if (home) {
       demoted ??= pausedFixes(home, notes);
@@ -1275,7 +1307,15 @@ export function findFix(
       } else if (!errorPatternProblem(pattern)) {
         // Substring match (case-folded); a pattern too short to be specific never matches
         const patternLower = pattern.trim().replace(/\s+/g, " ").toLowerCase();
-        if (haystack.includes(patternLower)) {
+        let index = haystack.indexOf(patternLower);
+        // Captured signatures may omit runner prefixes or end at a cut word boundary.
+        // Do not let them match longer identifiers; numeric endpoints are bounded for every note.
+        const boundary = note.source === "capture" ? /[\p{L}\p{N}_]/u : /\d/;
+        const endsWord = (note.source === "capture" ? /[\p{L}\p{N}_]$/u : /\d$/).test(patternLower);
+        while (index >= 0 && endsWord && boundary.test(String.fromCodePoint(haystack.codePointAt(index + patternLower.length) ?? 0))) {
+          index = haystack.indexOf(patternLower, index + patternLower.length);
+        }
+        if (index >= 0) {
           matchLen = pattern.length;
         }
       }
@@ -1312,6 +1352,14 @@ export function renderFix(note: Note): string {
   return prefix + content + suffix;
 }
 
+/** Save-time advice for an agent's fix whose fix line is cut: the remedy must fit the first FIX_BUDGET tokens. */
+export function fixCutHint(note: Note): string {
+  if (!note.errors.length || note.source === "capture") return "";
+  const shown = renderFix(note).slice("Brain: ".length, -` [${note.id}]`.length);
+  if (!shown.endsWith("…")) return "";
+  return `; its fix line is cut at "${shown.split(" ").slice(-6).join(" ")}": fixes show ${FIX_BUDGET} tokens, so lead the first line with the remedy (\`replaces\` rewrites it)`;
+}
+
 
 export interface UnmatchedError {
   signature: string;
@@ -1343,6 +1391,7 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
   const rejected = readRejected(home);
   const projects = new Map<string, Project>();
   const fixes = new Map<string, boolean>();
+  const validation = new Map<Note, boolean>();
   let names: string[];
   try { names = readdirSync(dir); } catch { return []; }
   for (const name of names.filter((name) => name.endsWith(".jsonl"))) {
@@ -1376,9 +1425,9 @@ export function unmatchedErrors(home: string, notes: Note[], opts: { days?: numb
       }
       const scope = project?.id ?? GLOBAL;
       if (opts.project && opts.project !== scope && !(opts.global && scope === GLOBAL)) continue;
-      const fixKey = `${scope}\0${event.error}`;
+      const fixKey = `${event.cwd}\0${event.command}\0${event.error}`;
       let fix = fixes.get(fixKey);
-      if (fix === undefined) fixes.set(fixKey, fix = findFix(notes, event.error, project) !== null);
+      if (fix === undefined) fixes.set(fixKey, fix = findFixIn(notes, event.error, project, undefined, undefined, event.command, validation) !== null);
       if (fix) continue;
       const signature = unmatchedSignature(event.error);
       // A bare exit status groups unrelated failures: nothing a note could match.

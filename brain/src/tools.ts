@@ -1,12 +1,12 @@
 /** Shared Brain tools; transports supply identity, rendering and telemetry. */
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, upgradeNote, type Kind } from "./notes.ts";
 import { resolveProject } from "./project.ts";
-import { judgedAnswer, typesafeJudge, typesafePairJudge, type ToraRecall } from "./judge.ts";
+import { recallFor, typesafePairJudge, type JudgeName, type ToraRecall, type RecallTrace } from "./judge.ts";
 import { toraScorer } from "./tora.ts";
 import type { UseKind } from "./telemetry.ts";
 import { stateSaved, writeWork } from "./work.ts";
 import { noteHint } from "./tidy.ts";
-import { autoEvidence, sessionEdits } from "./capture.ts";
+import { autoEvidence, fixCutHint, sessionEdits } from "./capture.ts";
 
 export interface Param {
   type: "string" | "boolean";
@@ -23,7 +23,7 @@ export interface ToolContext {
   edited?: string[];
 }
 
-type ToolResult = { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[]; judged?: boolean; dropped?: number; tora?: ToraRecall };
+type ToolResult = { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[]; judged?: boolean; judge?: JudgeName; dropped?: number; tora?: ToraRecall; recall?: RecallTrace };
 
 export interface BrainTool {
   name: string;
@@ -54,12 +54,13 @@ export const brainTools: BrainTool[] = [
     async run(params, { home, cwd, env }) {
       const query = requireString(params.query, "query");
       const project = resolveProject(home, cwd, env);
-      return { ...await judgedAnswer(loadNotes(home).notes, query, { home, project, all: params.all === true }, typesafeJudge(env), toraScorer(env)), query, kind: "recall", project: project.id };
+      const result = await recallFor(loadNotes(home).notes, query, { home, project, all: params.all === true }, env);
+      return { ...result, query, kind: "recall", project: project.id };
     },
   },
   {
     name: "brain_note",
-    description: "Save what the repo cannot tell you: a decision and why, an environment gotcha with its error line, what failed before, an owner preference. Not facts readable from code. replaces: id of a note this corrects.",
+    description: "Save what the repo cannot tell you: a decision and why, an environment gotcha with its error line, what failed before, an owner preference. Not facts readable from code.",
     params: {
       text: { type: "string", description: "the learning; first line is the headline" },
       kind: { type: "string", description: `one of ${KINDS.join(", ")}`, optional: true },
@@ -95,7 +96,7 @@ export const brainTools: BrainTool[] = [
       const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });
       if (old) retireNote(home, old.id, note.id);
       const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env), toraScorer(env));
-      return { text: `saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${hint}`, kind: "note", project: project.id };
+      return { text: `saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${fixCutHint(note)}${hint}`, kind: "note", project: project.id };
     },
   },
   {

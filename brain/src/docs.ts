@@ -91,7 +91,7 @@ export function readAnchor(root: string, anchor: string): string | undefined {
 
 interface SearchSection extends Section { headingWords: Set<string>; words: Set<string> }
 interface SearchDoc { path: string; headings: SearchSection[]; pathWords: Set<string> }
-type DocAnswer = { text: string; path: string; excerpt?: string };
+type DocAnswer = { text: string; path: string; anchor?: string; excerpt?: string };
 
 function searchDoc(file: string, path: string): SearchDoc {
   return { path, pathWords: new Set(tokens(path, true, false)), headings: sections(file).map(section => ({
@@ -171,7 +171,7 @@ function answerDocs(docs: SearchDoc[], query: string): DocAnswer | undefined {
   if (!pick) return outline;
   const { section, doc } = pick;
   return {
-    text: doc.path + " › " + section.heading + " (line " + section.line + ")", path: doc.path,
+    text: doc.path + " › " + section.heading + " (line " + section.line + ")", path: doc.path, anchor: section.slug,
     excerpt: (section.heading + ": " + bestParagraph(section, remaining)).replace(/\s+/g, " ").slice(0, 4000),
   };
 }
@@ -198,6 +198,8 @@ export function childDocContext(home: string, project: Project, brief = ""): { o
   const files = [...new Set([...named, ...projectDocs(home, project)])];
   const terms = new Set(tokens(brief, true));
   const outline: string[] = [];
+  const entries: { score: number; line: string }[] = [];
+  const numbers = queryNumbers(brief);
   let best: { score: number; text: string } | undefined;
   for (const file of files) {
     const fromRoot = relative(root, file);
@@ -206,11 +208,16 @@ export function childDocContext(home: string, project: Project, brief = ""): { o
     for (const heading of sections(file)) {
       if (heading.level !== 2 && heading.level !== 3) continue;
       const line = path + ":" + heading.line + " " + heading.heading;
-      if ([...outline, line].join("\n").length <= 60 * 4) outline.push(line);
-      const score = [...new Set(tokens(heading.heading, true))].filter(word => terms.has(word)).length;
-      if (score && heading.text && (!best || score > best.score)) best = { score, text: line + "\n" + heading.text };
+      const number = headingNumber(heading.heading);
+      const overlap = [...new Set(tokens(heading.heading, true))].filter(word => terms.has(word)).length;
+      const relevance = (number && numbers.has(number) ? 1000 : 0) + overlap;
+      const score = relevance + (named.includes(file) ? 1 : 0);
+      if (!brief.trim() || score) entries.push({ score, line });
+      if (relevance && heading.text && (!best || relevance > best.score)) best = { score: relevance, text: line + "\n" + heading.text };
     }
   }
+  if (brief.trim()) entries.sort((a, b) => b.score - a.score);
+  for (const entry of entries) if ([...outline, entry.line].join("\n").length <= 60 * 4) outline.push(entry.line);
   // Full section or silence: clipping a task specification would hide requirements.
   return { outline: outline.join("\n"), section: best && best.text.length <= 120 * 4 ? best.text : undefined };
 }

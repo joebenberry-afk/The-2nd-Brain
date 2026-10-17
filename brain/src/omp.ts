@@ -5,16 +5,17 @@
  * brain_recall, brain_note, and brain_state tools. All handlers wrapped in try/catch, never blocks.
  */
 import { isAbsolute, relative, resolve } from "node:path";
-import { loadNotes, type Note } from "./notes.ts";
+import { loadNotes, loadVisibleNotes, type Note } from "./notes.ts";
 import { folderOnly, resolveProject, type Project } from "./project.ts";
 import { brainTools, jsonSchema, type Param } from "./tools.ts";
-import { appendEvent, captureUserRules, findFix, hostNoise, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
+import { appendEvent, captureUserRules, findFix, renderFix, scanEvents, scrubCut, toolEventFrom } from "./capture.ts";
 import { cardIds, cardSemantic, LEAN_LINE, renderCard } from "./card.ts";
 import { pathHint } from "./paths.ts";
 import { logUse, saveToolSchemas } from "./telemetry.ts";
 import { estimateTokens, findHome } from "./util.ts";
 import { toraScorer } from "./tora.ts";
 import { writeAuto } from "./work.ts";
+import { outputTokens, Renderer, type ToolOutput } from "./render.ts";
 import { rolloverHint } from "./rollover.ts";
 
 export const CARD_TYPE = "brain.card";
@@ -35,8 +36,7 @@ export interface HostLike {
 
 type Json = Record<string, unknown>;
 
-/** A fired fix awaiting its outcome. */
-interface PendingFix { id: string; project: string }
+import { operationOf, outcomeOf, type PendingFix } from "./outcome.ts";
 
 interface SessionState {
   carded: boolean;
@@ -53,6 +53,8 @@ interface SessionState {
   pendingFixes?: Map<string, PendingFix>;
   /** Messages in the last context this session sent; a drop means earlier text may be gone. */
   contextLength?: number;
+  /** Layer 4 (on unless BRAIN_RENDER=off): this session's elisions, sticky across its requests. */
+  renderer?: Renderer;
   /** A compaction dropped the card: the next tool result or prompt in this session carries it again. */
   cardDue?: boolean;
 }
@@ -62,6 +64,25 @@ const liveSessions = new Map<string, SessionState>();
 
 function asObject(value: unknown): Json | undefined {
   return value !== null && typeof value === "object" ? (value as Json) : undefined;
+}
+
+/** Schema-content estimate, not provider framing or provider-specific normalization. */
+export function schemaCost(tool: { name: string; description: string; parameters: unknown }): number {
+  let parameters = tool.parameters;
+  if (typeof parameters === "function") {
+    try {
+      const convert = "toJsonSchema" in parameters ? parameters.toJsonSchema : undefined;
+      parameters = typeof convert === "function"
+        ? convert.call(parameters, { target: "draft-2020-12", fallback: (ctx: { base: unknown }) => ctx.base })
+        : undefined;
+    } catch { parameters = undefined; }
+    if (parameters === undefined) {
+      const owned = brainTools.find(definition => definition.name === tool.name);
+      if (!owned) return estimateTokens(tool.name + tool.description);
+      parameters = jsonSchema(owned.params);
+    }
+  }
+  return estimateTokens(tool.name + tool.description + JSON.stringify(parameters ?? {}));
 }
 
 /** A stable per-session key from whatever the host exposes; falls back to "process". */
@@ -432,10 +453,10 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             const sub = isSubagent(ctx);
             const inherited = inheritedProject(ctx, cwd);
             const result = await definition.run(params, { home, cwd, env: inherited ? { ...env, BRAIN_PROJECT: inherited.id } : env, session, sub, edited: getSession(session).edited });
-            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, judged: result.judged, dropped: result.dropped, tora: result.tora, via: "tool" });
+            if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, judged: result.judged, judge: result.judge, dropped: result.dropped, tora: result.tora, recall: result.recall, via: "tool" });
             return { content: [{ type: "text", text: result.text }], details: {} };
           } catch (error) {
-            return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {} };
+            return { content: [{ type: "text", text: `brain: ${error instanceof Error ? error.message : String(error)}` }], details: {}, isError: true };
           }
         },
       });
@@ -531,7 +552,7 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
                 saveToolSchemas(home, pi.getAllTools().filter(tool => enabled.has(tool.name) && !system.includes(`xd://${tool.name}`)).map(tool => ({
                   name: tool.name,
                   source: tool.sourceInfo?.source ?? "unknown",
-                  tokens: estimateTokens(tool.name + tool.description + JSON.stringify(tool.parameters ?? {})),
+                  tokens: schemaCost(tool),
                 })), undefined, blocks.map(estimateTokens));
               }
             } catch (error) {
@@ -588,6 +609,37 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.pendingFixes = new Map([...(state.pendingFixes ?? []), ...state.shownFixes]);
         state.shownFixes = undefined;
       }
+      // Layer 4 is on by default in OMP: it passed the E6 gate here (intake doc §5-6).
+      if (env.BRAIN_RENDER === "off") return undefined;
+      const started = performance.now();
+      // Layer 4: toolResults made only of text blocks become outputs; anything else (images) is left alone.
+      const outputs: ToolOutput[] = [];
+      const at: number[] = [];
+      messages.forEach((message: unknown, index) => {
+        const m = asObject(message);
+        const content = m?.content;
+        if (m?.role !== "toolResult" || !Array.isArray(content) || !content.length) return;
+        const texts: string[] = [];
+        for (const block of content) {
+          const b = asObject(block);
+          if (b?.type !== "text" || typeof b.text !== "string") return;
+          texts.push(b.text);
+        }
+        outputs.push({ key: typeof m.toolCallId === "string" && m.toolCallId ? m.toolCallId : `#${index}`, text: texts.join("\n"), tool: typeof m.toolName === "string" ? m.toolName : undefined });
+        at.push(index);
+      });
+      const renderer = (state.renderer ??= new Renderer(home));
+      const elisions = renderer.render(outputs);
+      if (!elisions.length) return undefined;
+      const next: unknown[] = messages.slice();
+      let saved = 0, fresh = 0;
+      for (const e of elisions) {
+        const index = at[e.index]!;
+        next[index] = { ...asObject(messages[index]), content: [{ type: "text", text: e.stub }] };
+        if (e.fresh) { fresh++; saved += e.tokens - outputTokens(e.stub); }
+      }
+      if (fresh) logUse(home, { kind: "elide", project: (state.project ?? resolveProject(home, cwdOf(ctx) ?? process.cwd(), env)).id, tokens: saved, ms: performance.now() - started, session: key, sub: isSubagent(ctx), via: "hook", hits: fresh });
+      return { messages: next };
     } catch (error) {
       failed("context", error);
       return undefined;
@@ -726,10 +778,16 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
 
       // Record whether a fix the model has seen helped, on the next command/tool result.
       const failureKey = fields.command || fields.tool || "unknown";
-      const pending = state.pendingFixes?.get(failureKey);
-      if (pending && (fields.ok || !hostNoise(fields.tool, fields.error ?? ""))) {
-        state.pendingFixes!.delete(failureKey);
-        logUse(home, { kind: "fixout", ...pending, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
+      // The exact operation first, then a compatible retry by the same tool. Entries without
+      // operation facts (eval detectors) are scored below, not by whatever result comes next.
+      for (const candidate of new Set([failureKey, ...(state.pendingFixes?.keys() ?? [])])) {
+        const pending = state.pendingFixes?.get(candidate);
+        if (!pending || pending.tool === undefined) continue;
+        const outcome = outcomeOf(pending, fields);
+        if (outcome === "other") continue;
+        state.pendingFixes!.delete(candidate);
+        if (outcome !== "unknown") logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome, tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
+        break;
       }
       // Eval hints are keyed by detector, not by the cell's code: the next JS cell the detector can
       // judge scores them, whatever it runs.
@@ -739,15 +797,15 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           const outcome = hint ? evalHintOutcome(id, language, code, asObject(input)?.timeout) : undefined;
           if (!hint || !outcome) continue;
           state.pendingFixes!.delete(detectorKey(id));
-          logUse(home, { kind: "fixout", ...hint, outcome, tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
+          logUse(home, { kind: "fixout", id: hint.id, project: hint.project, outcome, tokens: 0, ms: 0, session: key, sub: isSubagent(ctx), via: "tool" });
         }
       }
 
       // On failed result, find and append a fix if available
       if (!fields.ok && fields.error) {
         const project = projectOfCall();
-        const { notes } = loadNotes(home);
-        const fix = findFix(notes, fields.error, project, home, "omp");
+        const { notes } = loadVisibleNotes(home, project.id);
+        const fix = findFix(notes, fields.error, project, home, "omp", fields.command);
 
         if (fix) {
           // The full fix once per context: a repeat of the same error costs a pointer, not the text.
@@ -758,14 +816,14 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
           // Hosts join text blocks without a separator: the fix must start on its own line.
           const resultContent = [...contentArray, { type: "text", text: `\n${fixText}` }];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(fixText), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: fix.id });
-          arm(state, failureKey, { id: fix.id, project: project.id });
+          arm(state, failureKey, { id: fix.id, project: project.id, ...operationOf(fields) });
           return { content: resultContent };
         }
         const hint = pathHint(fields.tool, fields.path, fields.error, cwd);
         if (hint) {
           const contentArray = Array.isArray(content) ? content : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
           logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(hint), ms: performance.now() - started, session: key, sub: isSubagent(ctx), id: "pathhint" });
-          arm(state, failureKey, { id: "pathhint", project: project.id });
+          arm(state, failureKey, { id: "pathhint", project: project.id, ...operationOf(fields) });
           return { content: [...contentArray, { type: "text", text: `\n${hint}` }] };
         }
       }
@@ -851,9 +909,12 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
     } catch (error) {
       failed("session_shutdown", error);
       // never block the host's exit
-    } finally {
+    }
+    try {
       const state = sessions.get(sessionKey(ctx));
       for (const [alias, live] of liveSessions) if (live === state) liveSessions.delete(alias);
+    } catch {
+      // Cleanup is advisory too; even context accessors can fail during shutdown.
     }
     return undefined;
   });

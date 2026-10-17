@@ -10,6 +10,22 @@ import { estimateTokens } from "../src/util.ts";
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-work-"));
 
 describe("work", () => {
+  it.each([
+    ["2026-10-16T00:00:00Z", false], ["2026-10-17T00:00:00Z", true],
+    ["2026-10-18T00:00:00Z", true], ["", true], ["invalid", true],
+  ])("suppresses only older automatic observations (%s)", (autoAt, shown) => {
+    const text = workText({ project: "p", path: "", at: "2026-10-17T00:00:00Z", text: "Goal: current", autoAt, auto: "- last ask: old ask" });
+    expect(text.includes("old ask")).toBe(shown);
+  });
+
+  it("a new saved plan supersedes old local asks, while auto-only and unknown plans remain readable", () => {
+    const home = tmp();
+    mkdirSync(join(home, "state", "work"), { recursive: true });
+    writeFileSync(join(home, "state", "work", "p.auto.md"), "---\nat: 2000-01-01T00:00:00Z\n---\n\n- last ask: old ask\n");
+    expect(workText(readWork(home, "p"))).toContain("old ask");
+    expect(workText(writeWork(home, "p", "Goal: current"))).not.toContain("old ask");
+    expect(workText({ ...readWork(home, "p")!, at: "invalid" })).toContain("old ask");
+  });
   it("workPath: <home>/work/<project>.md", () => {
     const path = workPath("/tmp/brain", "myproject");
     expect(path).toBe(join("/tmp/brain", "work", "myproject.md"));

@@ -1,11 +1,18 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import type * as ChildProcess from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
 import { sync, shareNote, SyncError } from "../src/sync.ts";
 import { createNote, loadNotes, saveNote } from "../src/notes.ts";
 import { addProjectTag } from "../src/project.ts";
+
+// Passes every call through; it only lets a test count the git processes sync launches.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const tmp = () => mkdtempSync(join(tmpdir(), "brain-sync-"));
 
@@ -30,34 +37,36 @@ function setupRepo(cwd: string, upstream?: string): void {
   }
 }
 
-function pairRepos(): { bare: string; a: string; b: string } {
+/**
+ * A bare remote with machine A's clone and machine B's, set up with git once per file (twelve git
+ * processes). Both origins are the relative `../remote.git`, so a copy of the whole tree is a
+ * complete pair of its own: it shares no object storage and points at no other test's remote. The
+ * commit identity comes from the environment (vitest.config.ts).
+ */
+let pristine: string | undefined;
+function buildPair(): string {
   const root = tmp();
   const bare = join(root, "remote.git");
   const a = join(root, "a");
-  const b = join(root, "b");
-
-  // Initialize bare repo
   mkdirSync(bare);
   gitCmd(bare, "init", "--bare");
   gitCmd(bare, "symbolic-ref", "HEAD", "refs/heads/main");
-
-  // Initialize and push from A
   mkdirSync(a);
   gitCmd(a, "init");
-  gitCmd(a, "config", "user.name", "TestA");
-  gitCmd(a, "config", "user.email", "testa@example.com");
   writeFileSync(join(a, ".gitkeep"), "");
   gitCmd(a, "add", ".gitkeep");
   gitCmd(a, "commit", "-m", "init");
-  gitCmd(a, "remote", "add", "origin", bare);
+  gitCmd(a, "remote", "add", "origin", "../remote.git");
   gitCmd(a, "push", "-u", "origin", "HEAD:main");
+  gitCmd(root, "clone", bare, "b");
+  gitCmd(join(root, "b"), "remote", "set-url", "origin", "../remote.git");
+  return root;
+}
 
-  // Clone to B
-  gitCmd(root, "clone", bare, b);
-  gitCmd(b, "config", "user.name", "TestB");
-  gitCmd(b, "config", "user.email", "testb@example.com");
-
-  return { bare, a, b };
+function pairRepos(): { bare: string; a: string; b: string } {
+  const root = tmp();
+  cpSync((pristine ??= buildPair()), root, { recursive: true });
+  return { bare: join(root, "remote.git"), a: join(root, "a"), b: join(root, "b") };
 }
 
 describe("sync", () => {
@@ -108,6 +117,48 @@ describe("sync", () => {
   it("raises when not a git repository", () => {
     const home = tmp();
     expect(() => sync(home)).toThrow(SyncError);
+  });
+
+  it.each(["MERGE_HEAD", "rebase-merge"])("refuses to commit while %s exists, in a linked worktree and in a nested Brain home", (name) => {
+    const { a } = pairRepos();
+    const linked = join(tmp(), "wt");
+    gitCmd(a, "worktree", "add", "-b", "side", linked);
+    for (const home of [linked, join(a, "brain-home")]) {
+      mkdirSync(home, { recursive: true });
+      createNote(home, { text: `A note written while ${name} exists`, project: "demo" });
+      // Each worktree keeps its own markers; git says where.
+      const marker = gitCmd(home, "rev-parse", "--path-format=absolute", "--git-path", name).trim();
+      if (name === "rebase-merge") mkdirSync(marker, { recursive: true });
+      else writeFileSync(marker, gitCmd(home, "rev-parse", "HEAD"));
+      const before = gitCmd(home, "rev-parse", "HEAD");
+      expect(() => sync(home)).toThrow(/in progress/);
+      expect(gitCmd(home, "rev-parse", "HEAD")).toBe(before);
+    }
+  });
+
+  it("probes the merge and rebase markers, and the tracked Brain paths, in one git process each", () => {
+    const { a } = pairRepos();
+    createNote(a, { text: "A note to commit", project: "demo" });
+    const runs = vi.mocked(spawnSync);
+    runs.mockClear();
+    sync(a, { push: false });
+    const commands = runs.mock.calls.map(([, args]) => (args as readonly string[]).join(" "));
+    expect(commands.filter((command) => /\brev-parse\b.*--git-path/.test(command))).toHaveLength(1);
+    expect(commands.filter((command) => /\bls-files\b/.test(command))).toHaveLength(1);
+  });
+
+  it("starts every test from its own copy of the remote pair", () => {
+    const first = pairRepos();
+    const second = pairRepos();
+    expect(gitCmd(first.a, "remote", "get-url", "origin").trim()).toBe("../remote.git");
+    expect(gitCmd(second.b, "remote", "get-url", "origin").trim()).toBe("../remote.git");
+    const untouched = gitCmd(second.bare, "rev-parse", "refs/heads/main");
+    createNote(first.a, { text: "Only the first pair has this", project: "demo" });
+    expect(sync(first.a).pushed).toBe(true);
+    expect(gitCmd(first.bare, "rev-parse", "refs/heads/main")).not.toBe(untouched);
+    expect(gitCmd(second.bare, "rev-parse", "refs/heads/main")).toBe(untouched);
+    sync(second.b);
+    expect(loadNotes(second.b).notes).toEqual([]);
   });
 
   it("commits only sync paths when other files are staged", () => {

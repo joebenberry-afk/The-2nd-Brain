@@ -9,10 +9,10 @@
  * A note is active until it is retired; retired notes stay on disk as history.
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { createHash } from "node:crypto";
 import { scrub } from "./scrub.ts";
-import { nowIso, randomId, retrying, slug, tagList, writeAtomic } from "./util.ts";
+import { claimPath, nowIso, randomId, retrying, slug, tagList, withClaim, withClaims, writeAtomic } from "./util.ts";
 
 export const GLOBAL = "global";
 export const KINDS = ["note", "fact", "decision", "gotcha", "procedure"] as const;
@@ -423,6 +423,22 @@ function readDirNotes(dir: string, project: string, isPrivate: boolean, out: Not
   }
 }
 
+/** Notes by id, the first of a duplicated id kept; the others are reported. */
+function uniqueById(notes: Note[], errors: string[]): Note[] {
+  const seen = new Map<string, string>();
+  const unique: Note[] = [];
+  for (const note of notes) {
+    const first = seen.get(note.id);
+    if (first !== undefined) {
+      errors.push(`${note.path}: duplicate id ${note.id} (also ${first})`);
+      continue;
+    }
+    seen.set(note.id, note.path);
+    unique.push(note);
+  }
+  return unique.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 /** Every note under the home, sorted by id; unreadable files are reported, never fatal. */
 export function loadNotes(home: string): { notes: Note[]; errors: string[] } {
   home = resolve(home);
@@ -447,19 +463,37 @@ export function loadNotes(home: string): { notes: Note[]; errors: string[] } {
   }
   if (!previous || previous.size !== current.size || [...current].some(([path, cached]) => previous.get(path) !== cached)) EVIDENCE_CACHE.clear();
   NOTE_CACHE.set(home, current);
-  const seen = new Map<string, string>();
-  const unique: Note[] = [];
-  for (const note of notes) {
-    const first = seen.get(note.id);
-    if (first !== undefined) {
-      errors.push(`${note.path}: duplicate id ${note.id} (also ${first})`);
-      continue;
+  return { notes: uniqueById(notes, errors), errors };
+}
+
+/**
+ * The notes of the global and one project's directories only (public and private), for hot paths
+ * that show a caller nothing else (`visibleTo` still decides which of them). Other projects'
+ * directories are neither listed nor stat'ed, and their cached entries stay as they were. A
+ * project name that is not a plain directory name loads everything.
+ */
+export function loadVisibleNotes(home: string, project: string): { notes: Note[]; errors: string[] } {
+  if (!project || project === "." || project === ".." || /[\\/]/.test(project)) return loadNotes(home);
+  home = resolve(home);
+  const previous = NOTE_CACHE.get(home);
+  const current = new Map<string, CachedNote>();
+  const notes: Note[] = [];
+  const errors: string[] = [];
+  const dirs = new Set<string>();
+  for (const name of [...new Set([GLOBAL, project])].sort()) {
+    for (const isPrivate of [false, true]) {
+      const dir = noteDir(home, name, isPrivate);
+      dirs.add(dir);
+      readDirNotes(dir, name, isPrivate, notes, errors, previous, current);
     }
-    seen.set(note.id, note.path);
-    unique.push(note);
   }
-  unique.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return { notes: unique, errors };
+  const merged = new Map<string, CachedNote>();
+  const before = new Map<string, CachedNote>();
+  for (const [path, cached] of previous ?? []) (dirs.has(dirname(path)) ? before : merged).set(path, cached);
+  if (!previous || before.size !== current.size || [...current].some(([path, cached]) => before.get(path) !== cached)) EVIDENCE_CACHE.clear();
+  for (const [path, cached] of current) merged.set(path, cached);
+  NOTE_CACHE.set(home, merged);
+  return { notes: uniqueById(notes, errors), errors };
 }
 
 /** A note id as pasted: brackets, quotes and trailing punctuation removed. */
@@ -482,26 +516,83 @@ function sameFile(a: string, b: string): boolean {
 /** Ids and project names become path segments: only plain, single segments are accepted. */
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
-/** Write a note to the file its project/private flags say; removes the old file when it moved. */
+/** The claim on note `id`, case-folded because ids are file names: one lock per note, whoever spells it how. */
+const noteClaim = (home: string, id: string) => claimPath(home, `note-${id.toLowerCase()}.lock`);
+
+/** A file holding note `id` outside `known` (the paths this save writes and replaces), if there is one. */
+function strayCopy(home: string, id: string, known: string[]): string | undefined {
+  let projects: string[];
+  try {
+    projects = readdirSync(notesRoot(home), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".")).map((d) => d.name);
+  } catch {
+    return undefined;
+  }
+  for (const project of projects) {
+    for (const isPrivate of [false, true]) {
+      const path = join(noteDir(home, project, isPrivate), `${id}.md`);
+      if (existsSync(path) && !known.some((k) => k === path || sameFile(k, path))) return path;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Write a note to the file its project/private flags say; removes the old file when it moved. The
+ * whole write and removal run under the note's cross-process claim. A save whose `note.path` snapshot
+ * is stale (another process moved the note since it was loaded) throws, writing nothing, instead of
+ * leaving the note in two folders. Read-modify-write callers use updateNote, which reloads under the claim.
+ */
 export function saveNote(home: string, note: Note): Note {
   if (!SAFE_ID.test(note.id) || note.id.includes("..")) throw new NoteError(`unsafe note id ${JSON.stringify(note.id)}`);
   if (note.project !== slug(note.project)) throw new NoteError(`not a project id: ${JSON.stringify(note.project)} (use ${slug(note.project)})`);
   const path = join(noteDir(home, note.project, note.private), `${note.id}.md`);
-  NOTE_CACHE.delete(resolve(home));
-  EVIDENCE_CACHE.clear();
-  writeAtomic(path, formatNote(note));
-  // On a case-insensitive filesystem (Windows, macOS) notes/MyProj and notes/myproj are one
-  // folder: the "old" file is the one just written, so it must not be removed.
-  // A held old file would leave the note in two folders (a duplicate id): the new copy is rolled back.
-  if (note.path && note.path !== path && existsSync(note.path) && !sameFile(note.path, path)) {
-    try {
-      retrying(() => rmSync(note.path, { force: true })); // force: an old file already gone is fine
-    } catch {
-      rmSync(path, { force: true });
-      throw new NoteError(`${note.path} is held open by another program; ${note.id} was not moved — close it and try again`);
+  return withClaim(noteClaim(home, note.id), () => {
+    // A new note (no path yet) has nothing to be stale against and skips the scan.
+    const stray = note.path ? strayCopy(home, note.id, [path, note.path]) : undefined;
+    if (stray) throw new NoteError(`${note.id} also exists at ${stray} (another process moved or copied it, or it is a duplicate); nothing was written — remove the extra copy or reload the note, then try again`);
+    NOTE_CACHE.delete(resolve(home));
+    EVIDENCE_CACHE.clear();
+    writeAtomic(path, formatNote(note));
+    // On a case-insensitive filesystem (Windows, macOS) notes/MyProj and notes/myproj are one
+    // folder: the "old" file is the one just written, so it must not be removed.
+    // A held old file would leave the note in two folders (a duplicate id): the new copy is rolled back.
+    if (note.path && note.path !== path && existsSync(note.path) && !sameFile(note.path, path)) {
+      try {
+        retrying(() => rmSync(note.path, { force: true })); // force: an old file already gone is fine
+      } catch {
+        rmSync(path, { force: true });
+        throw new NoteError(`${note.path} is held open by another program; ${note.id} was not moved — close it and try again`);
+      }
     }
-  }
-  return { ...note, path };
+    return { ...note, path };
+  });
+}
+
+/**
+ * Run `fn` holding the cross-process claim on note `id` (as pasted): reload the note inside `fn`,
+ * change it, and save it, so a concurrent move or edit is never overwritten from a stale snapshot.
+ * An id no note can have has no claim; `fn` then finds nothing to change.
+ */
+export function withNoteClaim<T>(home: string, id: string, fn: () => T): T {
+  const query = idQuery(id);
+  return SAFE_ID.test(query) ? withClaim(noteClaim(home, query), fn) : fn();
+}
+
+/**
+ * Change note `id` as it is on disk now: under the note's claim it is reloaded, `change` returns its
+ * new state (null when nothing changes), and that is saved before any other process can touch it.
+ * Every read-modify-write of one note goes through here or withNoteClaim. Throws NoteError when
+ * there is no such note.
+ */
+export function updateNote(home: string, id: string, change: (fresh: Note) => Note): Note;
+export function updateNote(home: string, id: string, change: (fresh: Note) => Note | null): Note | null;
+export function updateNote(home: string, id: string, change: (fresh: Note) => Note | null): Note | null {
+  return withNoteClaim(home, id, () => {
+    const fresh = findNote(loadNotes(home).notes, id);
+    if (!fresh) throw new NoteError(`no note ${id}`);
+    const next = change(fresh);
+    return next && saveNote(home, next);
+  });
 }
 
 export interface NewNote {
@@ -674,40 +765,50 @@ export function createNote(home: string, input: NewNote): Note {
 /**
  * Upgrade metadata only, never the body: an explicit kind and stale_after win, tags, errors and
  * evidence are added, tested sticks with its first verifier. Callers must reject different bodies
- * first. Null when nothing changed.
+ * first. The upgrade is applied to the note as it is on disk under its claim; one that was retired
+ * or whose body changed since `note` was loaded throws instead of being overwritten. Null when
+ * nothing changed.
  */
 export function upgradeNote(home: string, note: Note, input: Omit<NewNote, "text" | "project">): Note | null {
   const errors = cleanErrors(input.errors ?? []);
   checkStaleAfter(input.staleAfter);
   const clean = maskText;
-  const heldHashes = new Set((note.evidenceSha ?? []).map(entry => entry.slice(0, entry.lastIndexOf("="))));
-  const merged: Note = {
-    ...note,
-    kind: input.kind ?? note.kind,
-    tags: tagList([...note.tags, ...(input.tags ?? [])].map(clean)),
-    errors: [...new Set([...note.errors, ...errors])],
-    evidence: [...new Set([...note.evidence, ...(input.evidence ?? [])].map(clean))],
-    evidenceSha: [...(note.evidenceSha ?? []), ...evidenceHashes((input.evidence ?? []).map(clean), [...(input.evidenceRoots ?? []), home]).filter(entry => !heldHashes.has(entry.slice(0, entry.lastIndexOf("="))))],
-    staleAfter: input.staleAfter ?? note.staleAfter,
-  };
-  const upgraded = !note.tested && input.tested === true ? (input.testedBy ? markTested(merged, input.testedBy, [...(input.evidenceRoots ?? []), home]) : { ...merged, tested: true, testedSha: testedHash(merged) }) : merged;
-  return formatNote(upgraded) === formatNote(note) ? null : saveNote(home, upgraded);
+  const roots = [...(input.evidenceRoots ?? []), home];
+  const hashes = evidenceHashes((input.evidence ?? []).map(clean), roots);
+  return updateNote(home, note.id, (fresh) => {
+    if (fresh.body !== note.body || fresh.retired !== note.retired) throw new NoteError(`${note.id} changed since it was read; nothing was written, look at it again`);
+    const heldHashes = new Set((fresh.evidenceSha ?? []).map(entry => entry.slice(0, entry.lastIndexOf("="))));
+    const merged: Note = {
+      ...fresh,
+      kind: input.kind ?? fresh.kind,
+      tags: tagList([...fresh.tags, ...(input.tags ?? [])].map(clean)),
+      errors: [...new Set([...fresh.errors, ...errors])],
+      evidence: [...new Set([...fresh.evidence, ...(input.evidence ?? [])].map(clean))],
+      evidenceSha: [...(fresh.evidenceSha ?? []), ...hashes.filter(entry => !heldHashes.has(entry.slice(0, entry.lastIndexOf("="))))],
+      staleAfter: input.staleAfter ?? fresh.staleAfter,
+    };
+    const upgraded = !fresh.tested && input.tested === true ? (input.testedBy ? markTested(merged, input.testedBy, roots) : { ...merged, tested: true, testedSha: testedHash(merged) }) : merged;
+    return formatNote(upgraded) === formatNote(fresh) ? null : upgraded;
+  });
 }
 
-/** Retire a note (history kept). With `by`, the replacement is linked both ways. */
+/** Retire a note (history kept). With `by`, the replacement is linked both ways. Both notes are claimed while it runs. */
 export function retireNote(home: string, id: string, by?: string): Note {
-  const { notes } = loadNotes(home);
-  const note = findNote(notes, id);
-  if (!note) throw new NoteError(`no note ${id}`);
-  if (note.retired) throw new NoteError(`${note.id} is already retired`);
-  let next: Note | undefined;
-  if (by !== undefined) {
-    next = findNote(notes, by);
-    if (!next) throw new NoteError(`no note ${by}`);
-    if (next.id === note.id) throw new NoteError("a note cannot replace itself");
-    saveNote(home, { ...next, replaces: note.id });
-  }
-  return saveNote(home, { ...note, retired: nowIso(), replacedBy: next?.id });
+  const claims = [id, by].flatMap((q) => (q !== undefined && SAFE_ID.test(idQuery(q)) ? [noteClaim(home, idQuery(q))] : []));
+  return withClaims(claims, () => {
+    const { notes } = loadNotes(home);
+    const note = findNote(notes, id);
+    if (!note) throw new NoteError(`no note ${id}`);
+    if (note.retired) throw new NoteError(`${note.id} is already retired`);
+    let next: Note | undefined;
+    if (by !== undefined) {
+      next = findNote(notes, by);
+      if (!next) throw new NoteError(`no note ${by}`);
+      if (next.id === note.id) throw new NoteError("a note cannot replace itself");
+      saveNote(home, { ...next, replaces: note.id });
+    }
+    return saveNote(home, { ...note, retired: nowIso(), replacedBy: next?.id });
+  });
 }
 
 /**

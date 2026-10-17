@@ -40,7 +40,10 @@ it("answers later section paragraphs and sends the best paragraph to the judge",
     received = candidates[0]!.text;
     return new Map(candidates.map(candidate => [candidate.id, 0.99]));
   };
-  expect((await judgedAnswer([], "thermal sampler gpu.lock", { home, project }, judge)).ids).toEqual(["doc:PLAN.md"]);
+  const judged = await judgedAnswer([], "thermal sampler gpu.lock", { home, project }, judge, undefined, true);
+  expect(judged.ids).toEqual(["doc:PLAN.md"]);
+  expect(judged.recall?.doc).toBe("doc:PLAN.md#runtime");
+  expect(JSON.stringify(judged.recall)).not.toContain("Thermal sampler");
   expect(received).toContain("Thermal sampler guards gpu.lock");
   expect(received).not.toContain("Introductory overview");
 });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { loadNotes, formatNote, type Note } from "../src/notes.ts";
 import { renderCard } from "../src/card.ts";
 import { resolveProject } from "../src/project.ts";
@@ -104,10 +105,35 @@ function measure(name: string, target: string, expected?: number): Row {
   return { name, count: notes.length, metrics };
 }
 
+/** Every sample starts Node: warmed in-process loops above cannot measure CLI startup. */
+function startup(): Row {
+  const target = join(scratch, "startup");
+  mkdirSync(join(target, "notes"), { recursive: true });
+  const emptyHosts = join(target, "empty-hosts");
+  mkdirSync(emptyHosts);
+  const env: NodeJS.ProcessEnv = { ...process.env, SECOND_BRAIN_HOME: target, PI_CODING_AGENT_DIR: emptyHosts, CLAUDE_CONFIG_DIR: emptyHosts };
+  delete env.BRAIN_ARGV;
+  const metrics: Record<string, number> = {};
+  const cli = join(PACKAGE_HOME, "brain", "bin", "brain.mjs");
+  const run = (args: string[], payload = ""): void => {
+    const child = spawnSync(process.execPath, args, { env, cwd: target, input: payload, encoding: "utf8", windowsHide: true, timeout: 30_000 });
+    assert.ifError(child.error);
+    assert.equal(child.status, 0, child.stderr);
+  };
+  bench(metrics, "node", () => run(["-e", ""]));
+  for (const [name, payload] of [
+    ["hook.noop", {}],
+    ["hook.success", { hook_event_name: "PostToolUse", session_id: "perf-success", cwd: target, tool_name: "Bash", tool_input: { command: "true" }, tool_response: { stdout: "", stderr: "", exit_code: 0 } }],
+    ["hook.failure", { hook_event_name: "PostToolUseFailure", session_id: "perf-failure", cwd: target, tool_name: "Bash", tool_input: { command: "false" }, error: "perf unmatched failure" }],
+  ] as const) bench(metrics, name, () => run([cli, "hook", "claude-code", "--home", target], JSON.stringify(payload)));
+  for (const command of ["stats", "check"]) bench(metrics, command, () => run([cli, command, "--home", target]));
+  return { name: "fresh-process", count: 0, metrics };
+}
+
 try {
   const report: Report = {
     at: new Date().toISOString(), runtime: `${process.release.name} ${process.version}`, cpu: cpus()[0]?.model ?? "unknown", samples,
-    rows: [measure("real", home), ...[1000, 5000].map((count) => measure(`synthetic-${count}`, synthetic(count), count))],
+    rows: [startup(), measure("real", home), ...[1000, 5000].map((count) => measure(`synthetic-${count}`, synthetic(count), count))],
   };
   writeAtomic(output, JSON.stringify(report, null, 2) + "\n");
   console.log(`Performance: ${report.runtime}; ${samples} measured samples after 5 warmups; milliseconds, estimated tokens (ceil(chars/4)).`);

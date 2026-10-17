@@ -41,8 +41,8 @@ brain card      # the start card a Claude Code session in this checkout will see
 
 Restart OMP from that new terminal.
 
-**Other projects' notes.** A project's id comes from its git remote or folder name (a linked
-worktree takes its main checkout's name); a folder without git belongs to the nearest folder
+**Other projects' notes.** A project's id comes from its registered path, git remote or folder name.
+Linked worktrees inherit their main checkout's registration before remote/name fallback; a folder without git belongs to the nearest folder
 above it that `projects.json` names (an id or alias), never your home folder or anything above
 it, so `cd scripts` stays in the project. A git repo inside a declared `paths` folder stays the root; the declared folder's
 registered docs also resolve from it. If a repo on
@@ -59,43 +59,66 @@ for little. A keyword list (five or more words) must also be about the note's su
 words in the note's first line, or half of a short one. When no note answers, recall names the best heading of the project's plan docs
 instead: `docs/LOOP.md › Goals (line 12)`.
 
-**Recall relevance check.** With `TYPESAFE_API_KEY` set, CLI, OMP and MCP recall use TypeSafe
-Jev (`jev-latest`) to check the notes the lexical search would show. Notes scoring below **0.78**
-are dropped (0.75 let 1-2 wrong answers through on reruns of the same 54 queries: Jev drifts about
-±0.02 between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual doc-heading or no-match fallback
-still applies. Only the scrubbed query and note body text (whitespace collapsed, scrubbed, then
-cut to 450 characters, so a secret at the cut is masked whole) are sent. Private notes are never sent and remain lexical, unjudged.
+**Recall relevance check.** CLI, OMP and MCP recall check the notes the lexical search would show
+with a judge: **Tora's local reranker** (Qwen3-Reranker-0.6B, free) whenever a Tora session runs,
+and TypeSafe Jev (`jev-latest`, paid) only when Tora gives no verdict and `TYPESAFE_API_KEY` is set.
+`BRAIN_JUDGE=tora` never calls Jev (recall or the write-time pair hint), `BRAIN_JUDGE=jev` skips
+Tora, `BRAIN_JUDGE=off` judges nothing. Notes scoring below **0.78** on Jev's scale are dropped
+(0.75 let 1-2 wrong answers through on reruns of the same 54 queries: Jev drifts about ±0.02
+between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual
+doc-heading or no-match fallback still applies. Tora's reranker scores saturate near 1, so they are
+mapped onto Jev's scale: its 0.999 counts as 0.78 and its 0.5 as the phrase floor 0.55. On 276
+blind-labelled October candidates it kept 116 right / 3 wrong where Jev kept 113 / 5; on the frozen
+hand-labelled September eval it is weaker (real 2 right / 2 wrong against Jev's 7-8 / 0), its
+mistakes being notes on the query's topic that do not answer it (owner chose it as the default, 15
+Oct; Tora IDEAS TJ-02). Only the scrubbed query and note body text (whitespace collapsed, scrubbed,
+then cut to 2,000 characters, so a secret at the cut is masked whole; Jev reads the first 450) are
+sent. Private notes are never sent and remain lexical, unjudged.
 A plan-doc heading answer (its heading and best-matching paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.
 When a doc heading could become the fallback answer, it is checked in the same request as the
 notes, so a rejected note no longer costs a second sequential call (54-query replay: 44 → 39
 requests, 58 → 64 questions); surviving notes still win over the heading.
-Set `BRAIN_JUDGE=off` to opt out; without a key, or on timeout, HTTP or parse errors, recall
-**fails open** to its unchanged lexical answer. Calls take about 300 ms, with a 5-second
-timeout. A small per-process cache avoids repeated calls for the same query, note id and text.
-The endpoint defaults to `https://api.typesafe.ai` (`TYPESAFE_BASE_URL` overrides it).
-Recall telemetry retains query/ids and adds `judged` (a successful check) and `dropped` (count).
+Without a judge, or on timeout, HTTP or parse errors from both, recall **fails open** to its
+unchanged lexical answer. Tora answers in about 0.13 s on the GPU and 1-4 s on the CPU, Jev in about
+300 ms. Local judging has a shared 0.8-second deadline; cold loads and slower CPU calls fail open
+rather than delaying host work. Jev retains its 5-second timeout. A failed local route cools down for
+2 seconds, keyed to that session and route; an exhausted or shortened caller deadline does not
+mark the server unhealthy, and a new session can recover at once.
+Small caches (Tora's in memory, the Brain's per process) avoid
+repeated work for the same query and text. Jev's endpoint defaults to `https://api.typesafe.ai`
+(`TYPESAFE_BASE_URL` overrides it). Recall telemetry retains query/ids and adds `judged` (a
+successful check), `judge` (`tora` or `jev`) and `dropped` (count); `brain stats` counts judged
+recalls by judge, so Jev spend shows up. Compact `recall` diagnostics retain effective `all`, a hash
+of project id/tags, a public-note corpus content hash, bounded public candidate IDs/stage codes,
+and local route outcome/duration (including failures). Document hits retain `doc:path#heading-anchor`,
+not heading content. Queries remain scrubbed and capped at 200 characters; private note content/IDs
+and endpoint credentials are not included in these diagnostics. A corpus mismatch means today's
+notes cannot establish a historical retrieval miss.
 
 **Isolated subagents.** An OMP isolated child runs in a scratch copy (`~/.omp/wt/<id>/m`) whose folder
 names no project; a child whose own folder is undeclared and has no git remote works for its live
 parent's project — card, recall, notes, known fixes and logged events — instead of a phantom `m`
 (61 child sessions in one week had run with no project notes at all).
 
-**Tora (optional local scorer).** While a Tora session (a local EmbeddingGemma 2 scorer that lives
-as long as its agent session; `%LOCALAPPDATA%\tora\sessions\<pid>.json` says where it listens, and a
-stale file whose process is gone is ignored) is running, it serves three places. It is **optional and
-fails open**: no session, a refused or slow call, or a malformed answer leaves each exactly as it was
-without Tora. `BRAIN_TORA=off` disables it; private notes are never sent to it.
+**Tora (optional local scorer and judge).** While a Tora session (local EmbeddingGemma 2 and
+Qwen3-Reranker-0.6B servers that live as long as their agent session;
+`%LOCALAPPDATA%\tora\sessions\<pid>.json` says where it listens, and a stale file whose process is
+gone is ignored) is running, it judges recall (above) and serves three more places. It is
+**optional and fails open**: no session, a refused or slow call, or a malformed answer leaves each
+exactly as it was without Tora. `BRAIN_TORA=off` disables it; private notes are never sent to it.
 
-- **Judged recall.** Notes BM25 ranked in its top three (among visible, non-private, non-retired
-  notes) that the lexical answer gated out go to Tora; the two best at cosine 0.74 or more join the
-  lexical candidates in the same Jev request and appear, after whatever recall would answer without
-  Tora (a plan-doc heading included, still checked as before), only if Jev keeps them (0.78), within
-  the usual three lines. A note only Tora finds is never sent. On 566 real queries with three blind
-  judges per changed answer, such notes were right 15 of 15 (11 of 16 under 0.74); Tora-only notes,
-  the previous rule, 19 of 31. Tora waits at most 0.8 s and is not asked when no such note exists or
-  no judge is configured. Recall rows gain `tora`: `ms` and `c`, one `[id, cosine, Jev probability,
-  kept]` per note Tora scored (probability and kept are null when it was not sent: under the floor,
-  past the two, or no usable verdict). `brain stats` sums recalls, notes scored, sent to Jev and kept.
+- **Judged recall.** Among visible, non-private, non-retired notes, BM25's top three that the lexical
+  answer gated out are eligible. With the local Tora judge, the first two join the lexical candidates
+  directly in `/judge`, without `/score`; the reranker bar stays **0.999** (0.78 mapped). Notes only
+  Tora finds are never sent. They appear only after passing the judge, within the usual three lines.
+  A temp-home replay of 788 deduplicated real queries (14 days) added 8 notes and removed none;
+  blind TypeSafe Jev rated all eight relevant (probabilities 0.77–0.97). `/score` requests fell
+  487 → 0, `/judge` increased 0.26/query. Observed latency p50 was 77 → 88 ms, p95 194 → 201 ms;
+  both replay arms shared the old cooldown state, so these are not isolated latency estimates.
+  The Jev judge path retains the cosine ≥0.74 prefilter and best-two cap (566-query evaluation:
+  15/15 relevant above that floor versus 11/16 below). Only this cosine path emits `tora`:
+  `ms` and `[id, cosine, judge probability, kept]` rows; local direct judging uses `recall`
+  candidate-stage and route diagnostics instead.
 - **The start card (OMP).** At the first prompt, and on the card a compaction brings back, a prompt
   with three or more content words is ranked by Tora's cosine instead of BM25 when Tora answers within
   0.3 s (45 real first prompts: precision@3 0.36 against 0.18). Without a live Tora the card renders at
@@ -104,11 +127,16 @@ without Tora. `BRAIN_TORA=off` disables it; private notes are never sent to it.
   lexical neighbours, in the same pair request (10 real replacements: one more contradiction caught;
   40 ordinary writes: no extra hint).
 
-**Tidy and note usage.** `brain tidy [--all] [--days N]` is a read-only report of duplicate or
-contradictory notes and active notes older than N days (default 30) with no recent use. Without
-a judge key it lists lexical similarities, not semantic claims. With `TYPESAFE_API_KEY`, public
-pairs are checked in batches of at most 20; private text never leaves the machine, and judge
-failures leave lexical suggestions intact. Retire commands are suggestions only, keeping the
+**Tidy and note usage.** `brain tidy [--all] [--days N] [--pair-budget N]` is a read-only report of
+duplicate or contradictory notes, active notes older than N days (default 30) with no recent use,
+and active global notes whose tags match no registered or inferred project tag (so no scoped
+recall sees them; scope is never widened automatically). Candidates are whole-body lexical
+overlap (Jaccard ≥ 0.2), plus at most 50 low-overlap extras: notes naming another note's id, and
+same-project notes sharing two rare terms (held by at most three notes). Without a judge key it
+lists them as unjudged similarities, not semantic claims. With `TYPESAFE_API_KEY`, public pairs
+are ranked by recall/card/fix exposure and the first 20 (`--pair-budget N` for more) are judged
+in batches of at most 20; the rest stay listed as unreviewed with a count. Private text never
+leaves the machine, and judge failures leave lexical suggestions intact. Retire commands are suggestions only, keeping the
 newer note. New public CLI/tool notes can append a duplicate/contradiction hint; no hint changes
 the normal reply, and subagents skip it. Local per-note telemetry counts recalls, explicit id
 opens, rendered card appearances and fix fires across the current and rotated logs. One 1 MiB
@@ -117,6 +145,9 @@ the retained rows actually cover (`Unused 17d, telemetry since …; 30d asked`) 
 notes only within it.
 `brain stats --days N` reports used/never-used active notes across the Brain home, like its
 other usage totals; retained telemetry, not an unlimited lifetime history, defines that window.
+Its asks-by-week section reads the hosts' session files once per change: parsed per-transcript
+summaries (cwd, asks; no transcript text) are cached in the derived `state/asks-cache.json`, and
+which project a session belongs to is decided afresh on every run.
 
 **Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`,
 which marks an entry that does not resolve here `(missing under <root>)`)
@@ -146,8 +177,13 @@ Recall searches the whole registered section, preferring more distinct query ter
    recurring fixes counted over child sessions, standing rules (≤6 lines/80 tokens), up to eight
    parent-session edited paths, and live H2/H3 doc headings with line numbers (≤60 tokens). A
    complete section whose heading best matches the brief is included only when it fits both
-   ≤120 tokens and the remaining card budget; ordinary project notes use leftover space. Children
-   never inherit Goal/Next/Done or auto observations, and cannot overwrite state through the
+   ≤120 tokens and the remaining card budget. Naming a doc boosts its navigation entries, not
+   full-section selection. Topical briefs rank navigation before its cap and omit unrelated
+   headings unless their doc is named; without a brief a small source-order outline remains. Ordinary child
+   notes must pass lexical recall eligibility for topical briefs (Tora only orders eligible notes);
+   vague/no-brief children retain static fallback. Labels and duplicated clipped headlines are
+   never substituted for complete facts.
+   Children never inherit Goal/Next/Done or auto observations, and cannot overwrite state through the
    Brain tools (the CLI can: see below).
    Only main-session startup scans capture logs. `brain stats` separates main and sub cards.
    A tested fix that fired in 3+ sessions of the same role (child or main) this week is said on
@@ -155,6 +191,8 @@ Recall searches the whole registered section, preferring more distinct query ter
    once the mistake stops. Measured on GPT subagents: the OMP edit-grammar mistake fell from
    8/8 first edits to 2/8 with that line in the task; live on OMP 18.4.0, children whose card
    carried it (after 3 had hit the mistake) failed 0/5 first edits vs 3/3 before, for +39 tokens.
+   Expired or changed-verification fixes are not promoted as current recurring advice; missing
+   historical evidence remains advisory. Card notes show recall's stale/evidence-changed markers.
    The card holds only what the agent can act on: pending proposal counts stay in `brain review`,
    and where the `brain_*` tools are resident (OMP) their descriptions carry the when-to-act
    guidance, so the card ends with the lean-work line; CLI hosts (Claude Code, `brain card`) also
@@ -185,6 +223,11 @@ Recall searches the whole registered section, preferring more distinct query ter
    without a `[path#tag]` header (`notes/global/` holds fixes taken from logged OMP failures): the
    failed result ends with `Brain: … [id]` on its own line. The same fix again in the same context
    is a one-line pointer (`Brain: same fix as above [id]`) until a compaction drops the original.
+   Captured command repairs compare scrubbed, retained command tokens to compatible operations.
+   Captured error patterns match through runner prefixes but not longer identifiers; numeric
+   diagnostic endings never match longer numbers. Failed hooks load only global and current-project note directories.
+   Outcomes follow compatible prepared retries and target paths, not exact shell strings; a different
+   diagnostic is unknown rather than evidence that the same error persisted.
 4. **Learning.** After a few sessions, `brain review` lists (this project's and global ones;
    `--all` for every project), with their full bodies, failed
    commands that later succeeded as retries (same program and arguments, flags or a preparatory
@@ -205,8 +248,12 @@ Recall searches the whole registered section, preferring more distinct query ter
    derived from the proposal, so two scans that overlap write one note, not two. It is skipped
    when its error or headline was rejected or dismissed (a signature printed by `brain review` and
    dismissed also stops it), or a note already covers it, and it is never re-created. Untested
-   pairs, global-scope pairs, unspecific patterns, owner rules, commit trailers and Claude memory
+   pairs, host/shell-parser diagnostics, global-scope pairs, unspecific patterns, owner rules, commit trailers and Claude memory
    still wait for `brain review`; a fix that helps under half of 4+ runs is still paused.
+   Invalid capture/git cursor shapes rebuild from the event/commit source; deterministic IDs prevent duplicates.
+   Unmatched-error review validates each note body once per invocation, never across edits.
+   Event and note persistence masks Cookie/Set-Cookie values, curl cookie arguments, structured session
+   credentials and AWS temporary access-key identifiers. Other tools' `-b`/`-bench` flags stay intact.
 
    **Owner rules and Claude memory.** Main-session owner messages with durable cues (remember,
    always/never, from now on, preferences or agent-model choices) become scrubbed, ≤400-character
@@ -271,6 +318,10 @@ Recall searches the whole registered section, preferring more distinct query ter
    calls in the event logs; the biggest uncalled ones are listed. Disabling them is host config
    (OMP MCP/tool settings), not a Brain change. Anything never used for a week gets removed
    (plan rule 1).
+   Callable ArkType schemas are converted with draft-2020-12/fallback options before estimating.
+   Brain tools fall back to their declared JSON schema if conversion fails; other unconvertible
+   tools retain a name-and-description-only estimate without dropping the snapshot. The chars/4
+   estimates exclude provider framing and provider-specific normalization.
 
 Tool descriptions say when to act: recall before exploring, choosing or retrying; notes for
 repo-invisible learning; state when goal/next changes. Cards repeat it only for CLI hosts. OMP
@@ -325,6 +376,8 @@ The `[ -f … ]` guard leaves a Brain checkout to its own `.claude/settings.json
 these hooks with another command: Claude Code de-duplicates only identical handlers, so both would
 run (two cards, every fix twice). The handler fails open (`{}`, exit 0; the swallowed error
 becomes a `brain stats` row), and `2>/dev/null || echo "{}"` covers a missing `brain` or runtime.
+The installed global hooks include UserPromptSubmit, SubagentStart and Stop; this checkout owns
+the same events locally. Stop stays advisory and never requests continuation.
 The 30-second timeout also lifts SessionEnd's shared 1.5-second budget. PostToolUse runs
 `async` rather than holding every tool result about 300 ms; it may return a rollover hint
 for the next model context. The other hooks stay synchronous (card, fix, state, Stop warning). A PreCompact or SessionEnd right after the last
@@ -333,12 +386,15 @@ tool call can miss that call's event, and `claude -p` stops a PostToolUse still 
 Successful and failed tools share the capture log (a backgrounded Bash launch is not logged), so
 a failed command followed by its successful repair can become a proposal. A failure whose error a
 tested note names gets the fix (`Brain: … [id]`) once per context; a repeat gets the one-line
-pointer. The capture scan runs at SessionEnd and PreCompact, off the startup path (SessionStart on
+pointer. A fix is the note's first line, plus the next sentence when it fits, cut at 80 tokens;
+saving a note with an error whose fix line is cut there says so, so the writer leads with the
+remedy. The capture scan runs at SessionEnd and PreCompact, off the startup path (SessionStart on
 a 949-log home: ~820 → ~410 ms). PreCompact and SessionEnd save edited files (outside the project, not those under
 `~/.claude`, the session scratchpad or a temp root) and the last user ask available in the last
 256 KiB of the transcript
 (else Claude Code's `last-prompt` row; task notifications and slash commands are not asks) to
-local auto state; the agent-written plan is never replaced.
+local auto state; the agent-written plan is never replaced. Auto observations demonstrably older
+than the saved plan are omitted from its display; equal/newer or unknown timestamps remain visible.
 SessionStart source `compact` gets the card again (or the lean line when it has nothing to say);
 `resume` adds no context; saved state feeds the next session's card.
 A failed Read, Grep, Glob, LS or NotebookEdit naming a missing path gets the same "did you mean"
@@ -350,6 +406,8 @@ logs are separate from their parent’s. `agent_type` alone is also used by main
 started with `--agent` and does not imply a child. Tool hooks do not spawn git.
 SubagentStart returns the child card as `hookSpecificOutput.additionalContext` and logs a
 `sub: true` card row under the child’s session identity; empty cards return `{}`.
+Card latency for both startup and child hooks measures in-process input/loading/rendering work,
+not Node or module startup; measure process wall time separately.
 This checkout preserves its cloud setup hook and calls `bash brain/bin/brain` (Node or Bun).
 Payloads follow the [Claude Code hook reference](https://code.claude.com/docs/en/hooks).
 
@@ -366,6 +424,57 @@ attributes CLI usage to the session.
 as OMP: `brain_recall`, `brain_note` and `brain_state`. Launch in the workspace directory
 (or set `BRAIN_PROJECT`) and set `SECOND_BRAIN_HOME`. MCP has no subagent identity: the host
 must withhold `brain_state` from child agents to protect the parent’s working state.
+
+**Reversible rendering (layer 4; on by default in OMP, opt-in elsewhere).** Old, large tool
+output is swapped for a 60–90-token stub on its way to the model; the history the harness stores
+is never changed. The stub names a recall id (`t-` and 10 hex): `brain_recall t-…` or
+`brain recall t-…` returns the original verbatim; stubs of read-only tools (read, grep, glob,
+find, ls) add that re-running the tool shows it too. Originals stay in `state/elided/` for 14
+days after being saved or reused for a new elision (raw tool output, with the same exposure as
+the harness’s own transcripts).
+OMP and the proxy persist each original before committing its stub; a failed write keeps that
+output full. Equal-length replacements are recounted by content, not by character count.
+Budgets count tokens with `outputTokens` (about 5% from o200k; chars/4 runs 33–39% low on logs
+and JSON). The newest 30 000 tokens of tool output stay verbatim; older output is elided in
+epochs of 50 000 tokens, so the request prefix, and with it the provider’s prompt cache, stays
+byte-identical between epochs; output under 500 tokens is never touched. `brain stats` counts
+epochs, elided outputs, tokens saved per later request and restores.
+- OMP: on by default; `BRAIN_RENDER=off` turns it off. OMP floors its compaction trigger by the
+  stored history, so here layer 4 saves request tokens and cost, not compactions.
+- Claude Code and Codex: run `brain proxy` (127.0.0.1:47830, `--port N`; needs
+  `SECOND_BRAIN_HOME`). It fails open per request (any error forwards the original bytes), but a
+  harness pointed at a proxy that is not running cannot connect: start the proxy first, or drop
+  the setting below. Started on a pipe, it stops when its host closes stdin; otherwise on Ctrl+C
+  or SIGTERM.
+  - Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:47830/anthropic` and
+    `ENABLE_TOOL_SEARCH=true`. Behind a base URL Claude Code turns tool search off: a probe
+    request took 38 221 input tokens without the variable and 23 118 with it.
+  - Codex with a ChatGPT login, in `~/.codex/config.toml` (API-key users point `base_url` at
+    `http://127.0.0.1:47830/openai/v1`):
+
+    ```toml
+    model_provider = "brain"
+    [model_providers.brain]
+    name = "Brain proxy"
+    base_url = "http://127.0.0.1:47830/chatgpt/backend-api/codex"
+    wire_api = "responses"
+    requires_openai_auth = true
+    supports_websockets = false
+    ```
+- Overhead, measured: counting 1 MB of output takes about 1.6 ms; the OMP hook adds a median
+  0.06 ms per request. Proxy rewriting synchronously persists each new original before forwarding;
+  its previous overhead timings excluded that work and have been removed. Hook processes never load
+  `node:http`; the proxy fetches it when it starts. Importing it would add about 16 ms to every
+  Claude Code hook.
+- Measured in E6 (18 reads of 19 000-character logs, no compaction): input tokens fell 33% on
+  Claude Code through the proxy (1 run; Claude Code's own list-price estimate fell 40%; the
+  largest request peaked at 124 k tokens instead of 224 k), 39% on OMP (3 runs; cost −21%) and
+  29% on Codex (2 runs against 1 valid baseline), with every probe still answered. Wall time did
+  not rise consistently (OMP +6% over two uncontended runs, Codex −33%, Claude Code +4%). The
+  prompt-cache hit rate fell 3.7–4.9 points, because each epoch rewrites the prefix once, so the
+  E6 gate judges cache-weighted input instead (cache reads ×0.1, writes ×2): −20.7% on OMP,
+  −12.2% on Codex, +2.6% on Claude Code. Layer 4 is therefore on by default in OMP only; Codex
+  misses the 30% input criterion and Claude Code the cache-weighted one (intake doc §6).
 
 ## 4. Roll back
 
@@ -432,8 +541,8 @@ stat-validated per-process cache reuses unchanged parsed notes; Markdown remains
 **Content-bound trust and keyword recall.** New file evidence (explicit or automatic, including metadata upgrades) stores flat `evidence_sha` entries (`path=12hex`, SHA-256 of file bytes with CRLF normalized); verification refreshes those snapshots and stores `tested_sha` over the whitespace-normalized body plus error patterns. Changed readable evidence shows `(evidence changed)` and gets the same -3 card penalty as missing evidence; a change after `tested_at` prevents a known-fix push. An edited verified body/error pattern loses its +3 tested bonus and fix eligibility, with `(edited since tested)` on an id read; `brain tested <id>` re-stamps both fingerprints. Missing files retain the existing advisory behavior, and absent `tested_sha` is legacy trusted (mi…
 
 `brain export <dir>` writes the public notes as an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
-0.2 bundle for OKF readers: `kind` becomes `type`, `tested_by` becomes `verified` (`human:owner`
-only for the owner), retired notes become `status: deprecated` with links to their replacement.
+0.2 bundle for OKF readers: `kind` becomes `type`, currently verified content gets `verified`
+(`human:owner` only for the owner; edited bodies/error patterns omit it), and retired notes become `status: deprecated` with replacement links.
 Private notes are never exported. The folder must be empty or an earlier export (which is
 replaced), and outside the Brain home except under `state/`.
 
@@ -453,6 +562,20 @@ but pull-only, so they do not occupy unrelated start cards. Projects need nothin
 { "projects": { "sztool": { "aliases": ["sz-tool", "sz-tools"], "tags": ["sparking-zero"] } } }
 ```
 
+Changes that read a file and write it back are serialized, not just the final replacement. Moving,
+upgrading, retiring, sharing or marking a note tested, tagging a project or registering its docs,
+rejecting a proposal and a `brain convert` merge each take a claim file in `state/locks/` (local,
+never synced), reload what they are changing once they hold it, and release it when done. Two
+processes tagging one project keep both tags, and two moves of one note never leave two copies. A
+move or upgrade built from a stale snapshot (the note was moved or retired, or its body changed,
+since it was read) fails with an explicit message and writes nothing. Claims cover synchronous
+read-modify-writes of milliseconds. A dead owner's claim is reclaimed immediately, as is a leftover
+claim from the current process that it no longer holds. Every claim and reclaim gate expires after
+15 seconds, even with a live pid, so pid reuse or failed cleanup cannot permanently wedge writes.
+A writer that cannot get a fresh claim within about 3 seconds fails with a `ClaimError` naming the
+holder pid and full claim path; hooks skip the contended write after that bounded wait. Retry, or,
+if no Brain command is running, delete the claim file named in the error.
+
 `brain check` reports any file it cannot read.
 
 ## 6. Develop
@@ -466,14 +589,20 @@ both Vitest projects; `npm run check` adds lint and type checking. Every run put
 homes and repos under one `brain-test-run-*` folder in the OS temp directory and removes it at the
 end (`TMPDIR`/`TEMP`/`TMP` point there for the tests and their child processes); runs before
 2026-10-15 left about 1,000 `brain-*` folders each. The full gate includes
-`test/eval.test.ts`, which runs the frozen V3 recall queries against the committed live `notes/`
-and grades judged answers on the hand-labelled real queries, plan-doc headings included: the four
+`test/eval.test.ts`, which runs historical V3 recall queries against the complete checked-in
+`recall-v3-corpus.json` snapshot, independently of live curation, plus current-corpus scope/migration checks.
+It grades judged answers on the hand-labelled real queries against that historical corpus, plan-doc headings included: the four
 registered docs are frozen as fixtures, each doc section carries a majority-of-three blind label,
-every candidate the judge would see must have recordings (four runs), and an unexpected or
-unlabelled doc answer counts as wrong. Current result on all four runs: frozen 34 right 7–8,
-held-out 20 right 4–5, judged wrong 0.
+every candidate the judge would see must have recordings (four Jev runs, and Tora's reranker on GPU
+and CPU in `recall-judge-tora.json`), and an unexpected or unlabelled doc answer counts as wrong.
+Current result: Jev runs frozen 34 right 7–8, held-out 20 right 5–6, judged wrong 0; Tora runs 2
+and 6 right with their three known wrong answers (R27, R33, H07) and V3 dev 10/15. Re-record Tora
+against a live Tora started with that device: `BRAIN_EVAL_RECORD_TORA=gpu npx vitest run test/eval.test.ts`.
 `npm run perf` measures real-home read paths plus isolated synthetic 1,000/5,000-note corpora,
-using Node built-ins and recording aggregates in `state/perf.json` with previous-run deltas.
+and fresh-process Node baseline, no-op/success/failure hooks, stats and check. Hook startup
+keeps optional CLI servers, judges and maintenance commands lazy-loaded. Measurements use
+Node built-ins and record aggregates in `state/perf.json` with previous-run deltas; hook writes
+and host-session scans use disposable homes.
 
 `node scripts/agentbench.ts` runs small coding tasks (rename, fix, find, combo, and a memory
 task whose answer lives only in a Brain note) with headless OMP agents, Brain `off` vs `on` vs

@@ -10,8 +10,10 @@ process.env.CLAUDE_CONFIG_DIR = claude;
 process.env.PI_CODING_AGENT_DIR = omp;
 afterAll(() => { rmSync(claude, { recursive: true, force: true }); rmSync(omp, { recursive: true, force: true }); });
 
-// Never inherit the owner's credentials, including in CLI child processes.
+// Never inherit the owner's credentials or live Tora session (it judges recall now), including in CLI
+// child processes. Tora tests pass their own env with a fake session directory.
 delete process.env.TYPESAFE_API_KEY;
+process.env.BRAIN_TORA = "off";
 beforeEach(() => {
   delete process.env.TYPESAFE_API_KEY;
   vi.stubGlobal("fetch", () => { throw new Error("Network is disabled in tests; mock fetch explicitly"); });

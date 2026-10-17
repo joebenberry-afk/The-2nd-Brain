@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { collectAsks, formatWeek, parseAsks, weeklyAsks } from "../src/asks.ts";
+import { collectAsks, formatWeek, MAX_WEEKS, parseAsks, weeklyAsks, type Ask } from "../src/asks.ts";
 
 const roots: string[] = [];
 afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
@@ -87,4 +87,127 @@ it("collects main sessions of the project only, never subagent transcripts, and 
   expect(rows[0]).toMatchObject({ asks: 0 });
   expect(formatWeek(rows[0]!)).toBe("2026-09-28 · 0 asks");
   expect(formatWeek(rows[1]!)).toBe("2026-10-05 · 4 asks · turns median 4 (p75 5) · wall median 0.5 min");
+});
+
+// ---- scan cache ----
+
+const DAY = 86_400_000;
+const tmp = (): string => { const dir = mkdtempSync(join(tmpdir(), "brain-asks-")); roots.push(dir); return dir; };
+const session = (path: string, header: object, ...entries: object[]): void => {
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, jsonl(header, ...entries).join("\n") + "\n");
+};
+/** One OMP ask `daysAgo` days back (relative to now: the cache prunes by the real clock): `turns` requests, the last `seconds` after the prompt. */
+const askAt = (daysAgo: number, minute: number, turns: number, seconds: number): object[] => {
+  const start = Date.now() - daysAgo * DAY + minute * 60_000;
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  return [ompUser(iso(start)), ...Array.from({ length: turns }, (_, i) => ompAssistant(iso(start + (i === turns - 1 ? seconds : 1 + i) * 1000)))];
+};
+const age = (path: string, days: number): void => { const at = new Date(Date.now() - days * DAY); utimesSync(path, at, at); };
+const turnsOf = (asks: Ask[]): number[] => asks.map(a => a.turns).sort((a, b) => a - b);
+type Stored = { v: number; files: Record<string, { cwd: string | null; asks: { turns: number }[] | null }> };
+const readCache = (file: string): Stored => JSON.parse(readFileSync(file, "utf8")) as Stored;
+
+it("cache: an unchanged transcript is served from the cache; an append or a same-size rewrite is parsed again", () => {
+  const dir = tmp();
+  const file = join(dir, "omp", "proj", "main.jsonl");
+  const cache = join(dir, "state", "asks-cache.json");
+  const scan = (): Ask[] => collectAsks({ omp: join(dir, "omp") }, 0, cwd => cwd === "/work/mine", cache);
+  session(file, { type: "session", cwd: "/work/mine" }, ...askAt(1, 0, 3, 30));
+
+  expect(scan().map(a => [a.turns, a.wallMs / 1000])).toEqual([[3, 30]]);
+  const stored = readCache(cache);
+  expect(Object.keys(stored.files)).toEqual([file]);
+  expect(readFileSync(cache, "utf8")).not.toContain("do it"); // summaries only, no transcript text
+
+  // Reuse: a doctored summary comes back as is while the file is unchanged.
+  stored.files[file]!.asks![0]!.turns = 99;
+  writeFileSync(cache, JSON.stringify(stored));
+  expect(turnsOf(scan())).toEqual([99]);
+
+  // An active transcript grows: size changes, the file is parsed again.
+  appendFileSync(file, jsonl(...askAt(1, 10, 2, 20)).join("\n") + "\n");
+  expect(turnsOf(scan())).toEqual([2, 3]);
+
+  // Rewritten in place with the same size and mtime put back: ctime still moves.
+  const before = statSync(file);
+  writeFileSync(file, readFileSync(file, "utf8").replace("\"role\":\"assistant\"", "\"role\":\"assistxnt\""));
+  utimesSync(file, before.atime, before.mtime);
+  expect(statSync(file).size).toBe(before.size);
+  expect(turnsOf(scan())).toEqual([2, 2]);
+});
+
+it("cache: a wider window parses the transcripts the narrow one skipped; a new scope parses only newly accepted ones", () => {
+  const dir = tmp();
+  const sessions = join(dir, "omp", "proj");
+  const cache = join(dir, "state", "asks-cache.json");
+  const mine = join(sessions, "mine.jsonl"), old = join(sessions, "old.jsonl"), theirs = join(sessions, "theirs.jsonl");
+  session(mine, { type: "session", cwd: "/work/mine" }, ...askAt(1, 0, 2, 20));
+  session(old, { type: "session", cwd: "/work/mine" }, ...askAt(21, 0, 4, 40));
+  age(old, 21);
+  session(theirs, { type: "session", cwd: "/work/theirs" }, ...askAt(1, 30, 5, 50));
+  const scan = (days: number, accept: (cwd: string) => boolean): Ask[] => collectAsks({ omp: join(dir, "omp") }, Date.now() - days * DAY, accept, cache);
+  const isMine = (cwd: string): boolean => cwd === "/work/mine";
+
+  expect(turnsOf(scan(7, isMine))).toEqual([2]);
+  expect(Object.keys(readCache(cache).files).sort()).toEqual([mine, theirs].sort()); // old is outside the window: not read
+  expect(readCache(cache).files[theirs]).toMatchObject({ cwd: "/work/theirs", asks: null }); // another project: header only
+
+  expect(turnsOf(scan(30, isMine))).toEqual([2, 4]); // wider window: the skipped transcript is read now
+  expect(Object.keys(readCache(cache).files)).toHaveLength(3);
+
+  expect(turnsOf(scan(7, () => true))).toEqual([2, 5]); // wider scope: the other project's file is parsed now
+  expect(readCache(cache).files[theirs]!.asks).toHaveLength(1);
+
+  // A project (re)registered between scans: accept is asked afresh, its answers are never stored.
+  expect(turnsOf(scan(7, cwd => cwd === "/work/theirs"))).toEqual([5]);
+  expect(turnsOf(scan(7, isMine))).toEqual([2]);
+  expect(Object.keys(readCache(cache).files)).toHaveLength(3); // narrowing again keeps what was parsed
+});
+
+it("cache: forgets deleted and unsupported-age transcripts, ignores a corrupt, foreign or malformed cache, and survives an unwritable location", () => {
+  const dir = tmp();
+  const cache = join(dir, "state", "asks-cache.json");
+  const live = join(dir, "omp", "proj", "live.jsonl"), gone = join(dir, "omp", "proj", "gone.jsonl"), ancient = join(dir, "omp", "proj", "ancient.jsonl");
+  session(live, { type: "session", cwd: "/work/mine" }, ...askAt(1, 0, 2, 20));
+  session(gone, { type: "session", cwd: "/work/mine" }, ...askAt(1, 10, 3, 30));
+  session(ancient, { type: "session", cwd: "/work/mine" }, ...askAt(7 * (MAX_WEEKS + 8), 0, 6, 60));
+  age(ancient, 7 * (MAX_WEEKS + 8));
+  const scan = (file = cache): Ask[] => collectAsks({ omp: join(dir, "omp") }, 0, () => true, file);
+
+  expect(turnsOf(scan())).toEqual([2, 3, 6]); // a caller may ask for more than the supported window: answered, not retained
+  expect(Object.keys(readCache(cache).files).sort()).toEqual([gone, live].sort());
+  rmSync(gone);
+  expect(turnsOf(scan())).toEqual([2, 6]);
+  expect(Object.keys(readCache(cache).files)).toEqual([live]);
+
+  writeFileSync(cache, "{not json");
+  expect(turnsOf(scan())).toEqual([2, 6]);
+  expect(Object.keys(readCache(cache).files)).toEqual([live]); // rewritten valid
+
+  const foreign = readCache(cache);
+  foreign.v = foreign.v + 1;
+  foreign.files[live]!.asks![0]!.turns = 99;
+  writeFileSync(cache, JSON.stringify(foreign));
+  expect(turnsOf(scan())).toEqual([2, 6]); // another cache version is not trusted
+
+  const malformed = readCache(cache);
+  malformed.files[live] = { cwd: 5 } as never;
+  writeFileSync(cache, JSON.stringify(malformed));
+  expect(turnsOf(scan())).toEqual([2, 6]);
+  expect(readCache(cache).files[live]!.cwd).toBe("/work/mine");
+
+  writeFileSync(join(dir, "blocker"), "");
+  expect(turnsOf(scan(join(dir, "blocker", "cache.json")))).toEqual([2, 6]); // the cache cannot be written: the scan still answers
+});
+
+it("cache: a transcript with no cwd is remembered as such and contributes nothing", () => {
+  const dir = tmp();
+  const cache = join(dir, "state", "asks-cache.json");
+  const file = join(dir, "omp", "proj", "headless.jsonl");
+  session(file, { type: "session" }, ...askAt(1, 0, 2, 20));
+  const scan = (): Ask[] => collectAsks({ omp: join(dir, "omp") }, 0, () => true, cache);
+  expect(scan()).toEqual([]);
+  expect(readCache(cache).files[file]).toMatchObject({ cwd: null, asks: [] });
+  expect(scan()).toEqual([]);
 });

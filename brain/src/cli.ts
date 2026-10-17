@@ -4,27 +4,21 @@
  */
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { collectAsks, formatWeek, hostSessionRoots, weeklyAsks, windowStart } from "./asks.ts";
-import { acceptProposal, appendEvent, autoEvidence, captureUserRules, dismissError, findFix, listClaudeMemory, listProposals, rejectProposal, renderFix, scanCommits, scanEvents, scrubCut, sessionEdits, toolEventFrom, unmatchedErrors } from "./capture.ts";
+import { collectAsks, formatWeek, hostSessionRoots, MAX_WEEKS, weeklyAsks, windowStart } from "./asks.ts";
+import { acceptProposal, appendEvent, autoEvidence, captureUserRules, dismissError, findFix, fixCutHint, listClaudeMemory, listProposals, rejectProposal, renderFix, scanCommits, scanEvents, scrubCut, sessionEdits, toolEventFrom, unmatchedErrors } from "./capture.ts";
+import { operationOf, outcomeOf, type PendingFix } from "./outcome.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
-import { convertV3 } from "./convert.ts";
 import { projectDocs, suggestDocs } from "./docs.ts";
-import { createNote, differentBody, errorPatternProblem, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, markTested, retireNote, saveNote, staleAfterProblem, TESTERS, upgradeNote, type Kind } from "./notes.ts";
-import { exportOkf, OKF_VERSION } from "./okf.ts";
+import { createNote, differentBody, errorPatternProblem, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, loadVisibleNotes, markTested, retireNote, staleAfterProblem, TESTERS, updateNote, upgradeNote, type Kind } from "./notes.ts";
 import { addProjectDoc, docFile, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { pathHint } from "./paths.ts";
-import { silentRecallLines } from "./silent.ts";
-import { runMcp } from "./mcp.ts";
-import { judgedAnswer, typesafeJudge, typesafePairJudge, type ToraRecall } from "./judge.ts";
-import { toraScorer } from "./tora.ts";
+import type { JudgeName, ToraRecall, RecallTrace } from "./judge.ts";
 import { scrub } from "./scrub.ts";
-import { shareNote, sync } from "./sync.ts";
 import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, usageWindow, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
-import { noteHint, tidyReport } from "./tidy.ts";
 import { rolloverHint } from "./rollover.ts";
 
 export interface Io {
@@ -50,11 +44,12 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain project docs add <path> · project docs list · project docs suggest [-n N]
   brain sync [--no-push] [-m <message>]
   brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
-  brain tidy [--all] [--days N]                 read-only duplicates, contradictions and unused notes
-  brain export <dir>                           public notes as an OKF ${OKF_VERSION} bundle (one way)
+  brain tidy [--all] [--days N] [--pair-budget N]  read-only duplicates, contradictions, unused notes, unseen global tags
+  brain export <dir>                           public notes as an OKF bundle (one way)
   brain hook claude-code                       Claude Code hook (JSON on stdin)
   brain hook agents-md                         print the managed agent instructions
   brain mcp                                    MCP server on stdio (brain_recall, brain_note, brain_state)
+  brain proxy [--port N]                       layer 4 proxy for Claude Code and Codex, 127.0.0.1 only (default port 47830)
 
 Every command takes --home <dir> and --project <id>. Kinds: ${KINDS.join(", ")}.`;
 
@@ -80,9 +75,11 @@ const OPTIONS = {
   "no-push": { type: "boolean" },
   message: { type: "string", short: "m" },
   days: { type: "string" },
+  "pair-budget": { type: "string" },
   from: { type: "string" },
   to: { type: "string" },
   "dry-run": { type: "boolean" },
+  port: { type: "string" },
   help: { type: "boolean", short: "h" },
 } as const;
 
@@ -119,8 +116,8 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
-function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[], judged?: boolean, dropped?: number, tora?: ToraRecall): void {
-  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID, hits, id, query, ids, judged, dropped, tora });
+function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[], judged?: boolean, dropped?: number, tora?: ToraRecall, judge?: JudgeName, recall?: RecallTrace): void {
+  logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID, hits, id, query, ids, judged, judge, dropped, tora, recall });
 }
 
 /** Fixes that stopped helping (see demotedFixes): no longer fired until their note is edited. */
@@ -132,6 +129,7 @@ function fixesToReview(c: Ctx): number {
   return paused.length;
 }
 
+// Exception to static imports: optional command modules must not tax each short-lived hook startup.
 const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   project(c) {
     const [kind, action, path, ...extra] = c.args;
@@ -160,17 +158,19 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   },
 
   async recall(c) {
+    // Lazy command loading keeps optional judge code off the no-op hook startup path.
+    const { recallFor } = await import("./judge.ts");
     const query = need(c.args.join(" "), "a query");
-    const { text, hits, ids, judged, dropped, tora } = await judgedAnswer(loadNotes(c.home).notes, query, {
+    const { text, hits, ids, judged, judge, dropped, tora, recall } = await recallFor(loadNotes(c.home).notes, query, {
       project: c.project,
       home: c.home,
       tools: false,
       all: c.opts.all === true,
       history: c.opts.history === true,
       limit: positiveInt(c.opts.limit, 3),
-    }, typesafeJudge(c.io.env), toraScorer(c.io.env));
+    }, c.io.env);
     c.io.out(text);
-    use(c, "recall", text, hits, undefined, query, ids, judged, dropped, tora);
+    use(c, "recall", text, hits, undefined, query, ids, judged, dropped, tora, judge, recall);
     return 0;
   },
 
@@ -183,6 +183,9 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   },
 
   async note(c) {
+    const { noteHint } = await import("./tidy.ts");
+    const { typesafePairJudge } = await import("./judge.ts");
+    const { toraScorer } = await import("./tora.ts");
     const text = need(c.args.join(" "), "note text");
     const kind = c.opts.kind ?? "note";
     if (!(KINDS as readonly string[]).includes(kind)) throw new UsageError(`unknown kind ${kind} (${KINDS.join(", ")})`);
@@ -232,7 +235,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       source: "agent",
     });
     if (old) retireNote(c.home, old.id, note.id);
-    c.io.out(`saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env), toraScorer(c.io.env))}`);
+    c.io.out(`saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${fixCutHint(note)}${await noteHint(c.home, note, loadNotes(c.home).notes, typesafePairJudge(c.io.env), toraScorer(c.io.env))}`);
     use(c, "note", text);
     return 0;
   },
@@ -265,12 +268,12 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
 
   tested(c) {
     const id = need(c.args[0], "a note id");
-    const note = findNote(loadNotes(c.home).notes, id);
-    if (!note) throw new Error(`no note ${id}`);
-    const project = note.project === GLOBAL ? c.project : projectById(c.home, note.project, c.io.cwd);
-    // Another repo's files are not this note's evidence: without the note's own checkout, only the Brain home resolves.
-    const checkout = note.project === GLOBAL || (!!project.root && resolveProject(c.home, project.root, {}).id === project.id);
-    saveNote(c.home, markTested(note, "owner", (checkout ? [project.root, project.docRoot, c.home] : [c.home]).filter((root): root is string => !!root)));
+    const note = updateNote(c.home, id, (fresh) => {
+      const project = fresh.project === GLOBAL ? c.project : projectById(c.home, fresh.project, c.io.cwd);
+      // Another repo's files are not this note's evidence: only the note's own checkout resolves.
+      const checkout = fresh.project === GLOBAL || (!!project.root && resolveProject(c.home, project.root, {}).id === project.id);
+      return markTested(fresh, "owner", (checkout ? [project.root, project.docRoot, c.home] : [c.home]).filter((root): root is string => !!root));
+    });
     c.io.out(`tested ${note.id}`);
     return 0;
   },
@@ -279,14 +282,13 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const id = need(c.args[0], "a note id");
     const target = need(c.opts.to, "--to <project|global>");
     const to = slug(target) === GLOBAL ? GLOBAL : projectById(c.home, target, c.io.cwd).id;
-    const note = findNote(loadNotes(c.home).notes, id);
-    if (!note) throw new Error(`no note ${id}`);
-    saveNote(c.home, { ...note, project: to });
+    const note = updateNote(c.home, id, (fresh) => ({ ...fresh, project: to }));
     c.io.out(`moved ${note.id} to ${to}`);
     return 0;
   },
 
-  share(c) {
+  async share(c) {
+    const { shareNote } = await import("./sync.ts");
     const id = need(c.args[0], "a note id");
     const tag = need(c.opts.tag?.[0], "--tag");
     const note = shareNote(c.home, id, tag);
@@ -294,7 +296,8 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     return 0;
   },
 
-  review(c) {
+  async review(c) {
+    const { silentRecallLines } = await import("./silent.ts");
     const notes = loadNotes(c.home).notes;
     scanEvents(c.home, notes);
     const root = gitRoot(c.io.cwd);
@@ -353,26 +356,36 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     return 0;
   },
 
-  sync(c) {
+  async sync(c) {
+    const { sync } = await import("./sync.ts");
     c.io.out(sync(c.home, { message: c.opts.message, push: c.opts["no-push"] !== true }).message);
     return 0;
   },
 
   async tidy(c) {
+    const { tidyReport } = await import("./tidy.ts");
+    const { typesafePairJudge } = await import("./judge.ts");
     const days = positiveInt(c.opts.days, 30);
     const judge = typesafePairJudge(c.io.env);
-    const report = await tidyReport(c.home, loadNotes(c.home).notes, c.project, { days, all: c.opts.all === true, judge });
+    const pairBudget = c.opts["pair-budget"] === undefined ? undefined : positiveInt(c.opts["pair-budget"], 20);
+    const report = await tidyReport(c.home, loadNotes(c.home).notes, c.project, { days, all: c.opts.all === true, judge, pairBudget });
     let shown = false;
-    for (const [title, pairs] of [["Duplicates", report.duplicates], ["Contradictions", report.contradictions], ["Similar (no judge)", report.similar]] as const) {
+    for (const [title, pairs] of [["Duplicates", report.duplicates], ["Contradictions", report.contradictions], ["Similar (not judged)", report.similar]] as const) {
       if (!pairs.length) continue;
       shown = true;
       c.io.out(title);
-      for (const { a, b } of pairs) c.io.out("  " + a.id + " ⇄ " + b.id + "  " + headline(a) + " | " + headline(b) + (title === "Similar (no judge)" ? "" : " · brain retire " + a.id + " --by " + b.id));
+      for (const { a, b, via } of pairs) c.io.out("  " + a.id + " ⇄ " + b.id + "  " + headline(a) + " | " + headline(b) + (via === "lexical" || via === "tora" ? "" : ` [${via}]`) + (title === "Similar (not judged)" ? "" : " · brain retire " + a.id + " --by " + b.id));
     }
+    if (judge && (report.reviewed || report.unreviewed)) c.io.out(`judged ${report.reviewed} public pairs · ${report.unreviewed} unreviewed${report.unreviewed ? " (--pair-budget N judges more)" : ""}`);
     if (report.unused.length) {
       shown = true;
       c.io.out("Unused " + report.unusedWindow);
       for (const note of report.unused) c.io.out("  " + note.id + "  " + headline(note) + " · brain retire " + note.id);
+    }
+    if (report.orphans.length) {
+      shown = true;
+      c.io.out("Global notes no project can see (tags match no registered or inferred project tag)");
+      for (const note of report.orphans) c.io.out("  " + note.id + " [" + note.tags.join(", ") + "]  " + headline(note) + " · add the tag to a project in projects.json, or drop it from the note");
     }
     if (!shown) c.io.out("nothing to tidy");
     return 0;
@@ -387,13 +400,15 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
     c.io.out(`recall: ${s.recallQueries.logged} queries logged, ${s.recallQueries.silent} silent`);
     const t = s.tora;
-    c.io.out(`tora: ${t.recalls} recalls · ${t.scored} BM25 candidates scored · ${t.judged} sent to Jev · ${t.kept} kept`);
+    c.io.out(`tora: ${t.recalls} recalls · ${t.scored} BM25 candidates scored · ${t.judged} sent to the judge · ${t.kept} kept`);
+    c.io.out(`judged recalls: ${s.judges.tora} by Tora (local) · ${s.judges.jev} by Jev (paid)`);
     const active = loadNotes(c.home).notes.filter(note => !note.retired);
     const usage = noteUsage(c.home, s.days);
     const used = active.filter(note => usage.notes.has(note.id)).length;
     c.io.out(`notes used (${usageWindow(usage, s.days)}): ${used} of ${active.length} active · never: ${active.length - used} (brain tidy)`);
     c.io.out(`brain tools used in: ${s.toolUse.main.using}/${s.toolUse.main.sessions} main sessions · ${s.toolUse.sub.using}/${s.toolUse.sub.sessions} sub`);
     c.io.out(`tool use by surface: ${s.toolCalls.tool} tool · ${s.toolCalls.cli} cli · ${s.toolCalls.mcp} mcp calls (recall/note/state; unattributed history excluded)`);
+    if (s.layer4.epochs) c.io.out(`layer 4 (reversible rendering): ${s.layer4.epochs} epochs · ${s.layer4.elided} outputs elided · ${s.layer4.saved} tokens saved per later request · ${s.layer4.restores} restores`);
     const schemas = toolSchemaUse(c.home, s.days);
     if (schemas) {
       const waste = schemas.unused.reduce((sum, tool) => sum + tool.tokens, 0);
@@ -406,10 +421,10 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       }
     }
     // Outcome per owner request, from the hosts' own session files (retrospective, nothing logged).
-    const weeks = Math.min(12, Math.max(4, Math.ceil(s.days / 7)));
+    const weeks = Math.min(MAX_WEEKS, Math.max(4, Math.ceil(s.days / 7)));
     const now = new Date();
     const everyone = c.opts.all === true;
-    const asks = collectAsks(hostSessionRoots(c.io.env), windowStart(now, weeks), cwd => everyone || resolveProject(c.home, cwd, {}).id === c.project.id);
+    const asks = collectAsks(hostSessionRoots(c.io.env), windowStart(now, weeks), cwd => everyone || resolveProject(c.home, cwd, {}).id === c.project.id, join(c.home, "state", "asks-cache.json"));
     c.io.out(`asks by week (main sessions, OMP + Claude Code, UTC weeks, ${everyone ? "all projects" : c.project.id}; turns = model requests per prompt; idle >5 min ends an ask):`);
     for (const row of weeklyAsks(asks, weeks, now)) c.io.out("  " + formatWeek(row));
     if (s.fixes.length) c.io.out(`fixes fired: ${s.fixes.slice(0, 5).map((f) => `${f.id} in ${f.sessions} session${f.sessions === 1 ? "" : "s"}`).join(" · ")}`);
@@ -446,17 +461,48 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     return errors.length ? 1 : 0;
   },
 
-  convert(c) {
+  async convert(c) {
+    const { convertV3 } = await import("./convert.ts");
     const report = convertV3(need(c.opts.from, "--from"), c.home, { dryRun: c.opts["dry-run"] === true });
     c.io.out(`written ${report.written}, skipped ${report.skipped}, projects ${report.projects}${c.opts["dry-run"] ? " (dry run)" : ""}`);
     for (const e of report.errors) c.io.err(e);
     return report.errors.length ? 1 : 0;
   },
 
-  export(c) {
+  async export(c) {
+    const { exportOkf, OKF_VERSION } = await import("./okf.ts");
     if (c.args.length !== 1) throw new UsageError("use brain export <dir>");
     const report = exportOkf(c.home, loadNotes(c.home).notes, resolve(c.io.cwd, c.args[0]!));
     c.io.out(`exported ${report.concepts} notes in ${report.projects} folders (OKF ${OKF_VERSION})${report.private ? `; ${report.private} private left out` : ""}`);
+    return 0;
+  },
+
+  // Long-lived like mcp, but it needs a home: a stub's recall id is only good while the original is stored.
+  async proxy(c) {
+    const { startProxy } = await import("./proxy.ts");
+    if (c.args.length) throw new UsageError("use brain proxy [--port N]");
+    const port = c.opts.port === undefined ? 47830 : Number(c.opts.port);
+    if (!/^\d+$/.test(c.opts.port ?? "0") || port > 65535) throw new UsageError(`expected a port from 0 to 65535, got ${c.opts.port}`);
+    const proxy = await startProxy({ port, home: c.home });
+    c.io.out(`brain proxy listening on http://127.0.0.1:${proxy.port}`);
+    const stop = Promise.withResolvers<void>();
+    process.once("SIGINT", stop.resolve);
+    process.once("SIGTERM", stop.resolve);
+    // A host that starts the proxy on a pipe owns its stdin: closing it is the polite way to stop it.
+    // A terminal, NUL or a file is no such host, and NUL ends at once: a detached proxy must stay up.
+    let piped = false;
+    try {
+      const stdin = fstatSync(0);
+      piped = !stdin.isFile() && !stdin.isCharacterDevice();
+    } catch {
+      // No stdin handle at all, as for some services: nothing to watch.
+    }
+    if (piped) process.stdin.once("end", stop.resolve).once("error", stop.resolve).resume();
+    await stop.promise;
+    process.off("SIGINT", stop.resolve);
+    process.off("SIGTERM", stop.resolve);
+    if (piped) process.stdin.off("end", stop.resolve).off("error", stop.resolve).pause();
+    await proxy.close();
     return 0;
   },
 };
@@ -500,7 +546,8 @@ function configErrors(home: string): string[] {
     if (entry.name !== slug(entry.name)) errors.push(`${path}: folder is not a project id (use ${slug(entry.name)}), never read`);
     if (entry.name === slug(entry.name) && entry.name !== GLOBAL && idFor(entry.name) !== entry.name) errors.push(`${path}: reserved device name, never read (brain move <id> --to ${idFor(entry.name)})`);
     const to = owner.get(entry.name);
-    if (to) errors.push(`${path}: ${entry.name} is an alias of ${to}; its notes are visible to no project (brain move <id> --to ${to})`);
+    // A folder emptied by `brain move` hides nothing (git keeps no empty folders; the disk may).
+    if (to && [path, join(path, "private")].some(dir => list(dir).some(file => file.isFile() && file.name.endsWith(".md")))) errors.push(`${path}: ${entry.name} is an alias of ${to}; its notes are visible to no project (brain move <id> --to ${to})`);
     for (const [dir, inner] of [[path, true], [join(path, "private"), false]] as const) {
       for (const file of list(dir)) {
         if (file.isDirectory() ? !(inner && file.name === "private") : !file.name.endsWith(".md")) {
@@ -642,6 +689,8 @@ function hookFixDir(home: string, session: string | undefined, agent?: string): 
 
 /** Claude Code hook input/output: https://code.claude.com/docs/en/hooks */
 function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
+  // In-process hook latency, including input/loading/rendering; excludes Node/module startup.
+  const started = performance.now();
   let output: object = {};
   let home: string | null = null;
   let event: unknown;
@@ -688,7 +737,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           const card = renderCard(home, notes, project, { tools: false, subagent: sub, host: "claude-code" });
           const context = card || (p.source === "compact" ? LEAN_LINE : "");
           if (context) output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context } };
-          if (card) logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub, ids: cardIds(card) });
+          if (card) logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: performance.now() - started, session: logSession, via: "hook", sub, ids: cardIds(card) });
         }
       } else if (event === "SubagentStart") {
         // The documented hook exposes identity, not the brief: registered docs only.
@@ -697,7 +746,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         const card = renderCard(home, notes, project, { tools: false, subagent: true, host: "claude-code", parentEdits });
         if (card) {
           output = { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: card } };
-          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: 0, session: logSession, via: "hook", sub: true, ids: cardIds(card) });
+          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: performance.now() - started, session: logSession, via: "hook", sub: true, ids: cardIds(card) });
         }
       } else if ((event === "PostToolUse" && !background) || (event === "PostToolUseFailure" && p.is_interrupt !== true)) {
         const fields = toolEventFrom(p.tool_name, p.tool_input, event === "PostToolUseFailure", p.error);
@@ -707,30 +756,47 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         let issuedBy: string | undefined | null = null;
         const message = (): string | undefined => (issuedBy === null ? (issuedBy = toolUseMessage(p.transcript_path, p.tool_use_id)) : issuedBy);
         if (session) {
-          const claimed = `${pendingPath}.${process.pid}.claimed`;
-          try {
-            // Claim before reading: overlapping hooks must not score one firing twice.
-            renameSync(pendingPath, claimed);
-            const pending: unknown = JSON.parse(readFileSync(claimed, "utf8"));
-            if (pending && typeof pending === "object" && "id" in pending && typeof pending.id === "string" && "project" in pending && typeof pending.project === "string") {
-              // A call of the message that received the fix ran in the same batch: the model had not
-              // seen the fix yet, so that is no outcome. The firing waits for a call of a later message.
-              const fired = "message" in pending && typeof pending.message === "string" ? pending.message : undefined;
-              const current = fired === undefined ? undefined : message();
-              if (fired !== undefined && (current === undefined || current === fired)) {
-                if (!existsSync(pendingPath)) renameSync(claimed, pendingPath);
-              } else {
-                logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome: fields.ok ? "helped" : "missed", tokens: 0, ms: 0, session: logSession, via: "hook", sub });
+          // The exact operation's file first, then the other pending fixes: a compatible retry
+          // (a prepared command) scores the fix, a result of another operation leaves it waiting.
+          let names: string[] = [];
+          try { names = readdirSync(fixDir).filter((n) => n.endsWith(".json")); }
+          catch { /* no pending fixes */ }
+          const exact = basename(pendingPath);
+          for (const name of [exact, ...names.filter((n) => n !== exact)]) {
+            const file = join(fixDir, name);
+            const claimed = `${file}.${process.pid}.claimed`;
+            let done = false;
+            try {
+              // Claim before reading: overlapping hooks must not score one firing twice.
+              renameSync(file, claimed);
+              const pending: unknown = JSON.parse(readFileSync(claimed, "utf8"));
+              if (pending && typeof pending === "object" && "id" in pending && typeof pending.id === "string" && "project" in pending && typeof pending.project === "string") {
+                const outcome = "tool" in pending && typeof pending.tool === "string" ? outcomeOf(pending as PendingFix, fields) : "other";
+                if (outcome === "other") {
+                  if (!existsSync(file)) renameSync(claimed, file);
+                } else {
+                  done = true;
+                  // A call of the message that received the fix ran in the same batch: the model had not
+                  // seen the fix yet, so that is no outcome. The firing waits for a call of a later message.
+                  const fired = "message" in pending && typeof pending.message === "string" ? pending.message : undefined;
+                  const current = fired === undefined ? undefined : message();
+                  if (fired !== undefined && (current === undefined || current === fired)) {
+                    if (!existsSync(file)) renameSync(claimed, file);
+                  } else if (outcome !== "unknown") {
+                    logUse(home, { kind: "fixout", id: pending.id, project: pending.project, outcome, tokens: 0, ms: 0, session: logSession, via: "hook", sub });
+                  }
+                }
               }
+            } catch { /* missing or torn local pending state is unmeasured */ }
+            finally {
+              try { rmSync(claimed, { force: true }); }
+              catch { /* a locked claim must not suppress the next fix */ }
             }
-          } catch { /* missing or torn local pending state is unmeasured */ }
-          finally {
-            try { rmSync(claimed, { force: true }); }
-            catch { /* a locked claim must not suppress the next fix */ }
+            if (done) break;
           }
         }
         if (!fields.ok && fields.error) {
-          const fix = findFix(loadNotes(home).notes, fields.error, project, home, "claude-code");
+          const fix = findFix(loadVisibleNotes(home, project.id).notes, fields.error, project, home, "claude-code", fields.command);
           if (fix) {
             // The full fix once per context (the directory is cleared with the context): a repeat
             // of the same error costs a pointer. As OMP does.
@@ -740,7 +806,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
             logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(text), ms: 0, session: logSession, via: "hook", sub, id: fix.id });
             if (session) {
               try {
-                writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id, message: message() }));
+                writeAtomic(pendingPath, JSON.stringify({ id: fix.id, project: project.id, message: message(), ...operationOf(fields) }));
                 writeAtomic(shown, "");
               } catch { /* telemetry state must not suppress the fix */ }
             }
@@ -750,7 +816,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
             output = { hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: hint } };
             logUse(home, { kind: "fix", project: project.id, tokens: estimateTokens(hint), ms: 0, session: logSession, via: "hook", sub, id: "pathhint" });
             if (session) {
-              try { writeAtomic(pendingPath, JSON.stringify({ id: "pathhint", project: project.id, message: message() })); }
+              try { writeAtomic(pendingPath, JSON.stringify({ id: "pathhint", project: project.id, message: message(), ...operationOf(fields) })); }
               catch { /* telemetry state must not suppress the hint */ }
             }
           }
@@ -831,7 +897,10 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
     return claudeCodeHook(io, opts.home);
   }
   // A long-lived stdio server: the MCP client owns stdout, so nothing else may print there.
-  if (command === "mcp") return runMcp({ home: opts.home, env: opts.project ? { ...io.env, BRAIN_PROJECT: opts.project } : io.env });
+  if (command === "mcp") {
+    const { runMcp } = await import("./mcp.ts");
+    return runMcp({ home: opts.home, env: opts.project ? { ...io.env, BRAIN_PROJECT: opts.project } : io.env });
+  }
   const run = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : undefined;
   if (!run) {
     io.err(`brain: unknown command ${command} (brain help)`);

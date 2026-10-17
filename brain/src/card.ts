@@ -1,8 +1,8 @@
 /** Start-of-session memory: complete facts, scoped context, and a hard total budget. */
 import { childDocContext, projectDocs } from "./docs.ts";
-import { displayLine, firstLine, GLOBAL, testedCurrent, type Note } from "./notes.ts";
+import { displayLine, expired, firstLine, GLOBAL, testedCurrent, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
-import { recall, staleHere, tokens, verifiedHere } from "./search.ts";
+import { changedHere, recall, staleHere, tokens, verifiedHere } from "./search.ts";
 import { scrub } from "./scrub.ts";
 import { fixFires, pausedFixes } from "./telemetry.ts";
 import { TORA_CARD_TIMEOUT_MS, type ToraScorer } from "./tora.ts";
@@ -100,12 +100,18 @@ export function cardSemantic(notes: Note[], project: Project, prompt: string | u
 }
 
 /** Never turn an essential fact into a clipped pointer requiring a second recall. */
-function noteLine(n: Note, room: number): string {
+function noteLine(n: Note, room: number, project: Project, home: string): string {
+  const changed = changedHere(n, project, home);
+  const marker = changed ? " (evidence changed)" : staleHere(n, project, home)
+    ? expired(n) ? ` (stale since ${n.staleAfter!.slice(0, 10)})` : " (stale evidence)" : "";
   const prefix = `- [${n.kind}${testedCurrent(n) ? ", tested" : ""}] `;
-  const suffix = ` (${n.id})`;
+  const suffix = `${marker} (${n.id})`;
   const lines = n.body.split("\n").map((line) => line.trim()).filter(Boolean);
   const title = firstLine(n);
-  const full = title.length <= 48 && lines[1] ? title + " — " + lines[1] : title;
+  const next = lines[1];
+  const headline = title.replace(/(?:…|\.\.\.)$/, "").trimEnd();
+  const duplicate = next && next.startsWith(headline) && (headline !== title || !next[headline.length] || /[\s:;,.—–-]/.test(next[headline.length]!));
+  const full = duplicate ? next : next && (title.endsWith(":") || title.length <= 48) ? title + " — " + next : title;
   const text = displayLine({ body: full }, Math.max(0, room - prefix.length - suffix.length));
   if (!text || text !== full) return "";
   const line = prefix + text + suffix;
@@ -143,7 +149,7 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
   add(cutToTokens(warning.replace(/\s+/g, " ").trim(), Math.min(40, Math.floor(room() / 4))));
   const fires = fixFires(home, true, 7, now, opts.host);
   const paused = pausedFixes(home, notes);
-  const recurring = notes.filter(note => !note.retired && verifiedHere(note, project, home) && note.errors.length && !paused.has(note.id)
+  const recurring = notes.filter(note => !note.retired && !expired(note) && verifiedHere(note, project, home) && note.errors.length && !paused.has(note.id)
     && (fires.get(note.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(note, project)
     && !(opts.host && note.host && note.host !== opts.host))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || a.id.localeCompare(b.id))
@@ -152,13 +158,13 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
   for (const note of recurring) {
     const label = said.size ? "" : "Often hit lately (sessions this week):\n";
     const count = (fires.get(note.id) ?? 0) + "× ";
-    const line = noteLine(note, room() - label.length - count.length);
+    const line = noteLine(note, room() - label.length - count.length, project, home);
     if (line && add(label + "- " + count + line.slice(2))) said.add(note.id);
   }
   const rules: string[] = [];
   for (const note of rankForCard(briefNotes(notes, project), project, warning, now, home, opts.prompt, opts.semantic)) {
     if (said.has(note.id)) continue;
-    const line = noteLine(note, 80 * 4 - ["Rules:", ...rules].join("\n").length - 1);
+    const line = noteLine(note, 80 * 4 - ["Rules:", ...rules].join("\n").length - 1, project, home);
     if (!line || ["Rules:", ...rules, line].join("\n").length > room()) continue;
     rules.push(line);
     if (rules.length === 6) break;
@@ -172,15 +178,18 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
   }
   if (files.length) add(["Files in play:", ...files].join("\n"));
   const docs = childDocContext(home, project, opts.prompt);
-  for (const line of docs.outline.split("\n")) add(line);
-  if (docs.section) add(docs.section);
+  const sectionAdded = docs.section ? add(docs.section) : false;
+  for (const line of docs.outline.split("\n")) if (!sectionAdded || line !== docs.section?.split("\n")[0]) add(line);
   // Existing project memories remain eligible only after the child-specific blocks.
   let known = 0;
-  const candidates = cardCandidates(notes, project).filter(note => !note.tags.includes("brief"));
+  const topical = tokens(opts.prompt ?? "", false, false).length >= CARD_TOPIC_WORDS;
+  const eligible = topical ? new Set(recall(cardCandidates(notes, project), opts.prompt!, { project, limit: 10 }).map(hit => hit.note.id)) : undefined;
+  // Cosine order alone has no calibrated abstention threshold: lexical recall gates ordinary facts.
+  const candidates = cardCandidates(notes, project).filter(note => !note.tags.includes("brief") && (!eligible || eligible.has(note.id)));
   for (const note of rankForCard(candidates, project, warning, now, home, opts.prompt, opts.semantic)) {
     if (said.has(note.id)) continue;
     const label = known ? "" : "Known here:\n";
-    const line = noteLine(note, room() - label.length);
+    const line = noteLine(note, room() - label.length, project, home);
     if (line && add(label + line) && ++known === CARD_NOTES) break;
   }
 
@@ -205,7 +214,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const paused = pausedFixes(home, notes);
   // Any note that could fire as a fix here qualifies, untagged globals included.
   const recurring = notes
-    .filter((n) => !n.retired && verifiedHere(n, project, home) && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project) && !(opts.host && n.host && n.host !== opts.host))
+    .filter((n) => !n.retired && !expired(n) && verifiedHere(n, project, home) && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project) && !(opts.host && n.host && n.host !== opts.host))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
   const ranked = rankForCard(candidates, project, work?.text ?? "", now, home, opts.prompt, opts.semantic);
@@ -224,7 +233,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   for (const fix of recurring) {
     const label = said.size ? [] : ["Often hit lately (sessions this week):"];
     const count = `${fires.get(fix.id)}× `;
-    const line = noteLine(fix, Math.min(80 * 4, room(label) - count.length));
+    const line = noteLine(fix, Math.min(80 * 4, room(label) - count.length), project, home);
     if (!line) continue;
     lines.push(...label, "- " + count + line.slice(2));
     said.add(fix.id);
@@ -233,7 +242,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   for (const note of ranked) {
     if (said.has(note.id)) continue;
     const label = count ? [] : ["Known here:"];
-    const line = noteLine(note, room(label));
+    const line = noteLine(note, room(label), project, home);
     if (!line) continue;
     lines.push(...label, line);
     if (++count === CARD_NOTES) break;

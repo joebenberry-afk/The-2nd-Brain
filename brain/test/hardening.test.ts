@@ -24,6 +24,35 @@ describe("secrets never reach notes or working state", () => {
     }
   });
 
+  it("masks cookie headers, session-cookie assignments and ASIA ids, but not prose", () => {
+    const sid = "q8Zr3kLm0Pw7Xv2NbT5yHc9DaE4sUf1G";
+    for (const [text, expected] of [
+      [`Cookie: sessionid=${sid}; csrftoken=abc`, "Cookie: sessionid=***; csrftoken=***"],
+      [`set-cookie: sid=${sid}; Path=/; Secure`, "set-cookie: sid=***; Path=/; Secure"],
+      [`curl -H 'Cookie: a=${sid}' https://h`, "curl -H 'Cookie: a=***' https://h"],
+      [`curl -b "a=${sid}; b=2" https://h`, 'curl -b "a=***; b=***" https://h'],
+      ["curl --cookie=a=1 https://h", "curl --cookie=a=*** https://h"],
+      ["curl -b'a=1' --cookie \"b=2\" https://h", "curl -b'a=***' --cookie \"b=***\" https://h"],
+      ["curl -b a=1 https://h; make -b CC=clang", "curl -b a=*** https://h; make -b CC=clang"],
+      [`{"cookie": "sid=${sid}"}`, '{"cookie": "sid=***"}'],
+      [`PHPSESSID=${sid}`, "PHPSESSID=***"],
+      [`session_id: "${sid}"`, 'session_id: "***"'],
+      ["key ASIAABCDEFGHIJKLMNOP", "key ***"],
+    ] as const) {
+      expect(scrub(text).text).toBe(expected);
+    }
+    for (const text of ["Cookie: banner shown on first visit", "curl -b cookies.txt https://h", "session_id: str", "the session expired; session id=abc", "sessionId=self.sessionId", "git checkout -b feature/x"]) {
+      expect(scrub(text)).toEqual({ text, scrubbed: false });
+    }
+  });
+
+  it.each(["go test -bench=. ./...", "go build -buildmode=c-shared", "go test -benchtime=10s -bench=BenchmarkParse", "make -b CC=clang", "curl https://h; make -b CC=clang"])("preserves non-cookie flags in events and note bodies: %s", (text) => {
+    expect(scrub(text)).toEqual({ text, scrubbed: false });
+    const home = tmp();
+    createNote(home, { text, project: "global", kind: "gotcha" });
+    expect(loadNotes(home).notes[0]!.body).toBe(text);
+  });
+
   it("preserves prose colon keys but masks credential assignments", () => {
     for (const text of ["SyntaxError: Unexpected token: identifier", "pytest fails from pwd: C:/repo/tests", "The secret: never commit .env", "csrf_token: generated per request"]) {
       expect(scrub(text)).toEqual({ text, scrubbed: false });

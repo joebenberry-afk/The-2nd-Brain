@@ -123,6 +123,27 @@ describe("card completeness and scope", () => {
     expect(estimateTokens(card)).toBeLessThanOrEqual(CARD_BUDGET);
   });
 
+  it("replaces clipped duplicate headlines with the complete body and never emits a bare label", () => {
+    const home = tmp();
+    const complete = "The complete converted requirement preserves the calling convention and its return value.";
+    const converted = createNote(home, { project: "demo", text: complete.slice(0, 55) + "…\n\n" + complete });
+    const label = "A long heading describing the necessary migration sequence:";
+    const oversized = createNote(home, { project: "demo", text: label + "\n\n" + "Required migration detail ".repeat(100) });
+    const card = renderCard(home, [converted, oversized], project, { tools: true });
+    expect(card).toContain(complete); expect(card).not.toContain("…"); expect(card).not.toContain(label);
+  });
+
+  it("marks expired and missing-evidence tested notes without promoting expiration as a recurring fix", () => {
+    const home = tmp();
+    const expired = createNote(home, { project: "demo", text: "Expired advice", tested: true, staleAfter: "2000-01-01", errors: ["anchor missing"] });
+    const missing = createNote(home, { project: "demo", text: "Historical advice", tested: true, evidence: ["missing-event.jsonl"], errors: ["anchor missing"] });
+    for (const note of [expired, missing]) for (const session of ["one", "two", "three"]) logUse(home, { kind: "fix", project: "demo", id: note.id, ms: 0, tokens: 0, session });
+    const card = renderCard(home, [expired, missing], { ...project, root: home }, { tools: true });
+    expect(card).toContain("Historical advice (stale evidence)");
+    expect(card).toContain("Expired advice (stale since 2000-01-01)");
+    expect(card).not.toContain("3× [note, tested] Expired advice");
+  });
+
   it("renders long facts completely and skips oversized facts without hiding later facts", () => {
     const home = tmp();
     const long = "OMP compaction must retain the active session plan and insert the continuation after the compaction summary; " + "the complete instruction remains useful only when its final clause is visible.";

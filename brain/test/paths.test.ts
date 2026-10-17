@@ -1,10 +1,38 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import type * as ChildProcess from "node:child_process";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pathHint } from "../src/paths.ts";
 import { estimateTokens, PACKAGE_HOME } from "../src/util.ts";
 import { FIX_BUDGET } from "../src/capture.ts";
+
+// pathHint gives git and its directory walk one 150 ms wall-clock budget, so a fixture that ran the
+// real git and clock would pass or fail on how fast git starts. By default git answers "not a
+// repository" at once and the clock stands still; the budget cases move the clock themselves, and
+// the smoke case at the end runs the real git and clock.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
+const realGit = (await vi.importActual<typeof ChildProcess>("node:child_process")).spawnSync;
+
+/** What spawnSync returns for a git that exited with `status` (null: killed at its timeout) after printing `stdout`. */
+const gitSays = (status: number | null, stdout = ""): ChildProcess.SpawnSyncReturns<string> => ({ status, signal: null, stdout, stderr: "", output: [null, stdout, ""], pid: 0 });
+
+let now = 0;
+let clock: { mockRestore: () => void };
+beforeEach(() => {
+  now = 1_000;
+  clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.mocked(spawnSync).mockClear();
+  vi.mocked(spawnSync).mockImplementation(() => gitSays(128));
+});
+afterEach(() => {
+  clock.mockRestore();
+  vi.mocked(spawnSync).mockImplementation(realGit);
+});
 
 /** A non-git tree (the bounded walk); tmpdir is outside any checkout. */
 function tree(files: string[]): string {
@@ -64,6 +92,9 @@ function pointing(vars: string[], dir: string, body: () => void): void {
 // 7-25 s in telemetry, and the hint only names files.
 describe("pathHint cost", () => {
   const miss = (cwd: string, budget?: number) => pathHint("read", "proj/src/telemtry.ts", "Path 'proj/src/telemtry.ts' not found", cwd, budget);
+  const small = () => tree(["proj/src/telemetry.ts", "proj/lib/other.ts"]);
+  const holds = "Brain: proj/src/telemtry.ts does not exist; proj/src/ holds: telemetry.ts";
+  const closest = "Brain: proj/src/telemtry.ts does not exist; closest: proj/src/telemetry.ts";
 
   it("does not walk a home or temp folder; it still lists the folder the path should have been in", () => {
     for (const vars of [["HOME", "USERPROFILE"], ["TMPDIR", "TMP", "TEMP"]]) {
@@ -72,12 +103,62 @@ describe("pathHint cost", () => {
         expect(miss(root)).toBe("Brain: proj/src/telemtry.ts does not exist; proj/src/ holds: card.ts, telemetry.ts");
       });
     }
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
-  it("stops listing when its time budget is spent, and falls back to the folder's own entries", () => {
-    const root = tree(["proj/src/telemetry.ts", "proj/lib/other.ts"]);
-    expect(miss(root, 0)).toBe("Brain: proj/src/telemtry.ts does not exist; proj/src/ holds: telemetry.ts");
-    expect(miss(tree(["proj/src/telemetry.ts", "proj/lib/other.ts"]))).toContain("closest: proj/src/telemetry.ts");
+  it("runs no git and walks nothing on a spent budget; the folder's own entries answer", () => {
+    expect(miss(small(), 0)).toBe(holds);
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("walks the tree when git says it is not a repository", () => {
+    expect(miss(small())).toBe(closest);
+  });
+
+  it("falls back to the folder's own entries when a non-repository answer from git used up the budget", () => {
+    vi.mocked(spawnSync).mockImplementation(() => { now += 160; return gitSays(128); });
+    expect(miss(small())).toBe(holds);
+  });
+
+  it("lists with git's tracked and untracked files inside the whole budget it is given", () => {
+    // The file git names is not on disk, so only git's listing can supply it.
+    const root = tree(["proj/src/other.ts"]);
+    vi.mocked(spawnSync).mockImplementation(() => gitSays(0, "proj/src/telemetry.ts\0proj/src/other.ts\0"));
+    expect(miss(root)).toBe(closest);
+    expect(spawnSync).toHaveBeenCalledWith("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], expect.objectContaining({ cwd: root, timeout: 150 }));
+  });
+
+  it("keeps the whole paths of a listing git was killed in the middle of", () => {
+    vi.mocked(spawnSync).mockImplementation(() => { now += 150; return gitSays(null, "proj/src/telemetry.ts\0proj/sr"); });
+    expect(miss(tree(["proj/src/other.ts"]))).toBe(closest);
+  });
+
+  it("walks nothing when git was killed before it printed anything", () => {
+    vi.mocked(spawnSync).mockImplementation(() => { now += 150; return gitSays(null); });
+    expect(miss(small())).toBe(holds);
+  });
+
+  it("reuses a listing for a minute instead of running git again", () => {
+    const root = small();
+    miss(root);
+    miss(root);
+    expect(spawnSync).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The real git and clock, once. However loaded the machine, the answer is one of the documented
+// ones: git's listing inside its budget, or the folder's own entries when git ran out of it.
+describe("pathHint with the real git (smoke)", () => {
+  beforeEach(() => {
+    clock.mockRestore();
+    vi.mocked(spawnSync).mockImplementation(realGit);
+  });
+
+  it("answers a missing path in a real repository", () => {
+    const root = tree(["proj/src/telemetry.ts", "proj/src/card.ts"]);
+    expect(realGit("git", ["init", "-q"], { cwd: root, windowsHide: true }).status).toBe(0);
+    const hint = pathHint("read", "proj/src/telemtry.ts", "Path 'proj/src/telemtry.ts' not found", root);
+    expect(hint).toMatch(/^Brain: proj\/src\/telemtry\.ts does not exist; (?:closest: proj\/src\/telemetry\.ts|proj\/src\/ holds: card\.ts, telemetry\.ts)$/);
   });
 });
 

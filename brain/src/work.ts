@@ -258,6 +258,7 @@ function anchoredText(text: string, root: string | null, budget: number, docRoot
 export function workText(work: Work | null, root: string | null = null, docRoot?: string, registered: string[] = []): string {
   if (!work || (!work.text && !work.auto)) return "";
   const parts = work.text ? [planHeading(work, root), anchoredText(work.text, root, WORK_BUDGET, docRoot, registered)] : ["Where we left off:"];
-  if (work.auto) parts.push(`Auto (${timestamp(work.autoAt)}):`, work.auto);
+  // Unknown timestamps remain advisory; only a demonstrably older observation is superseded.
+  if (work.auto && !(Date.parse(work.autoAt) < Date.parse(work.at))) parts.push(`Auto (${timestamp(work.autoAt)}):`, work.auto);
   return parts.join("\n");
 }

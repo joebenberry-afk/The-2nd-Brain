@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { nowIso, writeAtomic } from "./util.ts";
 import { scrub } from "./scrub.ts";
 import { idQuery, type Note } from "./notes.ts";
-import type { ToraRecall } from "./judge.ts";
+import type { JudgeName, ToraRecall, RecallTrace } from "./judge.ts";
 
 export interface NoteUse { recalled: number; opened: number; carded: number; fired: number; last: string }
 
@@ -51,7 +51,7 @@ export function noteUsage(home: string, days = 30, now = new Date()): NoteUsage 
           : (row.kind === "recall" || row.kind === "card") && Array.isArray(row.ids) ? row.ids.filter((id): id is string => typeof id === "string") : [];
         const opened = row.kind === "recall" && ids.length === 1 && typeof row.query === "string" && idQuery(row.query).toLowerCase() === ids[0]!.toLowerCase();
         for (const id of new Set(ids)) {
-          if (!id || id.startsWith("doc:")) continue;
+          if (!id || id.startsWith("doc:") || id.startsWith("t-")) continue;
           const counts = notes.get(id) ?? { recalled: 0, opened: 0, carded: 0, fired: 0, last: "" };
           if (row.kind === "fix") counts.fired++;
           else if (row.kind === "card") counts.carded++;
@@ -73,7 +73,7 @@ export function usageWindow(usage: NoteUsage, days: number): string {
   return `${usage.covered}d, ${usage.from === undefined ? "no telemetry yet" : "telemetry since " + new Date(usage.from).toISOString().slice(0, 10)}; ${days}d asked`;
 }
 
-export type UseKind = "card" | "fix" | "fixout" | "recall" | "note" | "state" | "error";
+export type UseKind = "card" | "fix" | "fixout" | "recall" | "note" | "state" | "error" | "elide";
 
 export interface Use {
   kind: UseKind;
@@ -81,16 +81,19 @@ export interface Use {
   tokens: number;
   ms: number;
   session?: string;
-  via?: "tool" | "cli" | "hook" | "mcp";
+  via?: "tool" | "cli" | "hook" | "mcp" | "proxy";
   sub?: boolean;
   hits?: number;
   /** Scrubbed at the write boundary; recall answers themselves are never logged. */
   query?: string;
   ids?: string[];
   judged?: boolean;
+  /** The judge whose verdicts shaped the answer: Tora's local reranker or the paid Jev. */
+  judge?: JudgeName;
   dropped?: number;
   /** Tora's scores for the recall's candidates; present only when Tora answered. */
   tora?: ToraRecall;
+  recall?: RecallTrace;
   outcome?: "helped" | "missed";
   /** The note behind a fix, so stats can say which fixes keep firing. */
   id?: string;
@@ -167,8 +170,10 @@ export interface Stats {
   cards: { main: number; sub: number };
   recalls: { calls: number; measured: number; matched: number };
   recallQueries: { logged: number; silent: number };
-  /** Tora over the recalls that carry it: BM25 candidates it scored, those Jev judged (at or above the floor), those Jev kept. */
+  /** Tora over the recalls that carry it: BM25 candidates it scored, those the judge judged (at or above the floor), those it kept. */
   tora: { recalls: number; scored: number; judged: number; kept: number };
+  /** Judged recalls by the judge that answered (rows from before 15 Oct carry no judge). */
+  judges: Record<JudgeName, number>;
   fixOutcomes: { id: string; firings: number; helped: number; missed: number }[];
   /** Sessions that called brain_recall, brain_note or brain_state, of all sessions in that role. */
   toolUse: { main: { sessions: number; using: number }; sub: { sessions: number; using: number } };
@@ -179,6 +184,8 @@ export interface Stats {
   fixes: { id: string; sessions: number }[];
   /** Errors fail-open handlers swallowed, newest last. */
   errors: { at: string; error: string }[];
+  /** Layer 4: epochs that elided output, outputs elided, tokens each later request no longer carries, and recalls that restored one. */
+  layer4: { epochs: number; elided: number; saved: number; restores: number };
 }
 
 const TOOL_KINDS = new Set(["recall", "note", "state"]);
@@ -238,9 +245,11 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const recalls = { calls: 0, measured: 0, matched: 0 };
   const recallQueries = { logged: 0, silent: 0 };
   const tora: Stats["tora"] = { recalls: 0, scored: 0, judged: 0, kept: 0 };
+  const judges: Stats["judges"] = { tora: 0, jev: 0 };
   const outcomes = new Map<string, Stats["fixOutcomes"][number]>();
   const toolCalls = { tool: 0, cli: 0, mcp: 0 };
   const sessions = new Set<string>();
+  const layer4: Stats["layer4"] = { epochs: 0, elided: 0, saved: 0, restores: 0 };
   // present: a row in the counted builds; hookOnly: only Claude Code hook rows, which cannot see a
   // child's own Brain use (its CLI and MCP calls carry the parent's session); card: the role a
   // delivered card gave the session.
@@ -253,7 +262,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
       // either file may be missing
     }
   }
-  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown; error?: unknown; query?: unknown; ids?: unknown; outcome?: unknown; tora?: unknown };
+  type Row = { at?: unknown; kind?: unknown; tokens?: unknown; session?: unknown; sub?: unknown; hits?: unknown; via?: unknown; id?: unknown; v?: unknown; error?: unknown; query?: unknown; ids?: unknown; outcome?: unknown; tora?: unknown; judge?: unknown };
   const rows: Row[] = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -318,6 +327,11 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
     const slot = (byKind[row.kind] ??= { count: 0, tokens: 0 });
     slot.count += 1;
     slot.tokens += typeof row.tokens === "number" ? row.tokens : 0;
+    if (row.kind === "elide") {
+      layer4.epochs += 1;
+      layer4.elided += typeof row.hits === "number" ? row.hits : 0;
+      layer4.saved += typeof row.tokens === "number" ? row.tokens : 0;
+    }
     if (row.kind === "card" && row.via !== "cli") cards[row.sub === true ? "sub" : "main"] += 1;
     if (TOOL_KINDS.has(row.kind) && (row.via === "tool" || row.via === "cli" || row.via === "mcp")) toolCalls[row.via] += 1;
     if (row.kind === "recall") {
@@ -331,6 +345,8 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
         if (row.hits > 0) recalls.matched += 1;
       }
       tallyTora(row.tora, tora);
+      if (row.judge === "tora" || row.judge === "jev") judges[row.judge] += 1;
+      if (Array.isArray(row.ids) && row.ids.length && row.ids.every(id => typeof id === "string" && id.startsWith("t-"))) layer4.restores += 1;
     }
     if (typeof row.session === "string" && row.session) {
       sessions.add(row.session);
@@ -349,7 +365,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   }
   const fixes = [...fired].map(([id, seen]) => ({ id, sessions: seen.size })).sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
   const fixOutcomes = [...outcomes.values()].filter(f => f.helped + f.missed > 0).sort((a, b) => b.firings - a.firings || a.id.localeCompare(b.id));
-  return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, tora, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors };
+  return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, tora, judges, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors, layer4 };
 }
 
 /** One tool the host sends the model on every request, with its schema size. */
@@ -369,7 +385,7 @@ const TOOL_SCHEMAS = "tool-schemas-omp.json";
  */
 export function saveToolSchemas(home: string, tools: ToolSchema[], now: Date = new Date(), system: number[] = []): void {
   try {
-    writeAtomic(join(home, "state", TOOL_SCHEMAS), JSON.stringify({ at: nowIso(now), tools, system }) + "\n");
+    writeAtomic(join(home, "state", TOOL_SCHEMAS), JSON.stringify({ at: nowIso(now), tools, system, estimate: "chars/4; converted schemas; excludes provider framing and provider-specific normalization" }) + "\n");
   } catch {
     // the snapshot is advisory
   }

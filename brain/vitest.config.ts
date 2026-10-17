@@ -12,7 +12,7 @@ const identity = { GIT_AUTHOR_NAME: "brain-test", GIT_AUTHOR_EMAIL: "brain-test@
 const runTemp = (process.env.BRAIN_TEST_TMP ??= mkdtempSync(join(tmpdir(), "brain-test-run-")));
 
 // Whole suites that launch external runtimes or git stay outside the fast loop.
-const integration = ["capture", "card", "cli", "install", "journey", "review", "swarm", "sync"].map((name) => `test/${name}.test.ts`);
+const integration = ["capture", "card", "claims", "cli", "install", "journey", "review", "startup", "swarm", "sync"].map((name) => `test/${name}.test.ts`);
 
 export default defineConfig({
   test: {

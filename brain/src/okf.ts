@@ -6,7 +6,7 @@
  */
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, win32 } from "node:path";
-import { GLOBAL, headline, KINDS, restOfBody, type Note } from "./notes.ts";
+import { GLOBAL, headline, KINDS, restOfBody, testedCurrent, type Note } from "./notes.ts";
 import { writeAtomic } from "./util.ts";
 
 export const OKF_VERSION = "0.2";
@@ -65,7 +65,7 @@ function concept(note: Note, exported: Map<string, Note>): string {
   if (about) lines.push(`description: ${q(about)}`);
   if (note.tags.length) lines.push(`tags: [${note.tags.map(q).join(", ")}]`);
   lines.push(`generated: { by: ${q(GENERATED_BY[note.source] ?? `process:brain-${note.source}`)}, at: ${q(note.at)} }`);
-  if (note.tested) {
+  if (testedCurrent(note)) {
     const by = (note.testedBy && VERIFIED_BY[note.testedBy]) ?? "process:unrecorded";
     lines.push(`verified: { by: ${q(by)}, at: ${q(note.testedAt ?? note.at)} }`);
   }

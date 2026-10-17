@@ -1,9 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { LEAN_LINE } from "../src/card.ts";
 import { main, type Io } from "../src/cli.ts";
@@ -163,7 +166,7 @@ describe("brain cli", () => {
       hook("PostToolUse", boundary, { command: "build" });
     }
     const outcomes = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => row.kind === "fixout");
-    expect(outcomes.map(row => [row.session, row.id, row.outcome, row.via])).toEqual([["help", note.id, "helped", "hook"], ["miss", note.id, "missed", "hook"], ["miss", note.id, "helped", "hook"], ["empty-error", note.id, "missed", "hook"]]);
+    expect(outcomes.map(row => [row.session, row.id, row.outcome, row.via])).toEqual([["help", note.id, "helped", "hook"], ["miss", note.id, "missed", "hook"], ["miss", note.id, "helped", "hook"]]);
   });
   it("prints usage for help and no command; rejects unknown commands and options", async () => {
     const { io } = setup();
@@ -306,6 +309,17 @@ describe("brain cli", () => {
     expect((await run(["share", id, "--tag", "Node"], io)).out).toBe(`shared ${id} with tag node; project demo now has tag node, so it still sees it`);
     expect(loadNotes(home).notes[0]).toMatchObject({ project: "global", tags: ["node"] });
     expect((await run(["recall", "use node"], io)).out).toContain(id);
+  });
+
+  it("tells the writer when a fix's remedy falls past the fix line", async () => {
+    const { io } = setup();
+    const long = `The nightly export fails because ${"the staging bucket rotates its credentials every hour and ".repeat(6)}the fix is to run export-refresh first`;
+    const cut = await run(["note", long, "--error", "export: credentials expired", "--tested"], io);
+    expect(cut.out).toMatch(/^saved n-[0-9a-f]{10}; its fix line is cut at ".*…": fixes show 80 tokens, so lead the first line with the remedy/);
+    expect((await run(["fix", "export: credentials expired"], io)).out).not.toContain("export-refresh");
+    // A remedy-first headline fits, and a note without an error pattern is not a fix at all.
+    expect((await run(["note", "Run export-refresh before the nightly export", "--error", "export: token expired", "--tested"], io)).out).toMatch(/^saved n-[0-9a-f]{10}$/);
+    expect((await run(["note", long.replace("nightly", "weekly")], io)).out).toMatch(/^saved n-[0-9a-f]{10}$/);
   });
 
   it("never marks a global fix tested from an agent's note", async () => {
@@ -469,6 +483,31 @@ describe("bin/brain.mjs", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("brain recall");
   });
+
+  it("keeps node:http off the hook path, where its ESM import would cost every hook about 16 ms (undici)", () => {
+    const cli = pathToFileURL(join(import.meta.dirname, "..", "src", "cli.ts")).href;
+    const r = spawnSync(process.execPath, ["--no-warnings", "--input-type=module", "-e", `await import(${JSON.stringify(cli)}); process.stdout.write(String(process.moduleLoadList.includes("NativeModule http")))`], { encoding: "utf8" });
+    expect(r.stdout).toBe("false");
+  });
+
+  it("keeps a detached proxy running and stops a piped one when its host closes stdin", async () => {
+    const args = [join(import.meta.dirname, "..", "bin", "brain.mjs"), "proxy", "--port", "0", "--home", tmp()];
+    const env = { ...process.env, TYPESAFE_API_KEY: undefined };
+    const detached = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "ignore"], env });
+    const detachedExit = once(detached, "exit");
+    try {
+      expect(String((await once(detached.stdout, "data"))[0])).toContain("brain proxy listening on http://127.0.0.1:");
+      // NUL ends at once, so a proxy that stopped at end of input would be gone long before this.
+      expect(await Promise.race([detachedExit.then(() => "exited"), sleep(500, "running")])).toBe("running");
+    } finally {
+      detached.kill();
+    }
+    const piped = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "ignore"], env });
+    const pipedExit = once(piped, "exit");
+    await once(piped.stdout, "data");
+    piped.stdin.end();
+    expect((await pipedExit)[0]).toBe(0);
+  });
 });
 
 describe("brain move", () => {
@@ -511,10 +550,17 @@ describe("brain check reports silent failures", () => {
   it("flags notes filed under an id that is now an alias", async () => {
     const home = mkdtempSync(join(tmpdir(), "brain-check-"));
     writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { owner: { aliases: ["old"] } } }));
-    createNote(home, { project: "old", text: "Filed before the rename" });
-    const r = await run(["check"], { env: { SECOND_BRAIN_HOME: home }, cwd: home });
+    const note = createNote(home, { project: "old", text: "Filed before the rename" });
+    const io = { env: { SECOND_BRAIN_HOME: home }, cwd: home };
+    const r = await run(["check"], io);
     expect(r.code).toBe(1);
     expect(r.err).toContain("alias of owner");
+    // Once the notes moved, the emptied folder left on disk hides nothing.
+    expect((await run(["move", note.id, "--to", "owner"], io)).code).toBe(0);
+    mkdirSync(join(home, "notes", "old", "private"), { recursive: true });
+    expect(await run(["check"], io)).toMatchObject({ code: 0, err: "" });
+    createNote(home, { project: "old", text: "Private, filed under the alias", private: true });
+    expect((await run(["check"], io)).err).toContain("alias of owner");
   });
 
   it("project docs list --project finds the docs of a declared folder from a subfolder", async () => {

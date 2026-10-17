@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findFix } from "../src/capture.ts";
 import { main, type Io } from "../src/cli.ts";
-import { createNote, expired, loadNotes, retireNote, saveNote } from "../src/notes.ts";
+import { createNote, expired, loadNotes, retireNote, saveNote, type Note } from "../src/notes.ts";
 import { answer } from "../src/search.ts";
 
 const tmp = (p = "brain-okf-") => mkdtempSync(join(tmpdir(), p));
@@ -86,6 +86,25 @@ describe("tested provenance", () => {
 });
 
 describe("brain export (OKF)", () => {
+  it("exports verified metadata only while body and error patterns match verification", async () => {
+    const { home, io } = setup();
+    const original = createNote(home, { project: "demo", text: "Verified content", errors: ["specific failure"], tested: true });
+    const out = join(tmp(), "bundle");
+    const cases: [Note, boolean][] = [
+      [original, true],
+      [{ ...original, body: "Edited content" }, false],
+      [{ ...original, errors: ["different failure"] }, false],
+      [{ ...original, testedSha: undefined }, true],
+    ];
+    for (const [note, verified] of cases) {
+      saveNote(home, note);
+      expect((await run(["export", out], io)).code).toBe(0);
+      const text = readFileSync(join(out, "demo", `${original.id}.md`), "utf8");
+      expect(text.includes("\nverified:")).toBe(verified);
+      expect(text).toContain(note.body);
+    }
+  });
+
   it("writes public notes as OKF concepts with trust, lifecycle and lineage", async () => {
     const { home, io } = setup();
     const old = createNote(home, { project: "demo", kind: "gotcha", text: "Use port 8080\n\nThe proxy expects it. More detail.", evidence: ["src/server.ts", "https://example.test/doc"], tested: true, testedBy: "owner" });

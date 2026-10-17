@@ -208,7 +208,7 @@ it("CLI tidy suggests the right retire direction, shows lexical fallback, and ne
   expect(judged).toContain(`brain retire ${old.id} --by ${fresh.id}`);
   expect(judged).toContain("Duplicates");
   expect(judged).toContain(`brain retire ${backup.id} --by ${newBackup.id}`);
-  expect(await cli(root, ["tidy"])).toContain("Similar (no judge)");
+  expect(await cli(root, ["tidy"])).toContain("Similar (not judged)");
   expect(paths.map(path => readFileSync(path, "utf8"))).toEqual(before);
   expect(await cli(home(), ["tidy"])).toBe("nothing to tidy");
 });
@@ -310,5 +310,118 @@ describe("usage windows follow the telemetry that is retained", () => {
     const stats = (await cli(root, ["stats", "--days", "30"])).split("\n").find(line => line.startsWith("notes used"))!;
     expect(stats).toContain(day(start));
     expect(stats).toContain("never: 1");
+  });
+});
+
+describe("candidate sources beyond whole-body overlap", () => {
+  const corpus = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "recall-v3-corpus.json"), "utf8")) as Note[];
+  const old = corpus.find(n => n.id === "n-65f138ef65")!;
+  const fresh = corpus.find(n => n.id === "n-d529ba7bd3")!;
+
+  it("surfaces same-scope notes sharing two rare terms without lowering the lexical threshold", () => {
+    const pairs = similarPairs([old, fresh, note("other", "Quartz migration uses numbered steps")], 20);
+    expect(pairs.map(p => [p.a.id, p.b.id, p.via])).toEqual([["n-65f138ef65", "n-d529ba7bd3", "entity"]]);
+    expect(pairs[0]!.score).toBeLessThan(0.2);
+    // One rare term is not enough, and a term held by four notes is not rare.
+    expect(similarPairs([old, note("one", "Arzopa support ticket drafted for the retailer returns desk")], 20)).toEqual([]);
+    const crowd = ["w", "x", "y", "z"].map(id => note(id, `Arzopa monitor ${id} unrelated words ${id.repeat(5)} appear here`));
+    expect(similarPairs(crowd, 20).filter(p => p.via === "entity")).toEqual([]);
+    expect(similarPairs([old, { ...fresh, project: "other" }], 20)).toEqual([]);
+  });
+
+  it("surfaces notes that name another note's id", () => {
+    const ledger = note("n-aaaaaaaaaa", "Write ideas into a new IDEAS_LOG file", { at: "2026-10-01" });
+    const correction = note("n-bbbbbbbbbb", "Correction of N-AAAAAAAAAA: the ledger already exists as LOOP.md", { at: "2026-10-02" });
+    expect(similarPairs([ledger, correction, note("n-cccccccccc", "Unrelated quartz topic")], 20).map(p => [p.a.id, p.b.id, p.via])).toEqual([["n-aaaaaaaaaa", "n-bbbbbbbbbb", "reference"]]);
+    expect(similarPairs([ledger, { ...correction, replaces: ledger.id }], 20)).toEqual([]);
+  });
+
+  it("surfaces legacy mem- id references", () => {
+    const ledger = note("mem-0123456789ab", "Write ideas into a new IDEAS_LOG file", { at: "2026-10-01" });
+    const correction = note("n-bbbbbbbbbb", "Correction of MEM-0123456789AB: the ledger already exists as LOOP.md", { at: "2026-10-02" });
+    expect(similarPairs([ledger, correction], 20).map(p => [p.a.id, p.b.id, p.via])).toEqual([["mem-0123456789ab", "n-bbbbbbbbbb", "reference"]]);
+  });
+
+  it("tidy sends the low-overlap contradiction to the judge", async () => {
+    const seen: string[] = [];
+    const judge: PairJudge = async pairs => {
+      seen.push(...pairs.map(p => p.id));
+      return new Map(pairs.map(p => [p.id, { same: 0, contradicts: JUDGE_THRESHOLD }]));
+    };
+    const report = await tidyReport(home(), [old, fresh], project, { judge, all: true });
+    expect(seen).toEqual([JSON.stringify(["n-65f138ef65", "n-d529ba7bd3"])]);
+    expect(report.contradictions.map(p => p.via)).toEqual(["entity"]);
+  });
+});
+
+describe("the paid semantic pass is bounded", () => {
+  const eight = () => Array.from({ length: 8 }, (_, i) => note("n" + i));
+  const recorder = () => {
+    const seen: string[] = [];
+    const judge: PairJudge = async pairs => {
+      seen.push(...pairs.map(p => p.id));
+      return new Map(pairs.map(p => [p.id, { same: 0, contradicts: 0 }]));
+    };
+    return { seen, judge };
+  };
+
+  it("judges at most 20 pairs by default and leaves the rest visible and counted", async () => {
+    const { seen, judge } = recorder();
+    const report = await tidyReport(home(), eight(), project, { judge });
+    expect(seen).toHaveLength(20);
+    expect(report.reviewed).toBe(20);
+    expect(report.unreviewed).toBe(8);
+    expect(report.similar).toHaveLength(8);
+    expect(report.similar.some(p => seen.includes(p.id))).toBe(false);
+  });
+
+  it("an explicit larger budget judges everything", async () => {
+    const { seen, judge } = recorder();
+    const report = await tidyReport(home(), eight(), project, { judge, pairBudget: 100 });
+    expect(seen).toHaveLength(28);
+    expect(report.unreviewed).toBe(0);
+    expect(report.similar).toEqual([]);
+  });
+
+  it("spends the budget on notes already shown before unused repetition", async () => {
+    const root = home();
+    logUse(root, { kind: "card", project: "demo", tokens: 0, ms: 0, ids: ["n5", "n6"] });
+    const { seen, judge } = recorder();
+    await tidyReport(root, eight(), project, { judge, pairBudget: 1 });
+    expect(seen.map(id => (JSON.parse(id) as string[]).sort())).toEqual([["n5", "n6"]]);
+  });
+
+  it("an unavailable judge leaves every public pair unreviewed", async () => {
+    const report = await tidyReport(home(), eight(), project, { judge: async () => { throw new Error("offline"); } });
+    expect(report.reviewed).toBe(0);
+    expect(report.unreviewed).toBe(28);
+    expect(report.similar).toHaveLength(28);
+  });
+});
+
+describe("orphan tagged globals", () => {
+  it("warns about active globals whose tags no registered or inferred project has, without changing scope", async () => {
+    const root = home();
+    writeFileSync(join(root, "projects.json"), JSON.stringify({ projects: { demo: { tags: ["node", "brief"] }, capture: { tags: ["capture"] } } }));
+    const global = (id: string, tags: string[], over: Partial<Note> = {}) => note(id, "Global advice " + id, { project: "global", tags, ...over });
+    const notes = [global("orphan", ["windows"]), global("briefed", ["brief", "windows"]), global("registered", ["capture"]), global("untagged", []), global("brief", ["brief"]), global("mixed", ["brief", "windows", "node"]), global("gone", ["windows"], { retired: "2026-01-01" }), note("local", "Local", { tags: ["windows"] })];
+    expect((await tidyReport(root, notes, project)).orphans.map(n => n.id)).toEqual(["orphan", "briefed"]);
+    expect(await cli(root, ["tidy"])).not.toContain("no project can see");
+    for (const n of notes) saveNote(root, n);
+    const out = await cli(root, ["tidy"]);
+    expect(out).toContain("no project can see");
+    expect(out).toContain("orphan [windows]");
+  });
+
+  it("counts tags inferred at every registered path, not one checkout", async () => {
+    const root = home();
+    const first = join(root, "first"), second = join(root, "second");
+    mkdirSync(first);
+    mkdirSync(second);
+    writeFileSync(join(second, "pyproject.toml"), "");
+    writeFileSync(join(root, "projects.json"), JSON.stringify({ projects: { multi: { paths: [first, second] } } }));
+    const global = (id: string, tags: string[]) => note(id, "Global advice " + id, { project: "global", tags });
+    const report = await tidyReport(root, [global("python", ["python"]), global("rust", ["rust"])], { id: "elsewhere", tags: [], root: null });
+    expect(report.orphans.map(n => n.id)).toEqual(["rust"]);
   });
 });

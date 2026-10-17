@@ -456,7 +456,7 @@ export function answer(notes: Note[], query: string, opts: AnswerOptions): strin
 }
 
 /** Hit count measures results actually shown, not cross-project suggestions. */
-export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions, scored?: Scored): { text: string; hits: number; ids: string[]; docExcerpt?: string } {
+export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions, scored?: Scored): { text: string; hits: number; ids: string[]; docExcerpt?: string; docAnchor?: string } {
   const id = idQuery(query);
   const note = findNote(notes, query);
   if (note) {
@@ -498,7 +498,7 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
   if (opts.exclude) hits = hits.filter(hit => !opts.exclude?.has(hit.note.id));
   if (!hits.length && opts.home && opts.project?.root && !opts.noDoc) {
     const heading = docAnswer(opts.home, opts.project, query);
-    if (heading) return { text: heading.text, hits: 1, ids: ["doc:" + heading.path], ...(heading.excerpt ? { docExcerpt: heading.excerpt } : {}) };
+    if (heading) return { text: heading.text, hits: 1, ids: ["doc:" + heading.path], ...(heading.excerpt ? { docExcerpt: heading.excerpt, docAnchor: heading.anchor } : {}) };
   }
   if (!hits.length && !opts.all) {
     const related = matchingHits(scored, { ...opts, all: true }).filter(hit => !opts.exclude || !visibleTo(hit.note, opts.project)).length

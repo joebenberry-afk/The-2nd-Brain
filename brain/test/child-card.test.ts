@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { briefNotes, cardIds, CHILD_CARD_BUDGET, renderCard } from "../src/card.ts";
 import { appendEvent } from "../src/capture.ts";
 import { main } from "../src/cli.ts";
@@ -98,8 +98,19 @@ describe("warm child card", () => {
     const { registered, child } = setup();
     registered("# Plan\n\n## Overview\nBackground.\n\n### Cookie refresh\nKeep the cookie boundary intact.\n\n## Release\nShip it.\n");
     const card = child({ prompt: "Implement cookie refresh" });
-    expect(card).toContain("docs/PLAN.md:3 Overview"); expect(card).toContain("docs/PLAN.md:6 Cookie refresh");
+    expect(card).not.toContain("Overview"); expect(card).toContain("docs/PLAN.md:6 Cookie refresh");
     expect(card).toContain("Keep the cookie boundary intact."); expect(card).not.toContain("Background.");
+    expect(estimateTokens(card)).toBeLessThanOrEqual(200);
+  });
+
+  it("keeps a named doc in navigation without letting its unrelated section displace a relevant one", () => {
+    const { root, registered, child } = setup();
+    registered("## Cookie refresh\nKeep the cookie boundary intact.\n");
+    writeFileSync(join(root, "docs", "NOTES.md"), "## Intro\nUnrelated background.\n");
+    const card = child({ prompt: "Read docs/NOTES.md then fix cookie handling" });
+    expect(card).toContain("docs/NOTES.md:1 Intro");
+    expect(card).toContain("Keep the cookie boundary intact.");
+    expect(card).not.toContain("Unrelated background.");
     expect(estimateTokens(card)).toBeLessThanOrEqual(200);
   });
 
@@ -179,5 +190,47 @@ describe("warm child card", () => {
     expect(child.get("before_agent_start")!({ prompt: "again" }, childCtx)).toBeUndefined();
     expect(existsSync(join(home, "state", "work"))).toBe(false);
     child.get("session_shutdown")!({}, childCtx); parent.get("session_shutdown")!({}, parentCtx);
+  });
+
+  it("abstains on topical no-match notes even with high uncalibrated semantic scores, but keeps vague fallback", () => {
+    const { home, child } = setup();
+    const unrelated = createNote(home, { project: "demo", text: "Compiler cache release", tested: true, kind: "gotcha" });
+    const relevant = createNote(home, { project: "demo", text: "Authentication cookie expiration" });
+    const rule = createNote(home, { project: "demo", text: "Preserve public APIs", tags: ["brief"] });
+    const card = child({ prompt: "Fix authentication cookie expiration", semantic: new Map([[unrelated.id, 0.99]]) });
+    expect(card).toContain(relevant.id); expect(card).not.toContain(unrelated.id); expect(card).toContain(rule.id);
+    expect(child({ prompt: "Investigate tensor training throughput" })).not.toContain("Known here:");
+    expect(child({ prompt: "continue" })).toContain(unrelated.id);
+  });
+
+  it("selects a late heading before early filler and omits irrelevant registered docs", () => {
+    const { home, project, registered } = setup();
+    registered(Array.from({ length: 30 }, (_, i) => `## Overview ${i}\nBackground.\n`).join("") + "## Compaction boundary\nPreserve the continuation.\n");
+    const docs = childDocContext(home, project, "Repair compaction boundary");
+    expect(docs.outline).toContain("Compaction boundary"); expect(docs.outline).not.toContain("Overview");
+    expect(childDocContext(home, project, "Tensor training throughput").outline).toBe("");
+    expect(childDocContext(home, project).outline).toContain("Overview 0");
+  });
+
+  it.each(["SessionStart", "SubagentStart"])("measures %s hook work rather than hard-coding zero", async (event) => {
+    const { home, root } = setup();
+    createNote(home, { project: "demo", text: "Preserve public APIs", tags: ["brief"] });
+    let now = 100;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    try {
+      const errors: string[] = [];
+      const code = await main(["hook", "claude-code"], {
+        env: { SECOND_BRAIN_HOME: home, BRAIN_PROJECT: "demo" }, cwd: root,
+        stdin: () => {
+          // Input reading is hook work; unrelated clock reads must not affect elapsed time.
+          now = 137;
+          return JSON.stringify({ cwd: root, session_id: "timing", hook_event_name: event });
+        },
+        out: () => undefined, err: text => errors.push(text),
+      });
+      expect(code).toBe(0); expect(errors).toEqual([]);
+      const rows = readFileSync(join(home, "state", "telemetry.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(rows.find(row => row.kind === "card")?.ms).toBe(37);
+    } finally { clock.mockRestore(); }
   });
 });

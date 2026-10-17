@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, posix } from "node:path";
 import { hostname, tmpdir } from "node:os";
-import { findNote, loadNotes, saveNote, type Note, GLOBAL } from "./notes.ts";
+import { findNote, loadNotes, saveNote, withNoteClaim, type Note, GLOBAL } from "./notes.ts";
 import { addProjectTag, canonical, loadProjects } from "./project.ts";
 import { mergeRejected } from "./capture.ts";
 import { nowIso, tagKey } from "./util.ts";
@@ -21,30 +21,21 @@ export interface SyncResult {
 }
 
 export function sync(home: string, opts?: { message?: string; push?: boolean }): SyncResult {
-  // Check if it's a git repository
-  const result = spawnSync("git", ["-C", home, "rev-parse", "--git-dir"], {
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    throw new SyncError(`${home} is not a git repository`);
-  }
+  // One git process locates every merge and rebase marker; it fails outside a git repository.
+  const markers = markerPaths(home);
 
   // A commit on a detached HEAD, or in the middle of a rebase/merge/bisect, leaves the branch once the
   // owner returns to it: nothing is staged or committed.
-  const inProgress = ["MERGE_HEAD", "BISECT_LOG", "CHERRY_PICK_HEAD", "REVERT_HEAD"].some((name) => {
-    const path = git(home, "rev-parse", "--git-path", name).stdout.trim();
-    return path !== "" && existsSync(isAbsolute(path) ? path : join(home, path));
-  });
-  if (git(home, "symbolic-ref", "-q", "HEAD").status !== 0 || inProgress || rebaseInProgress(home)) {
+  const inProgress = (["MERGE_HEAD", "BISECT_LOG", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const).some((name) => existsSync(markers[name]));
+  if (git(home, "symbolic-ref", "-q", "HEAD").status !== 0 || inProgress || rebaseInProgress(markers)) {
     throw new SyncError("HEAD is detached, or a rebase, merge or bisect is in progress; check out your branch and finish it, then run brain sync (nothing was committed)");
   }
 
-  // The SYNC_PATHS that exist on disk or are tracked (so deleting all of notes/ is committed too)
-  const existingPaths: string[] = [];
-  for (const path of SYNC_PATHS) {
-    const tracked = spawnSync("git", ["-C", home, "ls-files", "-z", "--", path], { encoding: "utf8" }).stdout;
-    if (existsSync(join(home, path)) || tracked) existingPaths.push(path);
-  }
+  // The SYNC_PATHS that exist on disk or are tracked (so deleting all of notes/ is committed too).
+  // One git process lists the tracked ones; the top folder is compared in lower case because an
+  // index made on a case-insensitive filesystem may spell it differently.
+  const tracked = new Set(git(home, "ls-files", "-z", "--", ...SYNC_PATHS).stdout.split("\0").filter(Boolean).map((file) => file.split("/")[0]!.toLowerCase()));
+  const existingPaths = SYNC_PATHS.filter((path) => existsSync(join(home, path)) || tracked.has(path));
 
   // Build pathspecs with exclude for private notes. With no Brain path on disk there is nothing to
   // commit — and an exclude-only pathspec would mean "everything else", so it is never used.
@@ -129,11 +120,11 @@ export function sync(home: string, opts?: { message?: string; push?: boolean }):
     encoding: "utf8",
   });
 
-  if (pullResult.status !== 0 && !(rebaseInProgress(home) && resolveWorkConflicts(home))) {
+  if (pullResult.status !== 0 && !(rebaseInProgress(markers) && resolveWorkConflicts(home, markers))) {
     // Name the conflicted files before aborting: git's own advice ("git rebase --continue") is
     // wrong once the rebase is aborted, and the CONFLICT lines went to stdout.
-    const files = rebaseInProgress(home) ? unmerged(home) : [];
-    abortRebase(home);
+    const files = rebaseInProgress(markers) ? unmerged(home) : [];
+    abortRebase(home, markers);
     throw new SyncError(files.length
       ? `sync stopped: ${files.join(", ")} changed on both machines; your changes are committed here, nothing was pulled or pushed. ` +
           "Resolve by hand: git pull --rebase --autostash, fix those files, git add them, git rebase --continue, then brain sync."
@@ -194,11 +185,23 @@ function git(home: string, ...args: string[]): { status: number | null; stdout: 
   return { status: r.status, stdout: r.stdout ?? "" };
 }
 
-function rebaseInProgress(home: string): boolean {
-  return ["rebase-merge", "rebase-apply"].some((name) => {
-    const path = git(home, "rev-parse", "--git-path", name).stdout.trim();
-    return path !== "" && existsSync(isAbsolute(path) ? path : join(home, path));
-  });
+const MARKERS = ["MERGE_HEAD", "BISECT_LOG", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"] as const;
+type Markers = Record<(typeof MARKERS)[number], string>;
+
+/**
+ * Where git keeps each in-progress marker of this worktree (a linked worktree has its own), as paths
+ * that can be tested for existence, from one git process. Throws outside a git repository.
+ */
+function markerPaths(home: string): Markers {
+  const listed = git(home, "rev-parse", ...MARKERS.flatMap((name) => ["--git-path", name]));
+  if (listed.status !== 0) throw new SyncError(`${home} is not a git repository`);
+  const paths = listed.stdout.trim().split(/\r?\n/);
+  if (paths.length !== MARKERS.length) throw new SyncError("cannot locate git's merge and rebase markers (nothing was committed)");
+  return Object.fromEntries(MARKERS.map((name, at) => [name, isAbsolute(paths[at]!) ? paths[at]! : join(home, paths[at]!)])) as Markers;
+}
+
+function rebaseInProgress(markers: Markers): boolean {
+  return existsSync(markers["rebase-merge"]) || existsSync(markers["rebase-apply"]);
 }
 
 /** A working state's recency: the plan's `at:` first, the auto section's `auto_at:` second. */
@@ -241,14 +244,14 @@ function resolveInIndex(home: string, files: string[]): void {
  * A rebase stopped only on files the Brain can merge (working states, the rejected list) is
  * resolved and continued, not aborted. Any other conflict → false.
  */
-function resolveWorkConflicts(home: string): boolean {
-  for (let round = 0; round < 50 && rebaseInProgress(home); round++) {
+function resolveWorkConflicts(home: string, markers: Markers): boolean {
+  for (let round = 0; round < 50 && rebaseInProgress(markers); round++) {
     const conflicted = unmerged(home);
     if (!conflicted.length || !conflicted.every(mergeable)) return false;
     resolveInIndex(home, conflicted);
     git(home, "rebase", "--continue");
   }
-  return !rebaseInProgress(home);
+  return !rebaseInProgress(markers);
 }
 
 /**
@@ -256,10 +259,9 @@ function resolveWorkConflicts(home: string): boolean {
  * write racing the pull), keep the stashed changes in the stash list and quit the rebase, so the
  * next sync is not wedged.
  */
-function abortRebase(home: string): void {
-  if (git(home, "rebase", "--abort").status === 0 || !rebaseInProgress(home)) return;
-  const dir = git(home, "rev-parse", "--git-path", "rebase-merge").stdout.trim();
-  const autostash = join(isAbsolute(dir) ? dir : join(home, dir), "autostash");
+function abortRebase(home: string, markers: Markers): void {
+  if (git(home, "rebase", "--abort").status === 0 || !rebaseInProgress(markers)) return;
+  const autostash = join(markers["rebase-merge"], "autostash");
   if (existsSync(autostash)) git(home, "stash", "store", "-m", "brain sync autostash", readFileSync(autostash, "utf8").trim());
   git(home, "rebase", "--quit");
 }
@@ -267,30 +269,32 @@ function abortRebase(home: string): void {
 /**
  * Share a note with every project carrying `tag`: it moves to global with that tag. The project it
  * came from gets the tag too (in projects.json), so sharing never hides a note from its own project.
- * `taggedProject` names that project when its tags changed.
+ * `taggedProject` names that project when its tags changed. The note is reloaded under its claim
+ * (and projects.json is edited under its own), so a concurrent move or edit is never overwritten.
  */
 export function shareNote(home: string, id: string, tag: string): Note & { taggedProject?: string } {
-  const { notes } = loadNotes(home);
-  const note = findNote(notes, id);
+  return withNoteClaim(home, id, () => {
+    const note = findNote(loadNotes(home).notes, id);
 
-  if (!note) {
-    throw new SyncError(`unknown note ${id}`);
-  }
+    if (!note) {
+      throw new SyncError(`unknown note ${id}`);
+    }
 
-  if (note.private) {
-    throw new SyncError("private notes cannot be shared");
-  }
+    if (note.private) {
+      throw new SyncError("private notes cannot be shared");
+    }
 
-  if (note.retired) {
-    throw new SyncError("retired notes cannot be shared");
-  }
+    if (note.retired) {
+      throw new SyncError("retired notes cannot be shared");
+    }
 
-  const normalizedTag = tagKey(tag);
-  if (scrub(tag).scrubbed || scrub(normalizedTag).scrubbed) throw new SyncError("tag contains a credential; choose a non-secret tag");
-  if (!normalizedTag) throw new SyncError("a tag is required");
-  // Tag the source project first: if projects.json cannot be edited, nothing has moved yet.
-  const taggedProject = note.project !== GLOBAL && addProjectTag(home, note.project, normalizedTag) ? canonical(loadProjects(home), note.project) : undefined;
-  const tags = note.tags.includes(normalizedTag) ? note.tags : [...note.tags, normalizedTag].sort();
-  const saved = saveNote(home, { ...note, project: GLOBAL, tags });
-  return taggedProject ? { ...saved, taggedProject } : saved;
+    const normalizedTag = tagKey(tag);
+    if (scrub(tag).scrubbed || scrub(normalizedTag).scrubbed) throw new SyncError("tag contains a credential; choose a non-secret tag");
+    if (!normalizedTag) throw new SyncError("a tag is required");
+    // Tag the source project first: if projects.json cannot be edited, nothing has moved yet.
+    const taggedProject = note.project !== GLOBAL && addProjectTag(home, note.project, normalizedTag) ? canonical(loadProjects(home), note.project) : undefined;
+    const tags = note.tags.includes(normalizedTag) ? note.tags : [...note.tags, normalizedTag].sort();
+    const saved = saveNote(home, { ...note, project: GLOBAL, tags });
+    return taggedProject ? { ...saved, taggedProject } : saved;
+  });
 }

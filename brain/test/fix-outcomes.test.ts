@@ -135,6 +135,37 @@ describe("Claude Code hook outcomes and capture timing", () => {
     expect(outcomes()).toEqual([[note.id, "helped"]]);
   });
 
+  it("scores a prepared retry of the failed command, and ignores a different error or operation", async () => {
+    const { call, failure, send, outcomes, note } = hooks();
+    const run = (toolUse: string, command: string, error?: string) => send(error
+      ? { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, error, tool_use_id: toolUse }
+      : { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_use_id: toolUse });
+    call("msg_1", "toolu_a");
+    call("msg_2", "toolu_b");
+    call("msg_3", "toolu_c");
+    call("msg_4", "toolu_d");
+    await failure("toolu_a");
+    // Another operation: still waiting.
+    await run("toolu_b", "lint");
+    expect(outcomes()).toEqual([]);
+    // The same operation, now with another diagnostic: neither helped nor missed.
+    await run("toolu_c", "FOO=1 build", "totally different failure");
+    expect(outcomes()).toEqual([]);
+    // The fix is spent: a later success of the retry scores nothing.
+    await run("toolu_d", "FOO=1 build");
+    expect(outcomes()).toEqual([]);
+    expect(note.id).toBeTruthy();
+  });
+
+  it("scores a successful prepared retry as helped", async () => {
+    const { call, failure, send, outcomes, note } = hooks();
+    call("msg_1", "toolu_a");
+    call("msg_2", "toolu_b");
+    await failure("toolu_a");
+    await send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "FOO=1 build" }, tool_use_id: "toolu_b" });
+    expect(outcomes()).toEqual([[note.id, "helped"]]);
+  });
+
   it.each(["SessionEnd", "PreCompact"])("catches up on earlier sessions' events at %s, not at SessionStart", async (event) => {
     const { home, cwd, send } = hooks();
     appendEvent(home, "earlier", cwd, { tool: "bash", command: "npm test", ok: false, error: "boom: failed" });

@@ -6,8 +6,8 @@
  *   { "projects": { "second-brain": { "paths": ["C:/work/brain"], "remote": "github.com/o/r",
  *                                     "tags": ["typescript", "omp"], "aliases": ["the-2nd-brain"] } } }
  *
- * Resolution: BRAIN_PROJECT → projects.json path (longest prefix) → projects.json remote →
- * git remote repo name → main checkout folder name (a linked worktree names its main checkout) →
+ * Resolution: BRAIN_PROJECT → projects.json path (longest prefix) → linked main checkout identity →
+ * projects.json remote → git remote repo name → main checkout folder name →
  * (no git) the nearest folder at or above cwd, below the user's home folder, that projects.json
  * names → cwd folder name. Tags
  * are the declared ones plus the stack implied by manifest files at the root (package.json → node,
@@ -17,7 +17,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
-import { slug, tagKey, tagList, writeAtomic } from "./util.ts";
+import { claimPath, slug, tagKey, tagList, withClaim, writeAtomic } from "./util.ts";
 import { scrub } from "./scrub.ts";
 
 export interface Project {
@@ -121,31 +121,47 @@ export function loadProjects(home: string): Record<string, ProjectEntry> {
 }
 
 /**
- * Give project `id` the tag `tag` in projects.json, editing the file as written (unknown keys,
- * other entries and key spelling kept). False when it already has the tag. Throws, touching
- * nothing, when projects.json exists but is not `{ "projects": { … } }`.
+ * Change projects.json as written (unknown keys, other entries and key spelling kept) under its
+ * cross-process claim. The file is read after the claim is taken, so a concurrent writer's change
+ * is kept, never overwritten with a stale copy. `edit` changes `data` and returns false when there
+ * is nothing to write. Throws, touching nothing, when the file exists but is not
+ * `{ "projects": { … } }`; a ClaimError when another process holds the claim for several seconds.
+ */
+export function updateProjects(home: string, edit: (data: { projects: Record<string, unknown> }, file: string) => boolean): boolean {
+  const file = join(home, "projects.json");
+  return withClaim(claimPath(home, "projects.json.lock"), () => {
+    let data: { projects: Record<string, unknown> } = { projects: {} };
+    if (existsSync(file)) {
+      const parsed: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+      const inner = (parsed as { projects?: unknown } | null)?.projects;
+      if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(`${file}: expected { "projects": { … } }`);
+      data = parsed as { projects: Record<string, unknown> };
+    }
+    if (!edit(data, file)) return false;
+    writeAtomic(file, JSON.stringify(data, null, 2) + "\n");
+    return true;
+  });
+}
+
+/**
+ * Give project `id` the tag `tag` in projects.json, editing the file as written (see updateProjects).
+ * False when it already has the tag. Throws, touching nothing, when projects.json exists but is
+ * not `{ "projects": { … } }`.
  */
 export function addProjectTag(home: string, id: string, tag: string): boolean {
   if (scrub(tag).scrubbed || scrub(tagKey(tag)).scrubbed) throw new Error("tag contains a credential; choose a non-secret tag");
-  // An old id listed as an alias tags its owner: a key named like the alias would take the repo back.
-  id = canonical(loadProjects(home), id);
-  const file = join(home, "projects.json");
-  let data: { projects: Record<string, unknown> } = { projects: {} };
-  if (existsSync(file)) {
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
-    const inner = (parsed as { projects?: unknown } | null)?.projects;
-    if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(`${file}: expected { "projects": { … } }`);
-    data = parsed as { projects: Record<string, unknown> };
-  }
-  const key = Object.keys(data.projects).find((k) => idFor(k) === id) ?? id;
-  const entry = data.projects[key];
-  if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(`${file}: project ${key} is not an object`);
-  const current = entry as Record<string, unknown> | undefined;
-  const tags = Array.isArray(current?.tags) ? (current.tags as unknown[]) : [];
-  if (tags.some((t) => typeof t === "string" && tagKey(t) === tagKey(tag))) return false;
-  data.projects[key] = { ...current, tags: [...tags, tagKey(tag)] };
-  writeAtomic(file, JSON.stringify(data, null, 2) + "\n");
-  return true;
+  return updateProjects(home, (data, file) => {
+    // An old id listed as an alias tags its owner: a key named like the alias would take the repo back.
+    const owner = canonical(loadProjects(home), id);
+    const key = Object.keys(data.projects).find((k) => idFor(k) === owner) ?? owner;
+    const entry = data.projects[key];
+    if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(`${file}: project ${key} is not an object`);
+    const current = entry as Record<string, unknown> | undefined;
+    const tags = Array.isArray(current?.tags) ? (current.tags as unknown[]) : [];
+    if (tags.some((t) => typeof t === "string" && tagKey(t) === tagKey(tag))) return false;
+    data.projects[key] = { ...current, tags: [...tags, tagKey(tag)] };
+    return true;
+  });
 }
 
 /** An existing Markdown file contained in the checkout, including after symlink resolution. */
@@ -199,20 +215,6 @@ export function addProjectDoc(home: string, project: Project, path: string): boo
   const target = projectDocPath(project.root, path) ?? projectDocPath(project.docRoot ?? null, path);
   if (!target) throw new Error("doc must be an existing relative .md file inside the project root");
   if (scrub(path).scrubbed) throw new Error("doc path contains a credential");
-  const file = join(home, "projects.json");
-  let data: { projects: Record<string, unknown> } = { projects: {} };
-  if (existsSync(file)) {
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
-    const inner = (parsed as { projects?: unknown } | null)?.projects;
-    if (!inner || typeof inner !== "object" || Array.isArray(inner)) throw new Error(file + ': expected { "projects": { … } }');
-    data = parsed as { projects: Record<string, unknown> };
-  }
-  const key = Object.keys(data.projects).find(k => idFor(k) === project.id) ?? project.id;
-  const entry = data.projects[key];
-  if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(file + ": project " + key + " is not an object");
-  const current = entry as Record<string, unknown> | undefined;
-  if (current?.docs !== undefined && (!Array.isArray(current.docs) || !current.docs.every(d => typeof d === "string"))) throw new Error(file + ": " + key + ".docs must be a list of strings");
-  const docs = (current?.docs ?? []) as string[];
   // Stored against the declared folder, else the main checkout: a file in a linked worktree is
   // stored as the checkout's, since the worktree goes away. docRoot contains the main checkout.
   // realpathSync.native returns the on-disk case on Windows.
@@ -225,10 +227,17 @@ export function addProjectDoc(home: string, project: Project, path: string): boo
     return relative(base, rel.startsWith("..") || isAbsolute(rel) ? file : join(main, rel)).replace(/\\/g, "/");
   };
   const normalized = onDisk(target);
-  if (docs.some(d => { const f = docFile(project, d); return f ? onDisk(f) === normalized : normalizePath(d) === normalizePath(normalized); })) return false;
-  data.projects[key] = { ...current, docs: [...docs, normalized] };
-  writeAtomic(file, JSON.stringify(data, null, 2) + "\n");
-  return true;
+  return updateProjects(home, (data, file) => {
+    const key = Object.keys(data.projects).find(k => idFor(k) === project.id) ?? project.id;
+    const entry = data.projects[key];
+    if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) throw new Error(file + ": project " + key + " is not an object");
+    const current = entry as Record<string, unknown> | undefined;
+    if (current?.docs !== undefined && (!Array.isArray(current.docs) || !current.docs.every(d => typeof d === "string"))) throw new Error(file + ": " + key + ".docs must be a list of strings");
+    const docs = (current?.docs ?? []) as string[];
+    if (docs.some(d => { const f = docFile(project, d); return f ? onDisk(f) === normalized : normalizePath(d) === normalizePath(normalized); })) return false;
+    data.projects[key] = { ...current, docs: [...docs, normalized] };
+    return true;
+  });
 }
 
 /** The nearest directory at or above `cwd` that contains a `.git` entry. */
@@ -359,6 +368,15 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
     // worktree of the declared checkout (.claude/worktrees/x) is that checkout, not a repo inside it.
     const inner = root !== null && canonicalPath(mainCheckout(root)).startsWith(canonicalPath(best.path) + "/");
     return { id: best.id, tags: tagsOf(projects[best.id], root ?? declared), root: root ?? declared, ...(inner ? { docRoot: declared } : {}) };
+  }
+  // Linked checkouts inherit the registered main checkout, never their temporary basename
+  // or a pre-split remote. Keep the worktree root for evidence and document reads.
+  if (root) {
+    const main = mainCheckout(root);
+    if (main !== root) {
+      const owner = resolveProject(home, main, {});
+      return { ...owner, root, tags: tagsOf(projects[owner.id], root) };
+    }
   }
 
   const remote = root ? gitRemote(root) : null;

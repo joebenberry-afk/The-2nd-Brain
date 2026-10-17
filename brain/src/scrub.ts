@@ -49,6 +49,8 @@ function isCredential(name: string, value: string): boolean {
   if (parts.some((p, i) => p === "key" && i > 0 && KEY_OWNERS.has(parts[i - 1] as string))) return true;
   // STRIPE_KEY, MAILGUN_KEY: a key named after anything, when the value looks generated
   if (parts.at(-1) === "key" && tokenLike(value)) return true;
+  // Session cookies/ids assigned a generated-looking value: PHPSESSID, JSESSIONID, session_id, connect.sid
+  if (/^(?:phpsessid|jsessionid|aspnetsessionid|connectsid|session(?:id|token|key|secret|cookie))$/.test(parts.join("")) && (tokenLike(value) || /^[0-9a-f]{16,}$/i.test(value.replace(/^["']+|["']+$/g, "")))) return true;
   return parts.includes("token") && /[A-Za-z0-9]{8}/.test(value);
 }
 
@@ -92,7 +94,7 @@ export function scrub(text: string, opts: { longRuns?: boolean; tagRuns?: boolea
   result = result.replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "***");
   result = result.replace(/\bsk-(?=[A-Za-z0-9_\-.]*\d)[A-Za-z0-9_\-.]{20,}/g, "***");
   result = result.replace(/\bxox[baprs]-[A-Za-z0-9_-]+/g, "***");
-  result = result.replace(/\bAKIA[0-9A-Z]{16}\b/g, "***");
+  result = result.replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "***");
   result = result.replace(/\bAIza[0-9A-Za-z_-]{35}/g, "***");
   result = result.replace(/\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g, "***"); // Stripe
   result = result.replace(/\bglpat-[A-Za-z0-9_-]{20,}/g, "***"); // GitLab
@@ -127,6 +129,28 @@ export function scrub(text: string, opts: { longRuns?: boolean; tagRuns?: boolea
   result = result.replace(/\b(authorization)(["']?\s*[=:]\s*["']?)(?!(?:Bearer|Basic|Digest) \*\*\*)(?:(\w+)\s+)?([^\s"',;]+)/gi, (_m, name: string, sep: string, scheme: string | undefined) =>
     `${name}${sep}${scheme ? `${scheme} ` : ""}***`,
   );
+
+  // Cookie headers: every value of `Cookie: a=1; b=2` is masked, and the value of the first pair of
+  // `Set-Cookie: sid=…; Path=/; HttpOnly` (its attributes are not secrets). Also curl's
+  // `-b/--cookie "a=1"` (a value with no "=" is a cookie jar file). Prose such as "Cookie: banner
+  // shown" has no name=value pair and stays.
+  const cookieValues = (pairs: string, firstOnly: boolean): string => {
+    let seen = false;
+    return pairs.replace(/([^\s=;,]+=)([^;]*)/g, (match, name: string, value: string) => {
+      if (firstOnly && seen) return match;
+      seen = true;
+      return value === "***" || /^\s*$/.test(value) ? match : `${name}***`;
+    });
+  };
+  result = result.replace(/\b((?:Set-)?Cookie)(["']?\s*:\s*["']?)([^\r\n"']*)/gi, (match, name: string, sep: string, pairs: string) =>
+    /[^\s=;,]+=/.test(pairs) ? `${name}${sep}${cookieValues(pairs, /^set-/i.test(name))}` : match,
+  );
+  // Scope short flags to curl, stopping at shell separators but not quoted cookie separators.
+  result = result.replace(/\bcurl(?:\.exe)?(?=\s)(?:[^"'\\\n;&|]|\\.|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')*/g, (command) =>
+    command.replace(/(\s(?:-b(?:\s+|(?=['"]))|--cookie(?:=|\s+)))(?:(['"])((?:\\.|(?!\2)[^\\\n])*)\2|([^\s]+))/g, (match, flag: string, quote: string | undefined, quoted: string | undefined, plain: string | undefined) => {
+      const value = quoted ?? plain ?? "";
+      return /[^\s=;,]+=/.test(value) ? flag + (quote ?? "") + cookieValues(value, false) + (quote ?? "") : match;
+    }));
 
   // Credentials in URLs and curl: https://user:***@host, redis://:***@host, curl -u user:***
   // (the scheme's start is anchored by a lookbehind: "a.a.a.…" must not be retried at every dot)

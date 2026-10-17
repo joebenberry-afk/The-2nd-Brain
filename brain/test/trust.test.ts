@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { changedEvidence, createNote, evidenceHashes, formatNote, loadNotes, markTested, parseNote, testedCurrent, upgradeNote } from "../src/notes.ts";
+import { changedEvidence, createNote, evidenceHashes, formatNote, loadNotes, markTested, parseNote, saveNote, testedCurrent, upgradeNote } from "../src/notes.ts";
 import { answer, recall, staleHere } from "../src/search.ts";
 import { findFix, appendEvent, parseEvent, toolEventFrom } from "../src/capture.ts";
 import { rankForCard } from "../src/card.ts";
@@ -27,8 +27,7 @@ it("brain_note replaces a corrected headline, links both notes, and rejects inva
   const { home, root, note } = setup();
   const tool = brainTools.find(tool => tool.name === "brain_note")!;
   const context = { home, cwd: root, env: { BRAIN_JUDGE: "off" }, sub: false, session: "replace" };
-  expect(tool.params.replaces).toMatchObject({ type: "string", optional: true });
-  expect(tool.description).toContain("replaces: id of a note this corrects");
+  expect(tool.params.replaces).toMatchObject({ type: "string", optional: true, description: "id of a note this corrects" });
   await expect(tool.run({ text: "Missing target correction", replaces: "n-missing" }, context)).rejects.toThrow("no note n-missing");
   expect(loadNotes(home).notes).toHaveLength(1);
   const result = await tool.run({ text: "Quartz repair\nRebuild the quartz cache instead.", replaces: note.id }, context);
@@ -59,7 +58,8 @@ it("snapshots attached evidence on create/upgrade, with flat parser-compatible h
 
 it("hashes file bytes without losing invalid UTF-8 and ignores unresolvable/scheme evidence", () => {
   const { root, home, note } = setup();
-  const legacy = { ...note, evidenceSha: undefined };
+  // A legacy note has no stored hashes: upgrades apply to the note as stored, so store it that way.
+  const legacy = saveNote(home, { ...note, evidenceSha: undefined });
   expect(upgradeNote(home, legacy, { evidence: ["source.ts:1"], evidenceRoots: [root] })?.evidenceSha).toEqual(note.evidenceSha);
   const bytes = Buffer.from([0xff, 0x0d, 0x0a, 0xfe]);
   writeFileSync(join(root, "binary.bin"), bytes);

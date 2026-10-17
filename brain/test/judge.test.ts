@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { holdsPhrase, judgedAnswer, judgeText, JUDGE_THRESHOLD, JUDGE_TIMEOUT_MS, PHRASE_FLOOR, typesafeJudge, type Judge } from "../src/judge.ts";
+import { holdsPhrase, JEV_CHARS, JUDGE_CHARS, judgedAnswer, judgeText, JUDGE_THRESHOLD, JUDGE_TIMEOUT_MS, PHRASE_FLOOR, typesafeJudge, type Judge } from "../src/judge.ts";
 import { answerWithHits } from "../src/search.ts";
 import type { Note } from "../src/notes.ts";
 
@@ -98,27 +98,32 @@ it("does not resurrect a dropped retired note or its replacement", async () => {
   expect(await judgedAnswer(notes, "quartz migration", { project }, rejectAll)).toMatchObject({ ids: [], dropped: 2 });
 });
 
-it("collapses whitespace, scrubs, then cuts at 450 characters note text, and scrubs the query", async () => {
-  const original = note("safe", { body: "Quartz\n\t migration password=syntheticSecret123 " + "ordinary words ".repeat(50) });
+it("collapses whitespace, scrubs, then cuts note text for the judge, and scrubs the query; Jev reads only the first 450 characters", async () => {
+  const original = note("safe", { body: "Quartz\n\t migration password=syntheticSecret123 " + "ordinary words ".repeat(200) });
   const text = judgeText(original);
-  expect(text).toBe(("Quartz migration password=syntheticSecret123 " + "ordinary words ".repeat(50)).replace("syntheticSecret123", "***").slice(0, 450));
+  expect(text).toBe(("Quartz migration password=syntheticSecret123 " + "ordinary words ".repeat(200)).replace("syntheticSecret123", "***").slice(0, JUDGE_CHARS));
   const judge = vi.fn(async (_query: string, candidates: { id: string; text: string }[]) => new Map(candidates.map(c => [c.id, 1])));
   await judgedAnswer([original], "quartz migration password=syntheticSecret123", { project }, judge);
   expect(judge.mock.calls[0]).toEqual(["quartz migration password=***", [{ id: "safe", text }]]);
+  const fetch = vi.fn(async () => new Response(JSON.stringify({ answers: { rel_0: { noul: 0.9 } } }), { status: 200 }));
+  vi.stubGlobal("fetch", fetch);
+  await typesafeJudge({ TYPESAFE_API_KEY: "synthetic-test-credential" })!("jev cut", [{ id: "safe", text }]);
+  const sent = JSON.parse((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as string) as { questions: { rel_0: { instructions: string } } };
+  expect(sent.questions.rel_0.instructions).toBe(`Is candidate c0 relevant to the query in the state? Candidate c0: ${text.slice(0, JEV_CHARS)}`);
 });
 
-// A secret straddling character 450 must be masked whole, not cut below its pattern's minimum length.
+// A secret straddling the cut must be masked whole, not cut below its pattern's minimum length.
 const base64Run = "Ab1".repeat(14).slice(0, 40);
 const awsKey = "AKIA" + "Z9Y8X7W6V5U4T3S2";
 const leaks = (text: string, secret: string) => Array.from({ length: secret.length - 11 }, (_, i) => secret.slice(i, i + 12)).some(part => text.includes(part));
 
-it("never sends part of a secret that straddles the 450-character cut", () => {
+it("never sends part of a secret that straddles the 2,000-character cut", () => {
   // "Quartz migration " (17) + "ab " × n puts the secret at offset 17 + 3n.
-  const run = judgeText(note("run", { body: "Quartz migration " + "ab ".repeat(132) + base64Run + " tail words" }));
-  const key = judgeText(note("key", { body: "Quartz migration " + "ab ".repeat(139) + awsKey + " tail words" }));
+  const run = judgeText(note("run", { body: "Quartz migration " + "ab ".repeat(656) + base64Run + " tail words" }));
+  const key = judgeText(note("key", { body: "Quartz migration " + "ab ".repeat(658) + awsKey + " tail words" }));
   expect(leaks(run, base64Run)).toBe(false);
   expect(leaks(key, awsKey)).toBe(false);
-  expect(run.length).toBeLessThanOrEqual(450);
+  expect(run.length).toBeLessThanOrEqual(JUDGE_CHARS);
 });
 
 it("never sends part of a secret that straddles the cut of a plan-doc excerpt", async () => {
@@ -126,15 +131,15 @@ it("never sends part of a secret that straddles the cut of a plan-doc excerpt", 
   roots.push(base);
   const home = join(base, "home"), root = join(base, "repo");
   mkdirSync(home); mkdirSync(join(root, "docs"), { recursive: true });
-  // "Quartz migration: " (18) + "ab " × 132 puts the run at offset 414 of the excerpt.
-  writeFileSync(join(root, "docs", "LOOP.md"), "## Quartz migration\n" + "ab ".repeat(132) + base64Run + " tail words\n");
+  // "Quartz migration: " (18) + "ab " × 657 puts the run at offset 1,989 of the excerpt.
+  writeFileSync(join(root, "docs", "LOOP.md"), "## Quartz migration\n" + "ab ".repeat(657) + base64Run + " tail words\n");
   writeFileSync(join(home, "projects.json"), JSON.stringify({ projects: { repo: { docs: ["docs/LOOP.md"] } } }));
   const seen: string[] = [];
   const judge: Judge = async (_q, candidates) => { seen.push(...candidates.map(c => c.text)); return new Map(candidates.map(c => [c.id, 0.9])); };
   expect(await judgedAnswer([], "quartz migration", { project: { id: "repo", tags: [], root }, home }, judge)).toMatchObject({ text: "docs/LOOP.md › Quartz migration (line 1)", judged: true });
   expect(seen).toHaveLength(1);
   expect(leaks(seen[0]!, base64Run)).toBe(false);
-  expect(seen[0]!.length).toBeLessThanOrEqual(450);
+  expect(seen[0]!.length).toBeLessThanOrEqual(JUDGE_CHARS);
 });
 
 it("uses the calibrated request and caches by query, note id and text across factory calls", async () => {
