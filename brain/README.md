@@ -64,7 +64,8 @@ with a judge: **Tora's local reranker** (Qwen3-Reranker-0.6B, free) whenever a T
 and TypeSafe Jev (`jev-latest`, paid) only when Tora gives no verdict and `TYPESAFE_API_KEY` is set.
 `BRAIN_JUDGE=tora` never calls Jev (recall or the write-time pair hint), `BRAIN_JUDGE=jev` skips
 Tora for judging (recall and that hint) while the start card's cosine ranking still uses a live
-Tora, and `BRAIN_JUDGE=off` judges nothing; `BRAIN_TORA=off` disables Tora everywhere. Notes scoring below **0.78** on Jev's scale are dropped
+Tora, and `BRAIN_JUDGE=off` judges nothing; `BRAIN_TORA=off` disables Tora everywhere. Notes
+scoring below **0.78** on Jev's scale are dropped
 (0.75 let 1-2 wrong answers through on reruns of the same 54 queries: Jev drifts about ±0.02
 between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual
 doc-heading or no-match fallback still applies. Tora's reranker scores saturate near 1, so they are
