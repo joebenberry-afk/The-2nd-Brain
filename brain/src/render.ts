@@ -19,7 +19,7 @@ import { writeAtomic } from "./util.ts";
 /** One tool output as the host sent it, in conversation order. `key` is the host's call id. */
 export interface ToolOutput { key: string; text: string; tool?: string }
 
-/** An output to send as `stub`; `fresh` when this conversation first elided this content. */
+/** An output to send as `stub`; `fresh` when this conversation first elided this output. */
 export interface Elision { index: number; id: string; stub: string; tokens: number; fresh: boolean }
 
 /** Token budgets, counted by outputTokens: newest `keep` tokens of tool output stay verbatim; epochs advance by `step`; outputs under `min` are never elided. */
@@ -147,7 +147,7 @@ export class Renderer {
   readonly #home: string | null;
   readonly #elided = new Map<string, { id: string; stub: string }>();
   readonly #sizes = new Map<string, { text: string; tokens: number }>();
-  /** Ids elided at any point in this conversation: a shrink can forget the sticky map, not the saving. */
+  /** Output instances (call id and content) elided at any point in this conversation: a shrink can forget the sticky map, not the saving. */
   readonly #seen = new Set<string>();
   #count = 0;
   #tokens = 0;
@@ -202,8 +202,9 @@ export class Renderer {
       const again = READ_ONLY.test(tool) ? "; re-running the tool also shows it" : "";
       const stub = `${STUB_PREFIX}${tool} output to save context: ${lines} line${lines === 1 ? "" : "s"}, ~${tokens} tokens. Recall id ${id} returns it in full${again}. It began: ${head}]`;
       this.#elided.set(output.key, { id, stub });
-      elisions.push({ index, id, stub, tokens, fresh: !this.#seen.has(id) });
-      this.#seen.add(id);
+      const seen = `${output.key}\0${id}`;
+      elisions.push({ index, id, stub, tokens, fresh: !this.#seen.has(seen) });
+      this.#seen.add(seen);
     }
     return elisions;
   }

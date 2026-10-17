@@ -442,8 +442,9 @@ Budgets count tokens with `outputTokens` (about 5% from o200k; chars/4 runs 33â€
 and JSON). The newest 30 000 tokens of tool output stay verbatim; older output is elided in
 epochs of 50 000 tokens, so the request prefix, and with it the providerâ€™s prompt cache, stays
 byte-identical between epochs; output under 500 tokens is never touched. `brain stats` counts
-epochs, elided outputs, tokens saved per later request and restores; the same content counts as
-fresh once per conversation, even if a shrunken history clears the sticky set.
+epochs, elided outputs, tokens saved per later request and restores; the same output counts as
+fresh once per conversation, even if a shrunken history clears the sticky set, while a second copy
+under a new call id counts again.
 - OMP: on by default; `BRAIN_RENDER=off` turns it off. OMP floors its compaction trigger by the
   stored history, so here layer 4 saves request tokens and cost, not compactions.
 - Claude Code and Codex: run `brain proxy` (127.0.0.1:47830, `--port N`; needs

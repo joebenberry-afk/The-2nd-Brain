@@ -159,6 +159,17 @@ describe("render core", () => {
     expect(restored.every(e => !e.fresh)).toBe(true);
   });
 
+  it("counts a duplicate copy under a new call id once it reaches the watermark", () => {
+    const renderer = new Renderer(null, SMALL);
+    const base = history(40);
+    const first = renderer.render(base);
+    const original = first.find(e => e.index === 0)!;
+    const extended = [...base, { ...base[0]!, key: "copy" }, ...Array.from({ length: 60 }, (_, n) => out(1000 + n, 100))];
+    const result = renderer.render(extended);
+    expect(result.find(e => e.index === 0)).toMatchObject({ id: original.id, fresh: false });
+    expect(result.find(e => e.index === base.length)).toMatchObject({ id: original.id, fresh: true });
+  });
+
   it("never puts half a surrogate pair in a stub", () => {
     const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
     for (const lead of ["a".repeat(99), "a".repeat(399), " ".repeat(399)]) {
