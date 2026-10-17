@@ -6,8 +6,8 @@ source: agent
 errors:
   - "`PUT` without `:` is clipboard-backed and takes no body rows"
 tested: "true"
-tested_by: agent
-tested_at: 2026-10-17T09:20:03Z
+tested_by: owner
+tested_at: 2026-10-17T15:15:28Z
 tested_sha: 482a15d020ee
 host: omp
 ---

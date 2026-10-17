@@ -1,5 +1,5 @@
 ---
-at: 2026-10-17T14:29:29Z
+at: 2026-10-17T15:15:44Z
 ---
 
-Goal: perfect Second Brain (token-efficient, fast, reliable). Done 2026-10-17: audit fixes, RECALL-02, layer 4 on in OMP, fixCutHint, check alias-folder fix, fix notes rewritten; gate 1089/1089; committed fc0e627..bd2830b on main (not pushed). Next: restart OMP to load new extension code. Watch out: warm recall ~37 ms is mostly per-note stat (12 ms), kept for correctness.
+Goal: perfect Second Brain. Done 2026-10-17: owner confirmed global fixes n-5ac8358781, n-61c6d7b782, n-a9579a214f, n-aaefda5ff8; pandas fix n-e537939a36 untested; n-617440b0ca enriched; before/after vs 9d765ef measured. Next: restart OMP to load new code. Watch out: live Tora judge keeps ~1/3 of relevant recall hits (owner's Oct 15 choice).
