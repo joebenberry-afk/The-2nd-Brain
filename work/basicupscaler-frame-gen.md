@@ -1,5 +1,5 @@
 ---
-at: 2026-10-17T23:22:34Z
+at: 2026-10-18T14:37:16Z
 ---
 
-Goal: M1 gate (D29). Done: carry fix compiles, bu-win lib tests pass; stale n37 fixtures regenerated (af08af4 text change); probe 4 frozen (runs/frame_generation/20261017T231800Z_clip-loss-probe4), bench job bg_111 waiting for owner idle (arm A quiet-overlays, then B). Next: read result-A/B.json → clip fix → FG-353/354 commit → build → K4c → K5. Watch: T06 10 s ready deadline.
+Goal: product first (0ae6c27): close M1, then M2 lanes. queue29 running from omp bg_82 (cwd C:/BU-wt/m1-k8; dies if omp closes; relaunch same command, done items skip). Next: score_ab.py (runs/frame_generation/20261018T113033Z_m1-k8-ab-score) on D:/BU-gen/m1-gate/20261018T112343Z_m1-cohortK8/runs; FG-384 row; fix FT-2 diagonal (real reg 21px≈identity) + pitch low generated n; verify uncommitted arena/tests/conftest.py stem fix; move K8 receipts, remove worktree. See: AGENTS.md owner rules.
