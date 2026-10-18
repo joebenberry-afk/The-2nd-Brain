@@ -175,10 +175,11 @@ describe("automatic file evidence", () => {
     appendEvent(home, "edits", cwd, { tool: "Read", ok: true, path: "src/read.ts" });
     appendEvent(home, "edits", cwd, { tool: "Edit", ok: false, path: "src/failed.ts", error: "Error: edit refused" });
     appendEvent(home, "edits", cwd, { tool: "MultiEdit", ok: true, path: "src/two.ts" });
+    appendEvent(home, "edits", cwd, { tool: "NotebookEdit", ok: true, path: "nb/a.ipynb" });
     appendEvent(home, "edits", cwd, { tool: "Edit", ok: true, path: "src/one.ts" });
     appendEvent(home, "edits", cwd, { tool: "Write", ok: true, path: join(tmp(), "scratch.py") });
     appendEvent(home, "edits", cwd, { tool: "Write", ok: true, path: "host-scratch/scratch.py" });
-    expect(sessionEdits(home, "edits", cwd, [join(cwd, "host-scratch")])).toEqual(["src/two.ts", "src/one.ts"]);
+    expect(sessionEdits(home, "edits", cwd, [join(cwd, "host-scratch")])).toEqual(["src/two.ts", "nb/a.ipynb", "src/one.ts"]);
     expect(sessionEdits(home, "absent", cwd)).toEqual([]);
     for (let i = 0; i < 21; i++) appendEvent(home, "cap", cwd, { tool: "Write", ok: true, path: `src/${i}.ts` });
     expect(sessionEdits(home, "cap", cwd)).toEqual(Array.from({ length: 20 }, (_, i) => `src/${i + 1}.ts`));

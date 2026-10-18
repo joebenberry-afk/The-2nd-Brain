@@ -639,7 +639,7 @@ export function sessionEdits(home: string, session: string, root: string | null,
     if (offset) lines.shift();
     for (const line of lines) {
       const event = parseEvent(line);
-      if (!event || event.session !== session || !event.ok || !/^(Edit|Write|MultiEdit)$/.test(event.tool) || !event.path || touchesPrivate(event)) continue;
+      if (!event || event.session !== session || !event.ok || !/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(event.tool) || !event.path || touchesPrivate(event)) continue;
       const absolute = resolve(event.cwd, event.path);
       const base = root ?? event.cwd;
       const inside = within(base, absolute);
