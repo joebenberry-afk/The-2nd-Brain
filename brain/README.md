@@ -388,7 +388,10 @@ the same events locally. Stop stays advisory and never requests continuation.
 The 30-second timeout also lifts SessionEnd's shared 1.5-second budget. PostToolUse runs
 `async` rather than holding every tool result about 300 ms; it may return a rollover hint
 for the next model context. UserPromptSubmit runs `async` too: rule capture returns nothing
-(no per-prompt injection, D7), so no prompt waits ~180 ms on it. The other hooks stay synchronous (card, fix, state, Stop warning). A PreCompact or SessionEnd right after the last
+(no per-prompt injection, D7), so no prompt waits ~180 ms on it. The other hooks stay synchronous (card, fix, state, Stop warning): an async hook's
+`systemMessage` reaches the model on the next turn and is never shown to the user
+(code.claude.com/docs/en/hooks, "Run hooks in the background"), so an async Stop would hide
+the rollover warning from the owner it is for. A PreCompact or SessionEnd right after the last
 tool call can miss that call's event, and `claude -p` stops a PostToolUse still running at exit.
 
 Successful and failed tools share the capture log (a backgrounded Bash launch is not logged), so
