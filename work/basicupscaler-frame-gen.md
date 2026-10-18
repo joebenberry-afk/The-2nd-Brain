@@ -1,5 +1,5 @@
 ---
-at: 2026-10-18T14:37:16Z
+at: 2026-10-18T15:15:39Z
 ---
 
-Goal: product first (0ae6c27): close M1, then M2 lanes. queue29 running from omp bg_82 (cwd C:/BU-wt/m1-k8; dies if omp closes; relaunch same command, done items skip). Next: score_ab.py (runs/frame_generation/20261018T113033Z_m1-k8-ab-score) on D:/BU-gen/m1-gate/20261018T112343Z_m1-cohortK8/runs; FG-384 row; fix FT-2 diagonal (real reg 21px≈identity) + pitch low generated n; verify uncommitted arena/tests/conftest.py stem fix; move K8 receipts, remove worktree. See: AGENTS.md owner rules.
+Goal: product first, FT-2 Cyberpunk until it passes (ROADMAP D36). Done today: FG-384..387, D37-D40, test fix 89331fb. Running: lane gate/trust (bu-camwarp F-a still, F-b count sigma, F-c count-aware trust; offline replay K8 fit logs; row FG-388) and lane scorer (D37 keep window input method, D40 drop-late-tick acceptance v2; row FG-389), both in .claude/worktrees. queue29 still waiting owner idle. Next: review+merge lanes, build candidate, freeze FT-2 Cyberpunk, run; move K8 receipts + remove C:/BU-wt/m1-k8 when queue ends.
