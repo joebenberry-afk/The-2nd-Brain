@@ -149,7 +149,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   },
   card(c) {
     // A preview of the Claude Code card (no tools, Claude Code's fix fires); OMP renders its own.
-    const card = renderCard(c.home, loadNotes(c.home).notes, c.project, { tools: false, host: "claude-code" });
+    const card = renderCard(c.home, loadVisibleNotes(c.home, c.project.id).notes, c.project, { tools: false, host: "claude-code" });
     if (card) {
       c.io.out(card);
       use(c, "card", card, undefined, undefined, undefined, cardIds(card));
@@ -733,7 +733,9 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         if (p.source !== "resume") {
           // No scanEvents here: catching up on earlier sessions' events took ~300 ms of every start
           // card. SessionEnd and PreCompact run it, off any prompt's path.
-          const { notes } = loadNotes(home);
+          // The card shows global and this project's notes only: other projects' files are not read
+          // (SessionStart hook ~500 → ~245 ms on a 541-note home).
+          const { notes } = loadVisibleNotes(home, project.id);
           const card = renderCard(home, notes, project, { tools: false, subagent: sub, host: "claude-code" });
           const context = card || (p.source === "compact" ? LEAN_LINE : "");
           if (context) output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context } };
@@ -741,7 +743,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         }
       } else if (event === "SubagentStart") {
         // The documented hook exposes identity, not the brief: registered docs only.
-        const { notes } = loadNotes(home);
+        const { notes } = loadVisibleNotes(home, project.id);
         const parentEdits = session ? sessionEdits(home, session, project.root) : [];
         const card = renderCard(home, notes, project, { tools: false, subagent: true, host: "claude-code", parentEdits });
         if (card) {

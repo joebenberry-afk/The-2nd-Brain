@@ -44,6 +44,12 @@ describe("warm child card", () => {
     expect(settings.hooks.SubagentStart[0]?.hooks[0]?.async).not.toBe(true);
   });
 
+  it("registers UserPromptSubmit asynchronously: rule capture returns nothing, so no prompt waits on it", () => {
+    const settings = JSON.parse(readFileSync(new URL("../../.claude/settings.json", import.meta.url), "utf8")) as { hooks: { UserPromptSubmit: Array<{ hooks: Array<{ command: string; async?: boolean }> }> } };
+    expect(settings.hooks.UserPromptSubmit[0]?.hooks[0]?.command).toContain("hook claude-code");
+    expect(settings.hooks.UserPromptSubmit[0]?.hooks[0]?.async).toBe(true);
+  });
+
   it("enforces 200 total tokens and six rule lines/80 tokens with many notes and paths", () => {
     const { home, child } = setup();
     for (let i = 0; i < 40; i++) createNote(home, { project: "demo", text: `Rule ${i}: keep edits local`, tags: ["brief"] });
