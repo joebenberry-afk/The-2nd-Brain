@@ -1,5 +1,5 @@
 ---
-at: 2026-10-18T15:04:50Z
+at: 2026-10-18T15:11:04Z
 ---
 
-Goal: optimize Second Brain for Claude Code — done and live-verified 2026-10-18 (async UserPromptSubmit, card ~3.5x faster in-process, no duplicate footer, NotebookEdit capture). Next: restart long-running Claude Code sessions; after a week compare brain stats tool-use rate (was 8/15 main sessions).
+Goal: optimize Second Brain for Claude Code — done 2026-10-18: async UserPromptSubmit, card ~116 ms (was 350-550), footer dedup (A/B 14/14 vs 12/14, no loss), NotebookEdit capture, Stop stays sync (docs); all live-verified and committed. Next: restart long-running sessions for settings changes.
