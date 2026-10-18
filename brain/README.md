@@ -200,7 +200,8 @@ Recall searches the whole registered section, preferring more distinct query ter
    The card holds only what the agent can act on: pending proposal counts stay in `brain review`,
    and where the `brain_*` tools are resident (OMP) their descriptions carry the when-to-act
    guidance, so the card ends with the lean-work line; CLI hosts (Claude Code, `brain card`) also
-   get the CLI line. Measured over the 20 projects of the live home (2026-10-14), with the budget
+   get the CLI line, unless Claude Code already loads the `brain hook agents-md` block from the
+   global CLAUDE.md (or a project CLAUDE.md, directly or through `@AGENTS.md`). Measured over the 20 projects of the live home (2026-10-14), with the budget
    lowered from 400 to 320 tokens: OMP main cards −19%, CLI main cards −17%, OMP child cards −8%.
 
    Add a standing child rule with `brain note "Use Node built-ins only" --tag brief`. Active

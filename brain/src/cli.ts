@@ -4,6 +4,7 @@
  */
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { collectAsks, formatWeek, hostSessionRoots, MAX_WEEKS, weeklyAsks, windowStart } from "./asks.ts";
@@ -149,7 +150,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   },
   card(c) {
     // A preview of the Claude Code card (no tools, Claude Code's fix fires); OMP renders its own.
-    const card = renderCard(c.home, loadVisibleNotes(c.home, c.project.id).notes, c.project, { tools: false, host: "claude-code" });
+    const card = renderCard(c.home, loadVisibleNotes(c.home, c.project.id).notes, c.project, { tools: agentsBlockLoaded(c.io.env, c.project.root), host: "claude-code" });
     if (card) {
       c.io.out(card);
       use(c, "card", card, undefined, undefined, undefined, cardIds(card));
@@ -683,6 +684,19 @@ const sha = (text: string): string => createHash("sha256").update(text).digest("
  * Hooks run in separate processes; hash keys so commands and session names never persist. A
  * child's directory sits inside its parent's, so the parent's cleanup also removes it.
  */
+/**
+ * Claude Code loads the managed agents block (`brain hook agents-md`) from CLAUDE.md into every
+ * context, children and compactions included: the card's when-to-act footer would say it twice.
+ */
+function agentsBlockLoaded(env: NodeJS.ProcessEnv, root: string | null): boolean {
+  const marker = AGENTS_BLOCK.slice(0, AGENTS_BLOCK.indexOf(" id="));
+  const read = (path: string): string => { try { return readFileSync(path, "utf8"); } catch { return ""; } };
+  if (read(join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "CLAUDE.md")).includes(marker)) return true;
+  if (!root) return false;
+  const local = read(join(root, "CLAUDE.md"));
+  return local.includes(marker) || (/^@AGENTS\.md\s*$/m.test(local) && read(join(root, "AGENTS.md")).includes(marker));
+}
+
 function hookFixDir(home: string, session: string | undefined, agent?: string): string {
   return join(home, "state", "pending-fixes", sha(session ?? "claude-code"), ...(agent ? [sha(agent)] : []));
 }
@@ -736,7 +750,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
           // The card shows global and this project's notes only: other projects' files are not read
           // (SessionStart hook ~500 → ~245 ms on a 541-note home).
           const { notes } = loadVisibleNotes(home, project.id);
-          const card = renderCard(home, notes, project, { tools: false, subagent: sub, host: "claude-code" });
+          const card = renderCard(home, notes, project, { tools: agentsBlockLoaded(io.env, project.root), subagent: sub, host: "claude-code" });
           const context = card || (p.source === "compact" ? LEAN_LINE : "");
           if (context) output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context } };
           if (card) logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: performance.now() - started, session: logSession, via: "hook", sub, ids: cardIds(card) });
@@ -745,7 +759,7 @@ function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
         // The documented hook exposes identity, not the brief: registered docs only.
         const { notes } = loadVisibleNotes(home, project.id);
         const parentEdits = session ? sessionEdits(home, session, project.root) : [];
-        const card = renderCard(home, notes, project, { tools: false, subagent: true, host: "claude-code", parentEdits });
+        const card = renderCard(home, notes, project, { tools: agentsBlockLoaded(io.env, project.root), subagent: true, host: "claude-code", parentEdits });
         if (card) {
           output = { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: card } };
           logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(card), ms: performance.now() - started, session: logSession, via: "hook", sub: true, ids: cardIds(card) });

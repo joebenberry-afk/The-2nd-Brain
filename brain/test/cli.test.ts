@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -441,6 +441,30 @@ describe("brain hook claude-code", () => {
     expect(r.json.hookSpecificOutput.additionalContext).toContain("Demo decision");
     const other = await hook(JSON.stringify({ hook_event_name: "SessionStart", cwd: repo("elsewhere") }), { SECOND_BRAIN_HOME: home });
     expect(other.json).toEqual({});
+  });
+
+  it("drops the card's when-to-act footer when CLAUDE.md already loads the agents block", async () => {
+    const home = tmp();
+    const cwd = repo("demo");
+    const claude = tmp();
+    createNote(home, { text: "Demo decision", project: "demo", kind: "decision" });
+    const card = async (event: string) => (await hook(JSON.stringify({ hook_event_name: event, source: "startup", cwd, agent_id: "a1" }), { SECOND_BRAIN_HOME: home, CLAUDE_CONFIG_DIR: claude })).json.hookSpecificOutput.additionalContext as string;
+    expect(await card("SessionStart")).toContain("brain recall");
+    expect(await card("SubagentStart")).toContain("brain recall");
+    const block = (await run(["hook", "agents-md"])).out;
+    // Through the project's CLAUDE.md importing AGENTS.md, as in this repository.
+    writeFileSync(join(cwd, "AGENTS.md"), block);
+    expect(await card("SessionStart")).toContain("brain recall");
+    writeFileSync(join(cwd, "CLAUDE.md"), "# Demo\n\n@AGENTS.md\n");
+    expect(await card("SessionStart")).not.toContain("brain recall");
+    rmSync(join(cwd, "CLAUDE.md"));
+    // Through the global CLAUDE.md, as the installer writes it.
+    writeFileSync(join(claude, "CLAUDE.md"), `# Mine\n\n${block}\n`);
+    for (const event of ["SessionStart", "SubagentStart"]) {
+      const text = await card(event);
+      expect(text).toContain("Demo decision");
+      expect(text).not.toContain("brain recall");
+    }
   });
 
   it("PostToolUseFailure returns a tested fix and logs the event", async () => {
