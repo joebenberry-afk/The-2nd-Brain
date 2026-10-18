@@ -21,7 +21,9 @@ The installer (every step reversible):
   `~/.omp/agent/extensions-disabled/` so memory is not pushed twice;
 - writes `~/.omp/agent/extensions/second-brain-v4/index.ts`, a one-line loader that imports
   `brain/src/omp.ts` from the checkout — `git pull` plus an OMP restart is the whole update
-  (verified live on OMP 18.3.5; a running session keeps the code it started with).
+  (verified live on OMP 18.3.5; a running session keeps the code it started with). An install
+  made with `.\scripts\install-v4.ps1 -Copy` runs its own copy of `brain/src`: re-run that
+  command after the pull, before restarting.
   If OMP does not load it (check 1 below shows no card), run `.\scripts\install-v4.ps1 -Copy`:
   a self-contained copy of `brain/src` (re-run it after each `git pull`);
 - ends with `brain check` as a self-test.
