@@ -31,11 +31,12 @@ export interface RenderPolicy { keep: number; step: number; min: number }
  * on OpenAI) per request, so `step` is above `keep`: on OpenAI an epoch pays back in about 7
  * requests (40k/20k needed about 23 and cost more than it saved on short log-heavy sessions).
  * Anthropic bills writes at 1.25-2x and reads at 0.025-0.1x, so it rarely pays back there and OMP skips it (omp.ts).
- * keep + step caps live tool output near 80k: in the E6 bench Claude Code's requests peaked at
- * 124k tokens (Claude counts logs about 1.4x heavier than this estimate) against 224k without.
+ * keep + step caps live tool output near 70k: in the E6 bench at 30k/50k Claude Code's requests
+ * peaked at 124k tokens (Claude counts logs about 1.4x heavier than this estimate) against 224k without.
+ * keep 20k over 30k (E6, 2026-10-19, gpt-6-astra): input -7.6%, cost -4.2%, probes and detail unchanged.
  * A stub costs 60-90 tokens, hence `min` 500.
  */
-export const RENDER_POLICY: RenderPolicy = { keep: 30_000, step: 50_000, min: 500 };
+export const RENDER_POLICY: RenderPolicy = { keep: 20_000, step: 50_000, min: 500 };
 
 /** Recall ids for elided output: `t-` and 10 hex of the original's SHA-256. */
 export const ELIDED_ID = /^t-[0-9a-f]{10}$/;

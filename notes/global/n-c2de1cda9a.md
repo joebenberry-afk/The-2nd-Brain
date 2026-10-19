@@ -3,6 +3,8 @@ id: n-c2de1cda9a
 kind: decision
 at: 2026-10-19T11:35:04Z
 source: agent
+replaced_by: n-c2f1ac3e24
+retired: 2026-10-19T16:34:59Z
 ---
 
 Keep OMP's 1-hour Anthropic prompt-cache TTL; 5-minute writes cost more overall.

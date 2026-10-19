@@ -453,7 +453,7 @@ the harness’s own transcripts).
 OMP and the proxy persist each original before committing its stub; a failed write keeps that
 output full. Equal-length replacements are recounted by content, not by character count.
 Budgets count tokens with `outputTokens` (about 5% from o200k; chars/4 runs 33–39% low on logs
-and JSON). The newest 30 000 tokens of tool output stay verbatim; older output is elided in
+and JSON). The newest 20 000 tokens of tool output stay verbatim; older output is elided in
 epochs of 50 000 tokens, so the request prefix, and with it the provider’s prompt cache, stays
 byte-identical between epochs; output under 500 tokens is never touched. `brain stats` counts
 epochs, elided outputs, tokens saved per later request and restores; the same output counts as

@@ -32,16 +32,17 @@ host's messages to `ToolOutput { key, text, tool? }[]` in conversation order, wh
 host's call id. They then write back each `Elision { index, id, stub, tokens, fresh }`.
 
 - **Policy.** Budgets are counted by `outputTokens` (next bullet), not by the brain's chars/4.
-  - `keep` = 30 000 tokens: the newest tool output always stays verbatim.
+  - `keep` = 20 000 tokens: the newest tool output always stays verbatim (30 000 until
+    2026-10-19; see §7).
   - `step` = 50 000 tokens: the epoch size.
   - `min` = 500 tokens: smaller outputs are never elided.
   - Interpretation: an epoch re-sends everything after its first new stub uncached (Anthropic
     1.25x the base input price, 2x with 1-hour caching; OpenAI 1x), while each elided token then
     saves one cache read (0.1x) per later request. So `step` is above `keep`: an epoch pays back
     in about 7 requests, 11 with 1-hour caching.
-  - keep + step caps live tool output near 80k of this estimate. In E6 (§5) Claude Code's
-    requests peaked at 124k Claude tokens with layer 4 and 224k without; Claude counts logs about
-    1.4x heavier than o200k.
+  - keep + step caps live tool output near 70k of this estimate. In E6 (§5), at 30k/50k, Claude
+    Code's requests peaked at 124k Claude tokens with layer 4 and 224k without; Claude counts logs
+    about 1.4x heavier than o200k.
   - Amended 2026-10-17, before any elision was measured, from keep 40k / step 20k (OMP's pruning
     defaults). A cache-economics simulation over six session shapes (warm cache, two requests per
     tool output) gave, against no layer 4: 40k/20k input -50%, Anthropic cost -24% on average and
@@ -280,8 +281,51 @@ elided requests.
   (`providers.cacheWarming`, default `idle`) makes a time gap an unreliable miss signal.
 - **Decision.** OMP skips layer 4 for models on the Anthropic Messages API (`BRAIN_RENDER=on` still
   forces it). OMP's catalog `cost.cacheWrite` cannot make this call: it lists 1.25× input for OpenAI
-  models too, which bill no writes. `RENDER_POLICY` stays 30k/50k: `keep` 20k would save a further
-  6 points on OpenAI models in the replay, but no E6 run has checked the detail probes there.
+  models too, which bill no writes.
+- **`keep` 20k (owner-approved, 2026-10-19).** The replay put 20k/50k a further 6 points ahead of
+  30k/50k on OpenAI models, so E6 ran both on the same day: OMP on gpt-6-astra, depth 18, 3 runs
+  each, the 30k arm from `main` and the 20k arm from a worktree.
+
+  | arm | input tokens | cache-weighted input | cost | probes | detail |
+  |---|---|---|---|---|---|
+  | brain (no layer 4) | 4 983 370 | 646k | $6.569 | 11/11 | 2/2 |
+  | render 30k/50k | 2 973 271 (−40.3%) | 503k (−22.2%) | $5.129 (−21.9%) | 11/11 | 2/2 |
+  | render 20k/50k | 2 747 146 (−44.9%) | 482k (−25.4%) | $4.914 (−25.2%) | 11/11 | 2/2 |
+
+  20k passes every §5 criterion and beats 30k by 7.6% input and 4.2% cost, with no lost probe in
+  any run (status_kept and vendor_kept 100%). `RENDER_POLICY` is now 20k/50k. Outputs:
+  `C:/tmp/e6-20261019-control`, `C:/tmp/e6-20261019-keep20k`.
 - **Cache TTL, measured, unchanged.** OMP's 1-hour writes beat 5-minute ones: 997 requests came 5
   minutes to 1 hour after the previous one, and at 5 minutes Opus input cost would rise 77% and
-  Sonnet 20%.
+  Sonnet 20%. Adding OMP's idle cache warming does not rescue 5 minutes. Replayed with the warmer's
+  own rules (subagents are never warmed; idle refreshes need a prompt of at least 96k tokens on Opus
+  and 192k on Sonnet; idle warming stops after 30 minutes), Opus costs 7.5% more and Sonnet 22% more.
+  `providers.cacheRetention` stays `auto`, which gives OAuth seats 1-hour entries.
+- **OMP compaction thresholds (owner-approved, 2026-10-19).** Until 2026-10-17 OMP compacted near
+  the window (reserve-based default), so Opus sessions ran to about 850k tokens and 27% of Opus
+  requests exceeded 400k. Since 2026-10-17 `compaction.thresholdTokens` is 140000; requests above
+  400k fell to 0–3% a day. The cost model per request is the cache reads of a context that grows from
+  the post-compaction size (median 51k) to the threshold, plus each compaction's rewrite and
+  summary. With measured growth (Opus 2.8k tokens a request, Sonnet 4.5k), it puts the optimum at
+  170–190k for Opus and 200–230k for Sonnet, depending on whether Anthropic bills the compaction
+  read as cached. `compaction.modelThresholds` is therefore `f180000` for Opus 5.5 (modeled −2.6% to
+  −5.4% of input cost against 140k) and `f200000` for Sonnet 5.5 (−9.4% to −11.3%). OpenAI models
+  stay at 140k. Their remote compaction reads the whole context uncached, and the modeled optimum
+  is 155k for gpt-6.1-sol and 170k for gpt-6-astra, worth less than 2%. With Claude compacting
+  above the 150k rollover threshold, the hand-off hint fires once per compaction cycle again.
+- **Claude Code compaction (owner-approved, 2026-10-19).** Claude Code has its own single setting,
+  `autoCompactWindow` in `~/.claude/settings.json`: 150000 since 2026-10-18, and no request has
+  exceeded 150k since 2026-10-19. The same model with Claude Code's numbers (Opus 5.5 growth 1.9k
+  tokens a request, median post-compaction size 67k, only 6 compactions observed) puts the optimum at
+  175k (cached compaction read) to 195k (uncached). It is now 180000, matching OMP's Opus threshold:
+  modeled −2.4% to −4.9% of input cost.
+- **Service tiers (2026-10-19).** `tier.openai` was `priority` from 2026-10-07 to 2026-10-16:
+  Codex served 13,298 turns at Fast, billed 2.5x usage-equivalent, about $3,059 of $3,194 of OpenAI
+  spend in the 14-day window. Since 2026-10-17 it is `scale`, which Codex serves as `default` (1x).
+  Codex rejects `flex` ("Unsupported service_tier: flex", tested on gpt-6.1-sol), so 1x is the
+  floor. `tier.anthropic` was `priority`, which sends `speed: "fast"`: Opus 5.5 fast mode at 2x
+  ($8/$40), drawn from usage credits on subscriptions. Sonnet and Haiku 5.5 reject the parameter
+  (400) and Opus got 429 "Usage credits are required for fast mode". OMP then retries without it, so
+  nothing was surcharged, but each session paid a wasted round trip and turning on usage credits
+  would have doubled Opus cost without notice. It is now `none`. Claude Code requests all ran at
+  `speed: standard`.
