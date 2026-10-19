@@ -82,6 +82,24 @@ describe("brain cli", () => {
     }
   });
 
+  it("stats prints host-reported ask input, cache, output and price", async () => {
+    const { cwd, io } = setup();
+    const agent = tmp("brain-agent-");
+    const file = join(agent, "sessions", "-demo", "main.jsonl");
+    mkdirSync(join(file, ".."), { recursive: true });
+    const at = new Date().toISOString();
+    const usage = { input: 100, output: 20, cacheRead: 600, cacheWrite: 300, cost: { total: 0.0012 } };
+    writeFileSync(file, [
+      { type: "session", timestamp: at, cwd },
+      { type: "message", timestamp: at, message: { role: "user", content: [{ type: "text", text: "go" }] } },
+      { type: "message", timestamp: at, message: { role: "assistant", content: [], usage } },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const result = await run(["stats"], { ...io, env: { ...io.env, PI_CODING_AGENT_DIR: agent, CLAUDE_CONFIG_DIR: tmp("brain-claude-") } });
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("1 asks");
+    expect(result.out).toContain("1k in (60% cached) · 20 out · $0.0012");
+  });
+
   it("logs CLI recall ids, silence and scrubbed queries without private answer text", async () => {
     const { home, io } = setup();
     const note = createNote(home, { project: "demo", text: "Private deployment detail", private: true });
@@ -113,6 +131,7 @@ describe("brain cli", () => {
     expect(measured.code).toBe(0);
     expect(measured.out).toContain(`fix outcomes: ${note.id} helped 1/missed 3`);
     expect(measured.out).toContain("recall: 2 queries logged, 1 silent");
+    expect(measured.out).toMatch(/recall tokens: \d+ avg tokens per hit answer \(1\) · \d+ avg tokens per silence \(1\)/);
     for (const output of [measured.out, (await run(["review"], io)).out]) {
       const listed = (output.split("Fixes to review")[1] ?? "").split("\n").slice(1).filter((line) => line.startsWith("  ")).map((line) => line.trim());
       expect(listed).toEqual([note.id]);

@@ -425,6 +425,11 @@ export function renderHit(hit: Hit, max = 240): string {
 export const FIRST_HIT_CHARS = 600;
 /** A note read explicitly is cut to this many tokens. */
 export const FULL_NOTE_TOKENS = 600;
+/**
+ * Search summaries cap at three lines: 600 + 240 + 240 characters plus two newlines, about 271
+ * tokens on the estimator. Explicit id reads and the card have their own, larger budgets.
+ */
+export const RECALL_BUDGET = 300;
 
 const NO_MATCH = "no match; note it once you learn it";
 

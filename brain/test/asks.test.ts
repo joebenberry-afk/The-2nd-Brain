@@ -11,7 +11,7 @@ const t = (minute: number, second = 0): string => new Date(Date.UTC(2026, 9, 5, 
 const jsonl = (...entries: object[]): string[] => entries.map(e => JSON.stringify(e));
 
 const ompUser = (at: string, attribution = "user") => ({ type: "message", timestamp: at, message: { role: "user", attribution, content: [{ type: "text", text: "do it" }] } });
-const ompAssistant = (at: string) => ({ type: "message", timestamp: at, message: { role: "assistant", content: [], stopReason: "toolUse" } });
+const ompAssistant = (at: string, usage?: object) => ({ type: "message", timestamp: at, message: { role: "assistant", content: [], stopReason: "toolUse", ...(usage ? { usage } : {}) } });
 const ompResult = (at: string) => ({ type: "message", timestamp: at, message: { role: "toolResult", content: [] } });
 
 it("OMP: counts every model request of a tool-call loop up to the next prompt, and ignores injected messages", () => {
@@ -41,7 +41,7 @@ it("an idle gap over 5 minutes ends the ask: later turns are a background wake-u
 });
 
 const ccUser = (at: string, content: unknown, extra: object = {}) => ({ type: "user", isSidechain: false, timestamp: at, message: { role: "user", content }, ...extra });
-const ccAssistant = (at: string, id: string, extra: object = {}) => ({ type: "assistant", isSidechain: false, timestamp: at, message: { id, role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "x" }] }, ...extra });
+const ccAssistant = (at: string, id: string, extra: object = {}, usage?: object) => ({ type: "assistant", isSidechain: false, timestamp: at, message: { id, role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "x" }], ...(usage ? { usage } : {}) }, ...extra });
 const ccToolResult = (at: string) => ccUser(at, [{ type: "tool_result", tool_use_id: "t1", content: "out" }]);
 
 it("Claude Code: one request spans several content-block entries; tool results, meta, sidechain and harness prompts never split or inflate an ask", () => {
@@ -62,6 +62,44 @@ it("Claude Code: one request spans several content-block entries; tool results, 
     ccAssistant(t(4, 30), "m5"),
   ), "claude");
   expect(asks.map(a => [a.turns, a.wallMs / 1000])).toEqual([[3, 90], [2, 90]]);
+});
+
+it("sums each request's host usage once per ask and drops a partial price", () => {
+  const ompUsage = (input: number, output: number, cacheRead: number, cacheWrite: number, cost: number) => ({
+    input, output, cacheRead, cacheWrite, totalTokens: input + output + cacheRead + cacheWrite, cost: { total: cost },
+  });
+  const asks = parseAsks(jsonl(
+    ompUser(t(0)),
+    ompAssistant(t(0, 5), ompUsage(10, 2, 3, 4, 0.25)),
+    ompAssistant(t(0, 10), ompUsage(20, 5, 6, 7, 0.5)),
+    // OMP also writes session-level usage elsewhere; it must not become another turn.
+    { type: "model_usage", timestamp: t(0, 15), usage: { input: 999, output: 999 } },
+  ), "omp");
+  expect(asks).toHaveLength(1);
+  expect(asks[0]!.usage).toEqual({ requests: 2, input: 30, output: 7, cacheRead: 9, cacheWrite: 11, cost: 0.75 });
+
+  const claudeUsage = (input: number, output: number, cacheRead: number, cacheWrite: number) => ({
+    input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite,
+  });
+  const claude = parseAsks(jsonl(
+    ccUser(t(0), "fix the bug", { origin: { kind: "human" } }),
+    ccAssistant(t(0, 5), "m1", {}, claudeUsage(1, 2, 10, 20)),
+    ccAssistant(t(0, 6), "m1", {}, claudeUsage(1, 2, 10, 20)), // thinking + text of the same request
+    ccAssistant(t(0, 10), "m2", {}, claudeUsage(3, 4, 30, 40)),
+    ccAssistant(t(0, 15), "m3"), // an aborted request: counters are absent, so no price is claimed
+  ), "claude");
+  expect(claude).toHaveLength(1);
+  expect(claude[0]).toMatchObject({ turns: 3, usage: { requests: 2, input: 4, output: 6, cacheRead: 40, cacheWrite: 60 } });
+  expect(claude[0]!.usage?.cost).toBeUndefined();
+});
+
+it("prints measured weekly input, cache, output and price; an unmeasured ask is marked", () => {
+  const usage = { requests: 1, input: 1_000, output: 100, cacheRead: 3_000, cacheWrite: 1_000, cost: 0.42 };
+  const withUsage: Ask = { at: Date.UTC(2026, 9, 5, 10), turns: 3, wallMs: 30_000, usage };
+  const noUsage: Ask = { at: Date.UTC(2026, 9, 5, 11), turns: 5, wallMs: 60_000 };
+  const [row] = weeklyAsks([withUsage, noUsage], 1, new Date(Date.UTC(2026, 9, 6)));
+  expect(row!.usage).toEqual({ asks: 1, input: 1_000, output: 100, cacheRead: 3_000, cacheWrite: 1_000, cost: 0.42, costAsks: 1 });
+  expect(formatWeek(row!)).toBe("2026-10-05 · 2 asks · turns median 4 (p75 5) · wall median 0.8 min · 1/2 measured: 5k in (60% cached) · 100 out · $0.42");
 });
 
 it("collects main sessions of the project only, never subagent transcripts, and reports weekly medians", () => {

@@ -399,6 +399,12 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     c.io.out(`cards: ${s.cards.main} main · ${s.cards.sub} sub`);
     const rate = s.recalls.measured ? `${Math.round(100 * s.recalls.matched / s.recalls.measured)}% (${s.recalls.matched}/${s.recalls.measured} measured)` : "n/a (0 measured)";
     c.io.out(`recall calls: ${s.recalls.calls} · hit rate: ${rate}`);
+    const rt = s.recallTokens;
+    const tokenParts = [
+      ...(rt.matchedCalls ? [`${Math.round(rt.matched / rt.matchedCalls)} avg tokens per hit answer (${rt.matchedCalls})`] : []),
+      ...(rt.silentCalls ? [`${Math.round(rt.silent / rt.silentCalls)} avg tokens per silence (${rt.silentCalls})`] : []),
+    ];
+    if (tokenParts.length) c.io.out(`recall tokens: ${tokenParts.join(" · ")}`);
     c.io.out(`recall: ${s.recallQueries.logged} queries logged, ${s.recallQueries.silent} silent`);
     const t = s.tora;
     c.io.out(`tora: ${t.recalls} recalls · ${t.scored} BM25 candidates scored · ${t.judged} sent to the judge · ${t.kept} kept`);

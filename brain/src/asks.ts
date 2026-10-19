@@ -12,7 +12,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { writeAtomic } from "./util.ts";
 
-export type Ask = { at: number; turns: number; wallMs: number };
+/** Host-reported usage for one ask. `requests` is how many model requests carried counters, so a partial ask is visible. */
+export type AskUsage = { requests: number; input: number; output: number; cacheRead: number; cacheWrite: number; cost?: number };
+export type Ask = { at: number; turns: number; wallMs: number; usage?: AskUsage };
 
 /**
  * Where the hosts keep main-session transcripts: OMP's agent folder and Claude Code's config folder.
@@ -26,12 +28,13 @@ export function hostSessionRoots(env: NodeJS.ProcessEnv): { omp: string; claude:
 }
 
 export type Format = "omp" | "claude";
-export type WeekRow = { week: string; asks: number; turnsMedian: number; turnsP75: number; wallMedianMin: number };
+export type WeekUsage = { asks: number; input: number; output: number; cacheRead: number; cacheWrite: number; cost?: number; costAsks: number };
+export type WeekRow = { week: string; asks: number; turnsMedian: number; turnsP75: number; wallMedianMin: number; usage?: WeekUsage };
 
 export type Entry = {
   type?: string; timestamp?: string; isMeta?: boolean; isSidechain?: boolean; isCompactSummary?: boolean; entrypoint?: string;
   origin?: { kind?: string }; promptSource?: string;
-  message?: { role?: string; id?: string; model?: string; attribution?: string; content?: unknown };
+  message?: { role?: string; id?: string; model?: string; attribution?: string; content?: unknown; usage?: Record<string, unknown> };
 };
 
 /** Claude Code writes these as user entries, but the owner did not type them. */
@@ -62,6 +65,31 @@ function requestId(e: Entry, format: Format, seq: number): string | null {
   return e.message?.id ?? String(seq);
 }
 
+const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/** One request's counters, or null when the host wrote no usage (an aborted request, an old build). */
+function requestUsage(e: Entry, format: Format): Omit<AskUsage, "requests"> | null {
+  const raw = e.message?.usage;
+  if (!raw || typeof raw !== "object") return null;
+  const u = raw as Record<string, unknown>;
+  if (format === "omp") {
+    const cost = u.cost && typeof u.cost === "object" ? (u.cost as Record<string, unknown>).total : undefined;
+    return {
+      input: finite(u.input) ? u.input : 0,
+      output: finite(u.output) ? u.output : 0,
+      cacheRead: finite(u.cacheRead) ? u.cacheRead : 0,
+      cacheWrite: finite(u.cacheWrite) ? u.cacheWrite : 0,
+      ...(finite(cost) ? { cost } : {}),
+    };
+  }
+  return {
+    input: finite(u.input_tokens) ? u.input_tokens : 0,
+    output: finite(u.output_tokens) ? u.output_tokens : 0,
+    cacheRead: finite(u.cache_read_input_tokens) ? u.cache_read_input_tokens : 0,
+    cacheWrite: finite(u.cache_creation_input_tokens) ? u.cache_creation_input_tokens : 0,
+  };
+}
+
 /** An ask stays active while consecutive assistant/tool-result entries are at most this far apart. */
 const IDLE_MS = 5 * 60_000;
 
@@ -80,9 +108,16 @@ function rawTime(line: string): number {
  */
 export function parseAsks(lines: Iterable<string>, format: Format): Ask[] {
   const asks: Ask[] = [];
-  let open: { at: number; last: number; prev: number; ended: boolean; ids: Set<string> } | null = null;
+  let open: { at: number; last: number; prev: number; ended: boolean; ids: Set<string>; usage: AskUsage; usageIds: Set<string>; costKnown: boolean } | null = null;
   const close = (): void => {
-    if (open && open.ids.size > 0) asks.push({ at: open.at, turns: open.ids.size, wallMs: Math.max(0, open.last - open.at) });
+    if (open && open.ids.size > 0) {
+      const { cost, ...counters } = open.usage;
+      // A request that wrote no counters makes the total partial, so a partial ask never claims a price.
+      const usage = open.usage.requests
+        ? { ...counters, ...(open.usage.requests === open.ids.size && open.costKnown && cost !== undefined ? { cost } : {}) }
+        : undefined;
+      asks.push({ at: open.at, turns: open.ids.size, wallMs: Math.max(0, open.last - open.at), ...(usage ? { usage } : {}) });
+    }
     open = null;
   };
   /** Registers an activity entry at `at`; false once the ask has gone idle. */
@@ -107,13 +142,27 @@ export function parseAsks(lines: Iterable<string>, format: Format): Ask[] {
     if (Number.isNaN(at)) continue;
     if (humanPrompt(e, format)) {
       close();
-      open = { at, last: at, prev: at, ended: false, ids: new Set() };
+      open = {
+        at, last: at, prev: at, ended: false, ids: new Set(),
+        usage: { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, usageIds: new Set(), costKnown: true,
+      };
       continue;
     }
     const id = open ? requestId(e, format, seq++) : null;
     if (open && id !== null && active(open, at)) {
       open.ids.add(id);
       open.last = Math.max(open.last, at);
+      const used = requestUsage(e, format);
+      if (used && !open.usageIds.has(id)) {
+        open.usageIds.add(id);
+        open.usage.requests += 1;
+        open.usage.input += used.input;
+        open.usage.output += used.output;
+        open.usage.cacheRead += used.cacheRead;
+        open.usage.cacheWrite += used.cacheWrite;
+        if (used.cost === undefined) open.costKnown = false;
+        else open.usage.cost = (open.usage.cost ?? 0) + used.cost;
+      }
     }
   }
   close();
@@ -143,25 +192,48 @@ export function weeklyAsks(asks: Ask[], weeks: number, now: Date): WeekRow[] {
     const inWeek = asks.filter((ask) => ask.at >= from && ask.at < from + 7 * 86_400_000);
     const turns = inWeek.map((ask) => ask.turns).sort((a, b) => a - b);
     const wall = inWeek.map((ask) => ask.wallMs).sort((a, b) => a - b);
+    const measured = inWeek.flatMap((ask) => ask.usage ? [ask.usage] : []);
+    const priced = measured.filter((usage) => usage.cost !== undefined);
+    const usage = measured.length ? {
+      asks: measured.length,
+      input: measured.reduce((sum, u) => sum + u.input, 0),
+      output: measured.reduce((sum, u) => sum + u.output, 0),
+      cacheRead: measured.reduce((sum, u) => sum + u.cacheRead, 0),
+      cacheWrite: measured.reduce((sum, u) => sum + u.cacheWrite, 0),
+      ...(priced.length ? { cost: priced.reduce((sum, u) => sum + u.cost!, 0) } : {}),
+      costAsks: priced.length,
+    } : undefined;
     rows.push({
       week: new Date(from).toISOString().slice(0, 10), asks: inWeek.length,
       turnsMedian: inWeek.length ? median(turns) : 0, turnsP75: inWeek.length ? turns[Math.ceil(0.75 * turns.length) - 1]! : 0,
       wallMedianMin: inWeek.length ? median(wall) / 60_000 : 0,
+      ...(usage ? { usage } : {}),
     });
   }
   return rows;
 }
 
+const compact = (tokens: number): string => tokens >= 1_000_000
+  ? `${(tokens / 1_000_000).toFixed(1)}M`
+  : tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens);
+
 export function formatWeek(row: WeekRow): string {
   if (!row.asks) return `${row.week} · 0 asks`;
-  return `${row.week} · ${row.asks} asks · turns median ${+row.turnsMedian.toFixed(1)} (p75 ${row.turnsP75}) · wall median ${row.wallMedianMin.toFixed(1)} min`;
+  const base = `${row.week} · ${row.asks} asks · turns median ${+row.turnsMedian.toFixed(1)} (p75 ${row.turnsP75}) · wall median ${row.wallMedianMin.toFixed(1)} min`;
+  const u = row.usage;
+  if (!u) return base;
+  const input = u.input + u.cacheRead + u.cacheWrite;
+  const cached = input ? Math.round(100 * u.cacheRead / input) : 0;
+  const priced = u.cost === undefined ? "" : ` · $${u.cost >= 0.01 ? u.cost.toFixed(2) : u.cost > 0 ? u.cost.toFixed(4) : "0.00"}` +
+    (u.costAsks < u.asks ? ` (${u.costAsks}/${u.asks} priced)` : "");
+  return `${base} · ${u.asks < row.asks ? `${u.asks}/${row.asks} measured: ` : ""}${compact(input)} in (${cached}% cached) · ${compact(u.output)} out${priced}`;
 }
 
 /** The longest window `brain stats` shows; the cache keeps no summary of an older transcript. */
 export const MAX_WEEKS = 12;
 
 /** Bump when parseAsks or sessionCwd change what a transcript yields: older cache files are then ignored. */
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 /**
  * What one transcript yields, valid while the file's size, mtime and ctime are unchanged. `asks` is
@@ -170,14 +242,23 @@ const CACHE_VERSION = 1;
  */
 type Summary = { format: Format; size: number; mtimeMs: number; ctimeMs: number; cwd: string | null; asks: Ask[] | null };
 
-const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-
 function isSummary(value: unknown): value is Summary {
   const s = value as Partial<Record<keyof Summary, unknown>> | null;
   if (typeof s !== "object" || s === null) return false;
   if ((s.format !== "omp" && s.format !== "claude") || !finite(s.size) || !finite(s.mtimeMs) || !finite(s.ctimeMs)) return false;
   if (s.cwd !== null && typeof s.cwd !== "string") return false;
-  return s.asks === null || (Array.isArray(s.asks) && s.asks.every((a: Partial<Ask> | null) => finite(a?.at) && finite(a?.turns) && finite(a?.wallMs)));
+  if (s.asks !== null) {
+    if (!Array.isArray(s.asks)) return false;
+    for (const a of s.asks as (Partial<Ask> | null)[]) {
+      if (!a || !finite(a.at) || !finite(a.turns) || !finite(a.wallMs)) return false;
+      if (a.usage !== undefined) {
+        const u = a.usage as Partial<AskUsage> | null;
+        if (!u || !finite(u.requests) || !finite(u.input) || !finite(u.output) || !finite(u.cacheRead) || !finite(u.cacheWrite)
+          || (u.cost !== undefined && !finite(u.cost))) return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** The cached summaries by transcript path; a missing, foreign-version or corrupt file yields none (a rescan). */

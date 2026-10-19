@@ -1,7 +1,7 @@
 /** Optional relevance check over the lexical answer; failures preserve that answer. */
 import { createHash } from "node:crypto";
 import { findNote, idQuery, type Note } from "./notes.ts";
-import { answerWithHits, fold, plainHit, renderHit, renderHits, scoreQuery, type AnswerOptions } from "./search.ts";
+import { answerWithHits, fold, plainHit, renderHit, renderHits, scoreQuery, type AnswerOptions, type Scored } from "./search.ts";
 import { visibleTo } from "./project.ts";
 import { scrub } from "./scrub.ts";
 import { TORA_ADD, TORA_FLOOR, TORA_SUPPORT, TORA_TIMEOUT_MS, toraPost, toraScorer, toraSession, type ToraScorer, type ToraScores, type ToraAttempt } from "./tora.ts";
@@ -229,6 +229,21 @@ export async function judgedAnswer(notes: Note[], query: string, opts: AnswerOpt
   } };
 }
 
+/**
+ * A single project-local fact that beats every other visible candidate by 2x is the answer.
+ * Broader gates (any lone top hit, any high-margin answer) reintroduced gotcha false positives;
+ * requiring `fact` keeps the shortcut off error notes whose vocabulary overlaps other work.
+ */
+const DECISIVE_MARGIN = 0.5;
+function decisiveFact(scored: Scored, opts: AnswerOptions, lexical: Answer): boolean {
+  if (lexical.hits !== 1 || lexical.ids[0]!.startsWith("doc:")) return false;
+  const winner = scored.candidates.find(c => c.note.id === lexical.ids[0])?.note;
+  if (!winner || winner.kind !== "fact" || winner.private || winner.retired || winner.project !== opts.project?.id) return false;
+  const eligible = scored.candidates.filter(c => !c.note.private && !c.note.retired && (opts.all || visibleTo(c.note, opts.project)));
+  if (eligible[0]?.note.id !== winner.id) return false;
+  return (eligible[1]?.score ?? 0) <= DECISIVE_MARGIN * eligible[0]!.score;
+}
+
 async function judgeAnswer(notes: Note[], query: string, opts: AnswerOptions, judge?: Judge, tora?: ToraScorer, diagnostics = false): Promise<Answer> {
   // Layer 4: an elided tool output comes back verbatim, never as a note hit.
   const elided = idQuery(query).toLowerCase();
@@ -248,9 +263,13 @@ async function judgeAnswer(notes: Note[], query: string, opts: AnswerOptions, ju
       .map(c => [c.note.id, lexical.ids.includes(c.note.id) ? "returned" : "gated"]),
   };
   if (!judge || !scored) return lexical;
+  // A lone project fact with no close competitor needs neither validation nor an addition slot.
+  if (decisiveFact(scored, opts, lexical)) return lexical;
   const lexicalIds = new Set(lexical.ids);
   // BM25's own top ranks among the notes this recall may show; private and retired notes are never sent.
-  const supported = judge.scorer || tora ? scored.candidates
+  // A full answer has no slot for an addition, so the rerank would buy nothing.
+  const room = Math.max(1, Math.min(3, opts.limit ?? 3)) - lexical.hits;
+  const supported = room > 0 && (judge.scorer || tora) ? scored.candidates
     .filter(c => !c.note.private && !c.note.retired && (opts.all || visibleTo(c.note, opts.project)))
     .sort((a, b) => b.score - a.score)
     .slice(0, TORA_SUPPORT)

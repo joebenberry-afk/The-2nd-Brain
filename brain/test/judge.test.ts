@@ -26,6 +26,46 @@ it("drops probabilities below the threshold, keeps the boundary, and does not ba
   expect(result).toMatchObject({ judged: true, dropped: 1, hits: 2 });
 });
 
+it("does not rerank additions when the lexical answer already fills the display limit", async () => {
+  const body = "Migration guidance for quartz";
+  const notes = [note("a", { body }), note("b", { body }), note("c", { body }), note("d", { body })];
+  const tora = vi.fn(async (_query: string, candidates: { id: string; text: string }[]) => ({
+    scores: new Map(candidates.map(c => [c.id, 0.9])),
+    ms: 1,
+  }));
+  const judge: Judge = async (_query, candidates) => new Map(candidates.map(c => [c.id, 0.9]));
+  expect((await judgedAnswer(notes, "quartz migration", { project }, judge, tora)).hits).toBe(3);
+  expect(tora).not.toHaveBeenCalled();
+});
+
+it("skips the judge for one dominant project fact", async () => {
+  const notes = [
+    note("winner", { kind: "fact", body: "Quartz migration schema planner runbook" }),
+    note("other", { body: "Quartz migration guidance" }),
+  ];
+  const query = "quartz migration schema planner runbook";
+  const lexical = answerWithHits(notes, query, { project });
+  expect(lexical.ids).toEqual(["winner"]);
+  const judge = vi.fn(rejectAll);
+  expect(await judgedAnswer(notes, query, { project }, judge)).toMatchObject({ ids: ["winner"], judged: false, dropped: 0 });
+  expect(judge).not.toHaveBeenCalled();
+});
+
+it("still judges a dominant gotcha and a close pair of facts", async () => {
+  const gotcha = [note("winner", { kind: "gotcha", body: "Quartz migration schema planner runbook" }), note("other")];
+  const gotchaJudge = vi.fn(rejectAll);
+  expect(await judgedAnswer(gotcha, "quartz migration schema planner runbook", { project }, gotchaJudge)).toMatchObject({ ids: [], dropped: 1 });
+  expect(gotchaJudge).toHaveBeenCalledOnce();
+
+  const close = [
+    note("a", { kind: "fact", body: "Quartz migration schema planner runbook" }),
+    note("b", { kind: "fact", body: "Quartz migration schema planner guide" }),
+  ];
+  const closeJudge = vi.fn(rejectAll);
+  await judgedAnswer(close, "quartz migration schema planner", { project }, closeJudge);
+  expect(closeJudge).toHaveBeenCalledOnce();
+});
+
 it("a note holding the whole query as a phrase needs only the phrase floor", async () => {
   const notes = [note("phrase", { body: "The Witcher 3 5.0 keeps its render" }), note("words", { body: "Witcher mods need patch 3" }), note("inside", { body: "Witcher 35 remaster" })];
   const scoring = (p: number): Judge => async (_q, candidates) => new Map(candidates.map(c => [c.id, p]));

@@ -391,6 +391,7 @@ describe("local usage telemetry", () => {
     const s = stats(home, 7, NOW);
     expect(s.cards).toEqual({ main: 1, sub: 1 });
     expect(s.recalls).toEqual({ calls: 3, measured: 2, matched: 1 });
+    expect(s.recallTokens).toEqual({ matched: 12, matchedCalls: 1, silent: 12, silentCalls: 1 });
   });
 
   it("counts sessions that used brain tools per role; a subagent is known by any sub row", () => {

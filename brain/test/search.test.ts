@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RELATIVE_FLOOR, STOPWORDS, answer, answerWithHits, recall, renderHit, tokens } from "../src/search.ts";
+import { RECALL_BUDGET, RELATIVE_FLOOR, STOPWORDS, answer, answerWithHits, recall, renderHit, tokens } from "../src/search.ts";
+import { estimateTokens } from "../src/util.ts";
 import { displayLine, findSameHeadline, formatNote, parseNote, type Note } from "../src/notes.ts";
 
 function note(id: string, over: Partial<Note> = {}): Note {
@@ -511,6 +512,13 @@ describe("evidence and replacement answers", () => {
     const corpus = Array.from({ length: 10 }, (_, i) => note("n-" + i, { body: "quartz migration" }));
     expect(answerWithHits(corpus, "quartz", { project, limit: 10 }).hits).toBe(3);
     expect(answer(corpus, "quartz", { project, limit: 10 }).split("\n")).toHaveLength(3);
+  });
+
+  it("keeps a full three-hit answer inside RECALL_BUDGET", () => {
+    const corpus = Array.from({ length: 3 }, (_, i) => note("n-" + i, { body: "quartz " + "deployment detail ".repeat(100) }));
+    const text = answer(corpus, "quartz", { project, limit: 10 });
+    expect(text.split("\n")).toHaveLength(3);
+    expect(estimateTokens(text)).toBeLessThanOrEqual(RECALL_BUDGET);
   });
 
   it("gives an actionable one-line no-match hint without naming a host tool", () => {

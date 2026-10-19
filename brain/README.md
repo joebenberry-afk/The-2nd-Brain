@@ -78,6 +78,10 @@ mistakes being notes on the query's topic that do not answer it (owner chose it 
 Oct; Tora IDEAS TJ-02). Only the scrubbed query and note body text (whitespace collapsed, scrubbed,
 then cut to 2,000 characters, so a secret at the cut is masked whole; Jev reads the first 450) are
 sent. Private notes are never sent and remain lexical, unjudged.
+A lone project-local **fact** that is the only visible lexical hit and scores at least twice the next
+candidate is answered without a judge call: there is no competing note to choose between and no
+addition slot to spend. This skipped 6 of the 100 frozen eval queries (3 dev, 1 held-out, 2 real)
+with no eval precision or recall change; a dominant gotcha or a close pair of facts is still judged.
 A plan-doc heading answer (its heading and best-matching paragraph) is checked the same way; the outline of a doc the query names by file, explicit note-id reads and the start card are not.
 When a doc heading could become the fallback answer, it is checked in the same request as the
 notes, so a rejected note no longer costs a second sequential call (54-query replay: 44 → 39

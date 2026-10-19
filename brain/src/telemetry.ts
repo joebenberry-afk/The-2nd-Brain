@@ -169,6 +169,8 @@ export interface Stats {
   byKind: Record<string, { count: number; tokens: number }>;
   cards: { main: number; sub: number };
   recalls: { calls: number; measured: number; matched: number };
+  /** Tokens in recall answers: a hit answer versus a silence, and how many of each carried a count. */
+  recallTokens: { matched: number; matchedCalls: number; silent: number; silentCalls: number };
   recallQueries: { logged: number; silent: number };
   /** Tora over the recalls that carry it: BM25 candidates it scored, those the judge judged (at or above the floor), those it kept. */
   tora: { recalls: number; scored: number; judged: number; kept: number };
@@ -243,6 +245,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   const byKind: Stats["byKind"] = Object.create(null);
   const cards = { main: 0, sub: 0 };
   const recalls = { calls: 0, measured: 0, matched: 0 };
+  const recallTokens = { matched: 0, matchedCalls: 0, silent: 0, silentCalls: 0 };
   const recallQueries = { logged: 0, silent: 0 };
   const tora: Stats["tora"] = { recalls: 0, scored: 0, judged: 0, kept: 0 };
   const judges: Stats["judges"] = { tora: 0, jev: 0 };
@@ -343,6 +346,15 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
       if (typeof row.hits === "number" && Number.isInteger(row.hits) && row.hits >= 0) {
         recalls.measured += 1;
         if (row.hits > 0) recalls.matched += 1;
+        if (typeof row.tokens === "number" && Number.isFinite(row.tokens)) {
+          if (row.hits > 0) {
+            recallTokens.matched += row.tokens;
+            recallTokens.matchedCalls += 1;
+          } else {
+            recallTokens.silent += row.tokens;
+            recallTokens.silentCalls += 1;
+          }
+        }
       }
       tallyTora(row.tora, tora);
       if (row.judge === "tora" || row.judge === "jev") judges[row.judge] += 1;
@@ -365,7 +377,7 @@ export function stats(home: string, days = 7, now: Date = new Date(), opts: { al
   }
   const fixes = [...fired].map(([id, seen]) => ({ id, sessions: seen.size })).sort((a, b) => b.sessions - a.sessions || a.id.localeCompare(b.id));
   const fixOutcomes = [...outcomes.values()].filter(f => f.helped + f.missed > 0).sort((a, b) => b.firings - a.firings || a.id.localeCompare(b.id));
-  return { days, sessions: sessions.size, byKind, cards, recalls, recallQueries, tora, judges, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors, layer4 };
+  return { days, sessions: sessions.size, byKind, cards, recalls, recallTokens, recallQueries, tora, judges, fixOutcomes, toolUse, toolCalls, olderBuildRows, fixes, errors, layer4 };
 }
 
 /** One tool the host sends the model on every request, with its schema size. */
