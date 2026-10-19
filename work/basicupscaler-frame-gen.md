@@ -1,5 +1,5 @@
 ---
-at: 2026-10-18T15:15:39Z
+at: 2026-10-19T08:49:38Z
 ---
 
-Goal: product first, FT-2 Cyberpunk until it passes (ROADMAP D36). Done today: FG-384..387, D37-D40, test fix 89331fb. Running: lane gate/trust (bu-camwarp F-a still, F-b count sigma, F-c count-aware trust; offline replay K8 fit logs; row FG-388) and lane scorer (D37 keep window input method, D40 drop-late-tick acceptance v2; row FG-389), both in .claude/worktrees. queue29 still waiting owner idle. Next: review+merge lanes, build candidate, freeze FT-2 Cyberpunk, run; move K8 receipts + remove C:/BU-wt/m1-k8 when queue ends.
+Goal: FT-2 Cyberpunk pass (D36). Now: K17 diagonal-pa queued (FG-408 e13cee9 Gaussian gate H0 + ArrivalHoldLast horizon, bufg_m1_32636fa5). K16 FAIL real 1.198 gen 1.224. Next: score K17; write FG-408 row on main; if pass pan_fast, flick, merge m1-k12, M2.
