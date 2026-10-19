@@ -609,8 +609,16 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         state.pendingFixes = new Map([...(state.pendingFixes ?? []), ...state.shownFixes]);
         state.shownFixes = undefined;
       }
-      // Layer 4 is on by default in OMP: it passed the E6 gate here (intake doc §5-6).
-      if (env.BRAIN_RENDER === "off") return undefined;
+      // Layer 4 is on by default in OMP (it passed the E6 gate here, intake doc §5-6) except on the
+      // Anthropic Messages API, which bills cache writes at 1.25x input (2x for 1-hour caching); OMP's
+      // catalog cost.cacheWrite cannot tell, as it lists 1.25x for OpenAI too, which bills none. There
+      // an epoch pays the premium on the whole suffix while an elided token saves a read of 0.05x
+      // (Opus, Sonnet 5.5) or 0.025x (Fable 5.1). A replay of 14 days of OMP sessions (2026-10-19) at
+      // RENDER_POLICY: input cost Opus -3.1%, Sonnet +3.0%, a third of sessions dearer (worst +27%,
+      // +39%), before restores and OMP's own pruning shrink the saving; OpenAI models -16% and -19%.
+      // BRAIN_RENDER=on forces layer 4 (the E6 bench), BRAIN_RENDER=off disables it.
+      const anthropic = asObject(asObject(ctx)?.model)?.api === "anthropic-messages";
+      if (env.BRAIN_RENDER === "off" || (env.BRAIN_RENDER !== "on" && anthropic)) return undefined;
       const started = performance.now();
       // Layer 4: toolResults made only of text blocks become outputs; anything else (images) is left alone.
       const outputs: ToolOutput[] = [];
@@ -652,7 +660,11 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       const usage = asObject(call(asObject(ctx), "getContextUsage"));
       const project = resolveProject(home, cwdOf(ctx) ?? process.cwd(), env);
       const hint = rolloverHint(home, project.id, sessionKey(ctx), usage?.tokens);
-      if (hint) pi.sendMessage({ customType: "brain.rollover", content: hint, display: false }, { triggerTurn: false, deliverAs: "nextTurn" });
+      if (!hint) return;
+      pi.sendMessage({ customType: "brain.rollover", content: hint, display: false }, { triggerTurn: false, deliverAs: "nextTurn" });
+      // Only the owner can start the fresh session, and an agent-only hint was ignored (rollover.ts).
+      const ui = asObject(asObject(ctx)?.ui), notify = ui?.notify;
+      if (typeof notify === "function") notify.call(ui, hint, "warning");
     } catch (error) { failed("turn_end", error); }
   });
 

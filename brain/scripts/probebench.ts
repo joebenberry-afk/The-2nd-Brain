@@ -733,16 +733,19 @@ function aggregate(group: Row[]): Row {
   return {
     n: group.length, ok: ok.length, probe: per(r => correctOf(r).filter(Boolean).length), detail: per(r => DETAIL.filter(p => r.detail?.[p] === "correct").length),
     status: per(r => r.probes.status_kept === "correct" ? 1 : 0), vendor: per(r => r.probes.vendor_kept === "correct" ? 1 : 0),
-    input: per(r => r.inputTotal), weighted: per(r => cacheWeighted(r.usage)), cacheHit: mean(ok.flatMap(r => typeof r.cacheHit === "number" ? [r.cacheHit] : [])),
+    input: per(r => r.inputTotal), weighted: per(r => cacheWeighted(r.usage, String(r.model))), cacheHit: mean(ok.flatMap(r => typeof r.cacheHit === "number" ? [r.cacheHit] : [])),
     cost: mean(ok.flatMap(r => typeof r.cost_usd === "number" ? [r.cost_usd] : [])), seconds: per(r => r.seconds),
     compactions: ok.reduce((s, r) => s + r.depthActual, 0), elisions: ok.reduce((s, r) => s + (r.render?.elisions ?? 0), 0), restores: ok.reduce((s, r) => s + (r.restores ?? 0), 0),
   };
 }
 /**
- * Input priced relative to an uncached token: cache reads ×0.1, cache writes ×2 (Anthropic's 1-hour write price, the one Claude Code's
- * writes used in E6; OpenAI hosts report no writes). Layer 4 removes mostly cached tokens, so the hit rate falls even when this falls.
+ * Input priced relative to an uncached token at the model's list prices (2026-10-19): cache reads x0.05 on Opus and Sonnet 5.5,
+ * x0.025 on Fable 5.1, x0.1 on Haiku 5.5 and OpenAI models; cache writes x2 (Anthropic's 1-hour price, the one Claude Code's writes
+ * used in E6; OpenAI hosts report no writes). Layer 4 removes mostly cached tokens, so the hit rate falls even when this falls.
+ * Haiku 5.5 prices prompts over 100k at 5x, which is the E6 Claude Code cost step; the multipliers are the same in both tiers.
  */
-const cacheWeighted = (u: Usage): number => u.input + 0.1 * u.cacheRead + 2 * u.cacheWrite;
+const READ_RATE: [RegExp, number][] = [[/opus-5|sonnet-5/, 0.05], [/fable-5/, 0.025]];
+const cacheWeighted = (u: Usage, model: string): number => u.input + (READ_RATE.find(([re]) => re.test(model))?.[1] ?? 0.1) * u.cacheRead + 2 * u.cacheWrite;
 /** The E6 gate (intake doc §5): >= 30% fewer input tokens per finished run, probe and detail scores equal or better, cache-weighted input lower. The cache hit rate and compactions are reported, never gated. Means over valid runs: a verdict on a small n is a smoke result. */
 function summarizeE6(rows: Row[], notes: string[]): void {
   const header = ["host", "arm", "runs/valid", "probe/11", "detail/2", "status_kept", "vendor_kept", "inputTotal", "cacheHit", "cost", "wall s", "compactions", "elisions", "restores"];

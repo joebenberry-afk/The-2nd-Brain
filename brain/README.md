@@ -342,14 +342,17 @@ tell a child from its parent: a child's project-scoped `brain note --tested` is 
 (a global one stays untested until the owner runs `brain tested <id>`), and its `brain state`
 replaces the parent's plan. That reaches OMP children through bash and Claude Code subagents, whose instructions carry the managed block (`brain state` when the goal changes).
 
-**Context hand-off.** Main sessions above 150,000 context tokens get one ≤40-token rollover
-line per crossing: save `brain_state` with Goal/Next/See: and open a fresh session; its start
-card carries the saved state. `projects.json` accepts a project-level numeric `rollover`
-threshold (tokens); `0` disables the hint. Unknown usage is silent, subagents never get it,
-and the latch survives hook processes and OMP restarts, rearming only when usage drops back
-below the threshold. OMP queues the hint for the next model turn without starting an extra
-turn. Claude Code reads the latest assistant input/cache usage from a bounded transcript
-tail: PostToolUse adds model context, while Stop only shows a nonblocking user warning.
+**Context hand-off.** Main sessions above 150,000 context tokens get a ≤40-token rollover
+line at the threshold and again at each further multiple of it (300k, 450k, …): save
+`brain_state` with Goal/Next/See: and open a fresh session; its start card carries the saved
+state. `projects.json` accepts a project-level numeric `rollover` threshold (tokens); `0`
+disables the hint. Unknown usage is silent, subagents never get it, and the latch survives hook
+processes and OMP restarts, rearming only when usage drops back below the threshold. OMP queues
+the hint for the next model turn without starting an extra turn and shows it to the owner as a
+warning notification: in 14 days to 2026-10-19, 47 sessions got the agent-only hint, then ran a
+median 104 more requests and spent 17% of all OMP cost. Claude Code reads the latest assistant
+input/cache usage from a bounded transcript tail: PostToolUse adds model context, while Stop
+only shows a nonblocking user warning.
 The paid `node scripts/compactbench.ts --scenario rollover --reps 4 --label v5-rollover`
 trial compares continued long contexts with state-save plus RPC `new_session`, including
 handoff cost and goal retention. Its isolated evidence defaults to an OS temporary directory,
@@ -440,7 +443,7 @@ as OMP: `brain_recall`, `brain_note` and `brain_state`. Launch in the workspace 
 (or set `BRAIN_PROJECT`) and set `SECOND_BRAIN_HOME`. MCP has no subagent identity: the host
 must withhold `brain_state` from child agents to protect the parent’s working state.
 
-**Reversible rendering (layer 4; on by default in OMP, opt-in elsewhere).** Old, large tool
+**Reversible rendering (layer 4; on by default in OMP except on Anthropic models, opt-in elsewhere).** Old, large tool
 output is swapped for a 60–90-token stub on its way to the model; the history the harness stores
 is never changed. The stub names a recall id (`t-` and 10 hex): `brain_recall t-…` or
 `brain recall t-…` returns the original verbatim; stubs of read-only tools (read, grep, glob,
@@ -456,8 +459,13 @@ byte-identical between epochs; output under 500 tokens is never touched. `brain 
 epochs, elided outputs, tokens saved per later request and restores; the same output counts as
 fresh once per conversation, even if a shrunken history clears the sticky set, while a second copy
 under a new call id counts again.
-- OMP: on by default; `BRAIN_RENDER=off` turns it off. OMP floors its compaction trigger by the
-  stored history, so here layer 4 saves request tokens and cost, not compactions.
+- OMP: on by default, except for models on the Anthropic Messages API; `BRAIN_RENDER=off` turns it
+  off, `BRAIN_RENDER=on` forces it. Anthropic bills cache writes at 1.25x input (2x for 1-hour
+  caching) and reads at 0.05x (Opus, Sonnet 5.5) or 0.025x (Fable 5.1), so an epoch rarely pays
+  back: a replay of 14 days of OMP sessions put it at −3.1% input cost on Opus and +3.0% on
+  Sonnet, a third of sessions dearer, against −16% and −19% on OpenAI models. OMP floors its
+  compaction trigger by the stored history, so here layer 4 saves request tokens and cost, not
+  compactions.
 - Claude Code and Codex: run `brain proxy` (127.0.0.1:47830, `--port N`; needs
   `SECOND_BRAIN_HOME`). It fails open per request (any error forwards the original bytes), but a
   harness pointed at a proxy that is not running cannot connect: start the proxy first, or drop

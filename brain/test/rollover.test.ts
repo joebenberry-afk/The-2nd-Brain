@@ -18,13 +18,16 @@ afterEach(() => { for (const dir of homes.splice(0)) rmSync(dir, { recursive: tr
 
 const line = "Brain: context 151k. Save brain_state (Goal/Next/See:) and start a fresh session; the card carries it over.";
 describe("rollover threshold", () => {
-  it("fires once per crossing, survives host reload, and rearms below the threshold", () => {
+  it("fires once per multiple of the threshold, survives host reload, and rearms below the threshold", () => {
     const dir = home();
     expect(rolloverHint(dir, "demo", "main", 150000)).toBe("");
     expect(rolloverHint(dir, "demo", "main", 150001)).toBe(line);
-    expect(rolloverHint(dir, "demo", "main", 300000)).toBe("");
+    expect(rolloverHint(dir, "demo", "main", 299999)).toBe("");
     expect(rolloverHint(dir, "demo", "main", undefined)).toBe("");
-    expect(rolloverHint(dir, "demo", "main", 300000)).toBe("");
+    expect(rolloverHint(dir, "demo", "main", 300000)).toContain("context 300k");
+    expect(rolloverHint(dir, "demo", "main", 449999)).toBe("");
+    expect(rolloverHint(dir, "demo", "main", 200000)).toBe("");
+    expect(rolloverHint(dir, "demo", "main", 460000)).toContain("context 460k");
     expect(rolloverHint(dir, "demo", "main", 100000)).toBe("");
     expect(rolloverHint(dir, "demo", "main", 150001)).toBe(line);
     expect(rolloverHint(dir, "demo", "fresh", 150001)).toBe(line);
@@ -79,16 +82,17 @@ describe("host rollover delivery", () => {
       expect(JSON.parse(out)).toEqual({});
     }
   });
-  it("uses OMP context occupancy and queues no extra model turn; subagents and off are silent", () => {
-    const dir = home(), handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>(), sendMessage = vi.fn();
+  it("uses OMP context occupancy, shows the hint to the owner, and queues no extra model turn; subagents and off are silent", () => {
+    const dir = home(), handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>(), sendMessage = vi.fn(), notify = vi.fn();
     const host: HostLike = { on: (name, fn) => { handlers.set(name, fn); }, sendMessage };
     secondBrain(host, { SECOND_BRAIN_HOME: dir, BRAIN_PROJECT: "demo" });
-    const ctx = (tokens: number, kind = "main") => ({ cwd: dir, agent: { kind }, getContextUsage: () => ({ tokens }), sessionManager: { getSessionId: () => "main" } });
+    const ctx = (tokens: number, kind = "main") => ({ cwd: dir, agent: { kind }, ui: { notify }, getContextUsage: () => ({ tokens }), sessionManager: { getSessionId: () => "main" } });
     const turn = (tokens: number, kind = "main") => handlers.get("turn_end")!({}, ctx(tokens, kind));
     turn(150000); turn(150001, "sub"); expect(sendMessage).not.toHaveBeenCalled();
-    turn(150001); turn(300000);
+    turn(150001); turn(250000);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith({ customType: "brain.rollover", content: line, display: false }, { triggerTurn: false, deliverAs: "nextTurn" });
+    expect(notify).toHaveBeenCalledExactlyOnceWith(line, "warning");
     turn(100000); turn(150001); expect(sendMessage).toHaveBeenCalledTimes(2);
     writeFileSync(join(dir, "projects.json"), JSON.stringify({ projects: { demo: { rollover: 0 } } }));
     turn(500000); expect(sendMessage).toHaveBeenCalledTimes(2);

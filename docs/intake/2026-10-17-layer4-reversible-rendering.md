@@ -91,7 +91,7 @@ host's call id. They then write back each `Elision { index, id, stub, tokens, fr
 
 | Host | Seam | Switch |
 |---|---|---|
-| OMP | extension `context` event: return `{ messages }` built from shallow copies; never mutate | on by default; `BRAIN_RENDER=off` disables |
+| OMP | extension `context` event: return `{ messages }` built from shallow copies; never mutate | on by default except on the Anthropic Messages API (§7); `BRAIN_RENDER=off` disables, `BRAIN_RENDER=on` forces |
 | Claude Code | `brain proxy`; `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/anthropic` plus `ENABLE_TOOL_SEARCH=true` (§3) | running the proxy |
 | Codex | `brain proxy`; custom provider in `config.toml` (below) | running the proxy |
 
@@ -189,12 +189,16 @@ Bench: `brain/scripts/probebench.ts --scenario e6`.
 - **Pass criteria.**
   - At least 30% fewer input tokens per finished run.
   - An equal probe score, detail probes included.
-  - Cache-weighted input below baseline: uncached ×1, cache reads ×0.1, cache writes ×2.
+  - Cache-weighted input below baseline: uncached ×1, cache writes ×2, cache reads at the model's
+    list-price ratio (2026-10-19): ×0.05 Opus and Sonnet 5.5, ×0.025 Fable 5.1, ×0.1 Haiku 5.5 and
+    OpenAI models. Until 2026-10-19 reads were ×0.1 for every model; the E6 models (Haiku 5.5,
+    gpt-6-astra) are ×0.1 in both versions, so the §6 verdicts stand.
 - The cache hit rate and compaction counts are measured, not gated (§3, §6).
 - Owner decision, 2026-10-17: the cache-weighted criterion replaced "a cache hit rate no lower than
   baseline", which layer 4 fails by arithmetic (§6).
 
-Layer 4 stays off by default until E6 passes on a harness. It then turns on for that harness only.
+Layer 4 stays off by default until E6 passes on a harness. It then turns on for that harness only,
+and in OMP only for providers without a cache-write premium (§7).
 
 ## 6. E6 results (2026-10-17)
 
@@ -238,7 +242,8 @@ Runs: `--depth 18`. No harness compacted on its own (0 compactions in every run)
   passes roughly 90–100 k tokens; a bench turn makes about two calls, so per turn the blended rate
   roughly quadruples between 177 k and 192 k. Layer 4 kept 10 of the 18 filler turns below the step
   (the baseline kept 6), so its cost fell 40.0% at list price; at a flat per-token price it rose
-  2.5%. Unverified: why the step exists.
+  2.5%. Explained 2026-10-19: Haiku 5.5 bills prompts over 100k tokens at 5x every rate ($0.10 →
+  $0.50/M input).
 - **Decision (owner, 2026-10-17).** Criterion 3 is now "cache-weighted input below baseline"; the
   hit rate is still reported.
   - On these runs OMP passes (−20.7%), so layer 4 is on by default in OMP (`BRAIN_RENDER=off`
@@ -247,3 +252,36 @@ Runs: `--depth 18`. No harness compacted on its own (0 compactions in every run)
 - **Bench correction.** Fact: Claude Code's `total_cost_usd` is the session's running total, so a
   resumed call reports every earlier call too. Until 2026-10-17 the bench summed it; it now records
   each call's difference. The costs above use the last running total.
+
+## 7. Provider pricing (2026-10-19)
+
+E6 gated OMP on gpt-6-astra only. Anthropic prices changed the arithmetic for Claude models in OMP:
+cache reads cost 0.05× input on Opus and Sonnet 5.5 (0.025× Fable 5.1, 0.1× Haiku 5.5) while 1-hour
+cache writes, which OMP uses, cost 2×. An epoch re-writes the whole suffix after its first new stub,
+and each elided token then saves one read per request, so it pays back only after about 40 × suffix ÷
+elided requests.
+
+- **Replay.** 14 days of OMP sessions (694 sessions, 51,373 requests), excluding the 17 that had
+  elisions, re-priced per request with `RENDER_POLICY` replayed over the recorded tool outputs. The
+  modeled baseline input cost was within 4% of the billed one. Input cost with layer 4:
+
+  | Model | Change | Sessions dearer |
+  |---|---|---|
+  | claude-opus-5-5 | −3.1% | 26 / 73 (worst +27%) |
+  | claude-sonnet-5-5 | +3.0% | 66 / 162 (worst +39%) |
+  | gpt-6-astra | −15.8% | — |
+  | gpt-6.1-sol | −19.0% | — |
+
+  Both known biases favour layer 4: restores are not modeled, and OMP's own tool-output pruning
+  already removes part of what layer 4 would elide.
+- **Variants tried.** Larger steps stay near break-even on Anthropic with the same tails. Eliding
+  only on requests that miss the cache anyway saves 6.9% on Opus with a perfect miss signal, but
+  1.8% with time- or shrink-based detection and 0.6% on history rewrites alone; OMP's cache warmer
+  (`providers.cacheWarming`, default `idle`) makes a time gap an unreliable miss signal.
+- **Decision.** OMP skips layer 4 for models on the Anthropic Messages API (`BRAIN_RENDER=on` still
+  forces it). OMP's catalog `cost.cacheWrite` cannot make this call: it lists 1.25× input for OpenAI
+  models too, which bill no writes. `RENDER_POLICY` stays 30k/50k: `keep` 20k would save a further
+  6 points on OpenAI models in the replay, but no E6 run has checked the detail probes there.
+- **Cache TTL, measured, unchanged.** OMP's 1-hour writes beat 5-minute ones: 997 requests came 5
+  minutes to 1 hour after the previous one, and at 5 minutes Opus input cost would rise 77% and
+  Sonnet 20%.

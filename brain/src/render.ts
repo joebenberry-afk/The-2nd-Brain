@@ -27,9 +27,10 @@ export interface RenderPolicy { keep: number; step: number; min: number }
 
 /**
  * An epoch re-sends everything after its first new stub uncached (1.25x base price on Anthropic,
- * 2x with 1-hour caching, 1x on OpenAI) while each elided token then saves one cache read (0.1x)
- * per request, so `step` is above `keep`: an epoch pays back in about 7 requests, 11 with 1-hour
- * caching (40k/20k needed about 23 and cost more than it saved on short log-heavy sessions).
+ * 2x with 1-hour caching, 1x on OpenAI) while each elided token then saves one cache read (0.1x
+ * on OpenAI) per request, so `step` is above `keep`: on OpenAI an epoch pays back in about 7
+ * requests (40k/20k needed about 23 and cost more than it saved on short log-heavy sessions).
+ * Anthropic bills writes at 1.25-2x and reads at 0.025-0.1x, so it rarely pays back there and OMP skips it (omp.ts).
  * keep + step caps live tool output near 80k: in the E6 bench Claude Code's requests peaked at
  * 124k tokens (Claude counts logs about 1.4x heavier than this estimate) against 224k without.
  * A stub costs 60-90 tokens, hence `min` 500.

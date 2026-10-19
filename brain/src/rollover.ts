@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { loadProjects } from "./project.ts";
 import { estimateTokens } from "./util.ts";
 
-/** A local atomic latch survives hook processes and OMP restarts; never session text. */
+/**
+ * Fires at the threshold and again at each further multiple of it (150k, 300k, 450k): 47 sessions
+ * that got the single hint ran a median 104 more requests and spent 17% of 14 days' cost after it.
+ * A local atomic latch survives hook processes and OMP restarts; never session text.
+ */
 export function rolloverHint(home: string, project: string, session: string, tokens: unknown, sub = false): string {
   if (sub || typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0) return "";
   const configured = loadProjects(home)[project]?.rollover;
@@ -20,8 +24,8 @@ export function rolloverHint(home: string, project: string, session: string, tok
     }
     const text = `Brain: context ${Math.ceil(tokens / 1000)}k. Save brain_state (Goal/Next/See:) and start a fresh session; the card carries it over.`;
     if (estimateTokens(text) > 40) return "";
-    mkdirSync(directory, { recursive: true });
-    mkdirSync(latch); // EEXIST means this crossing was already shown, including concurrent hooks.
+    mkdirSync(latch, { recursive: true });
+    mkdirSync(join(latch, String(Math.floor(tokens / threshold)))); // EEXIST: this multiple was already shown, including concurrent hooks.
     return text;
   } catch {
     return ""; // A locked/missing home never interrupts a host session.

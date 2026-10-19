@@ -261,6 +261,14 @@ describe("OMP adapter", () => {
     expect(context({ messages: messages() }, ctx)).toBeUndefined();
   });
 
+  it("leaves Anthropic Messages models alone unless BRAIN_RENDER=on: their cache writes cost more than an elided read saves", () => {
+    const claude = { ...ctx, model: { api: "anthropic-messages", provider: "anthropic", id: "claude-opus-5-5" } };
+    const gpt = { ...ctx, model: { api: "openai-codex-responses", provider: "openai-codex", id: "gpt-6-astra" } };
+    expect(load({}).context({ messages: messages() }, claude)).toBeUndefined();
+    expect(load({}).context({ messages: messages() }, gpt)).toBeDefined();
+    expect(load({ BRAIN_RENDER: "on" }).context({ messages: messages() }, claude)).toBeDefined();
+  });
+
   it("is on by default: returns new messages with stubs for old, big results and mutates nothing", () => {
     const { home, context } = load({});
     const input = messages();
