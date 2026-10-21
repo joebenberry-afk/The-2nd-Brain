@@ -438,6 +438,15 @@ or prints nothing and exits 0 when none matches. Set `SECOND_BRAIN_HOME`; option
 `BRAIN_SESSION` (preferred), Claude Code’s `CLAUDE_CODE_SESSION_ID` or `CLAUDE_SESSION_ID`
 attributes CLI usage to the session.
 
+**DeepSeek Harness.** `dsh/` is a Host plugin (bundle `@local/dsh-second-brain`): the start
+card, the child card, `brain_recall`/`brain_note`/`brain_state`, the tested known fix, capture
+of every tool outcome (`brain event`), owner-rule capture (`brain prompt`), a scan at compaction
+and session end (`brain scan`), and the context hand-off hint (`brain rollover`), all in one
+Host. It keeps one warm `brain serve` process per Host instead of one CLI process per call:
+a warm recall or fix is ~30 ms against ~400 ms fresh, so every failed tool result and every
+tool call stays cheap. A checkout older than the plugin is detected once and falls back to one
+process per call with the older feature set. Install, configuration and limits: `dsh/README.md`.
+
 **MCP clients.** Launch `brain mcp` as a stdio server to expose the same three tool definitions
 as OMP: `brain_recall`, `brain_note` and `brain_state`. Launch in the workspace directory
 (or set `BRAIN_PROJECT`) and set `SECOND_BRAIN_HOME`. MCP has no subagent identity: the host

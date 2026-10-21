@@ -20,7 +20,7 @@ import { scrub } from "./scrub.ts";
 import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, usageWindow, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
-import { rolloverHint } from "./rollover.ts";
+import { rolloverHint, rolloverThreshold } from "./rollover.ts";
 
 export interface Io {
   out: (text: string) => void;
@@ -47,9 +47,14 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain stats [--days N] · check · convert --from <v3 home> [--dry-run]
   brain tidy [--all] [--days N] [--pair-budget N]  read-only duplicates, contradictions, unused notes, unseen global tags
   brain export <dir>                           public notes as an OKF bundle (one way)
+  brain event [--fix]                          record one host tool outcome (JSON on stdin); --fix prints its tested fix
+  brain prompt                                 capture durable owner rules from one user message (JSON on stdin)
+  brain scan                                   learn from this session's captured events (session end)
+  brain rollover <tokens> [--sub]              context hand-off hint at the threshold, or silence
   brain hook claude-code                       Claude Code hook (JSON on stdin)
   brain hook agents-md                         print the managed agent instructions
   brain mcp                                    MCP server on stdio (brain_recall, brain_note, brain_state)
+  brain serve                                  long-lived JSON-lines service for a host plugin (stdio)
   brain proxy [--port N]                       layer 4 proxy for Claude Code and Codex, 127.0.0.1 only (default port 47830)
 
 Every command takes --home <dir> and --project <id>. Kinds: ${KINDS.join(", ")}.`;
@@ -81,6 +86,12 @@ const OPTIONS = {
   to: { type: "string" },
   "dry-run": { type: "boolean" },
   port: { type: "string" },
+  fix: { type: "boolean" },
+  sub: { type: "boolean" },
+  tools: { type: "boolean" },
+  subagent: { type: "boolean" },
+  parent: { type: "string" },
+  threshold: { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const;
 
@@ -117,6 +128,21 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
+/** The session a hook-like command attributes its telemetry to; a bare shell is `cli`. */
+function cliSession(env: NodeJS.ProcessEnv): string {
+  return env.BRAIN_SESSION ?? env.CLAUDE_CODE_SESSION_ID ?? env.CLAUDE_SESSION_ID ?? "cli";
+}
+
+/** One JSON object from stdin, or `{}`: a malformed host payload never throws past the command. */
+function requestJson(text: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(text.replace(/^\uFEFF/, ""));
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
 function use(c: Ctx, kind: UseKind, text: string, hits?: number, id?: string, query?: string, ids?: string[], judged?: boolean, dropped?: number, tora?: ToraRecall, judge?: JudgeName, recall?: RecallTrace): void {
   logUse(c.home, { kind, project: c.project.id, tokens: estimateTokens(text), ms: performance.now() - c.started, via: "cli", session: c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID, hits, id, query, ids, judged, judge, dropped, tora, recall });
 }
@@ -149,8 +175,15 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     return 0;
   },
   card(c) {
-    // A preview of the Claude Code card (no tools, Claude Code's fix fires); OMP renders its own.
-    const card = renderCard(c.home, loadVisibleNotes(c.home, c.project.id).notes, c.project, { tools: agentsBlockLoaded(c.io.env, c.project.root), host: "claude-code" });
+    // A preview of the host's card; `--tools` says the brain_* tools are resident (no CLI line and
+    // no host-scoped fix counting), `--subagent` renders the child card, `--parent` adds its edits.
+    const parent = typeof c.opts.parent === "string" ? c.opts.parent : "";
+    const card = renderCard(c.home, loadVisibleNotes(c.home, c.project.id).notes, c.project, {
+      tools: c.opts.tools === true || agentsBlockLoaded(c.io.env, c.project.root),
+      subagent: c.opts.subagent === true,
+      host: c.opts.tools === true ? undefined : "claude-code",
+      parentEdits: parent ? sessionEdits(c.home, parent, c.project.root) : [],
+    });
     if (card) {
       c.io.out(card);
       use(c, "card", card, undefined, undefined, undefined, cardIds(card));
@@ -180,6 +213,75 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
     const text = fix ? renderFix(fix) : "";
     if (text) c.io.out(text);
     use(c, "fix", text, undefined, fix?.id);
+    return 0;
+  },
+
+  /**
+   * One host tool outcome, from a harness hook rather than a shell: record it for `brain review`,
+   * and with `--fix` answer the failed result's known fix (or its repeat pointer, or a path hint).
+   * Malformed input records nothing and answers nothing; a host's bad call never costs its session.
+   */
+  event(c) {
+    const payload = requestJson(c.io.stdin());
+    const session = cliSession(c.io.env);
+    const fields = toolEventFrom(payload.tool, payload.input, payload.isError === true, payload.content);
+    appendEvent(c.home, session, c.io.cwd, fields);
+    const step = typeof payload.step === "number" && Number.isFinite(payload.step) && payload.step >= 0 ? payload.step : undefined;
+    // Score a fired fix the model has now seen: a later step names it, a same-batch sibling does not.
+    scorePendingFix(c, session, fields, step);
+    if (c.opts.fix !== true || fields.ok || !fields.error) return 0;
+    const fix = findFix(loadVisibleNotes(c.home, c.project.id).notes, fields.error, c.project, c.home, undefined, fields.command);
+    if (!fix) {
+      const hint = pathHint(fields.tool, fields.path, fields.error, c.io.cwd);
+      if (hint) {
+        c.io.out(hint);
+        use(c, "fix", hint, undefined, "pathhint");
+      }
+      return 0;
+    }
+    const directory = hookFixDir(c.home, session);
+    const shown = join(directory, sha(fix.id) + ".shown");
+    let text = renderFix(fix);
+    try {
+      // The full fix once per context; a repeat of the same error costs a pointer. As OMP and Claude Code.
+      text = existsSync(shown) ? `Brain: same fix as above [${fix.id}]` : text;
+      if (step !== undefined) {
+        writeAtomic(join(directory, sha(fields.command || fields.tool) + ".json"), JSON.stringify({
+          id: fix.id, project: c.project.id, step, ...operationOf(fields),
+        }));
+      }
+      writeAtomic(shown, "");
+    } catch { /* a read-only state dir must not suppress the fix */ }
+    c.io.out(text);
+    use(c, "fix", text, undefined, fix.id);
+    return 0;
+  },
+
+  /** Durable owner rules from one user message (main sessions only; the host sends `--sub` for children). */
+  prompt(c) {
+    const payload = requestJson(c.io.stdin());
+    captureUserRules(c.home, typeof payload.text === "string" ? payload.text : "", c.project, { subagent: c.opts.sub === true });
+    return 0;
+  },
+
+  /** Catch up on this session's captured events: tested repairs learn themselves, review sees failures. */
+  scan(c) {
+    try {
+      scanEvents(c.home, loadNotes(c.home).notes);
+    } catch {
+      // Capture is advisory: a broken log never breaks the host's shutdown.
+    }
+    return 0;
+  },
+
+  /** The context hand-off hint, from the host's own context measurement. */
+  rollover(c) {
+    if (c.opts.threshold === true) {
+      c.io.out(String(rolloverThreshold(c.home, c.project.id)));
+      return 0;
+    }
+    const hint = rolloverHint(c.home, c.project.id, cliSession(c.io.env), Number(c.args[0]), c.opts.sub === true);
+    if (hint) c.io.out(hint);
     return 0;
   },
 
@@ -707,6 +809,50 @@ function hookFixDir(home: string, session: string | undefined, agent?: string): 
   return join(home, "state", "pending-fixes", sha(session ?? "claude-code"), ...(agent ? [sha(agent)] : []));
 }
 
+/**
+ * Score one fired fix against this result, claiming its pending file first so overlapping hooks do
+ * not measure one firing twice. A host that reports its step (DSH) keeps a same-batch sibling from
+ * deciding: those calls ran before the model could read the fix. Hosts without steps score at once,
+ * as the CLI always did.
+ */
+function scorePendingFix(c: Ctx, session: string, fields: ReturnType<typeof toolEventFrom>, step: number | undefined): void {
+  const directory = hookFixDir(c.home, session);
+  let names: string[];
+  try {
+    names = readdirSync(directory).filter((name) => name.endsWith(".json"));
+  } catch {
+    return; // no fired fix is waiting
+  }
+  for (const name of names) {
+    const file = join(directory, name);
+    const claimed = `${file}.${process.pid}.claimed`;
+    let decided = false;
+    try {
+      renameSync(file, claimed);
+      const pending = JSON.parse(readFileSync(claimed, "utf8")) as PendingFix & { step?: unknown };
+      const shownAt = typeof pending.step === "number" && Number.isFinite(pending.step) ? pending.step : undefined;
+      if (step !== undefined && shownAt !== undefined && step <= shownAt) {
+        if (!existsSync(file)) renameSync(claimed, file);
+        continue;
+      }
+      const outcome = outcomeOf(pending, fields);
+      if (outcome === "other") {
+        if (!existsSync(file)) renameSync(claimed, file);
+        continue;
+      }
+      if (outcome !== "unknown") {
+        logUse(c.home, { kind: "fixout", id: pending.id, project: pending.project, outcome, tokens: 0, ms: 0, session, via: "cli" });
+      }
+      decided = true;
+    } catch {
+      // Torn or unreadable local state is unmeasured, never fatal.
+    } finally {
+      try { rmSync(claimed, { force: true }); } catch { /* a locked claim must not suppress the next fix */ }
+    }
+    if (decided) break;
+  }
+}
+
 /** Claude Code hook input/output: https://code.claude.com/docs/en/hooks */
 function claudeCodeHook(io: Io, explicitHome: string | undefined): number {
   // In-process hook latency, including input/loading/rendering; excludes Node/module startup.
@@ -922,6 +1068,12 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
   if (command === "mcp") {
     const { runMcp } = await import("./mcp.ts");
     return runMcp({ home: opts.home, env: opts.project ? { ...io.env, BRAIN_PROJECT: opts.project } : io.env });
+  }
+  // A long-lived JSON-lines service for a host plugin: one warm note cache for the whole session.
+  if (command === "serve") {
+    const { runServe } = await import("./serve.ts");
+    const env = opts.home ? { ...io.env, SECOND_BRAIN_HOME: opts.home } : io.env;
+    return runServe({ env, cwd: io.cwd }, process.stdin, process.stdout);
   }
   const run = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : undefined;
   if (!run) {

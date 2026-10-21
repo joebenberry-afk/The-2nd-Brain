@@ -11,10 +11,9 @@ import { estimateTokens } from "./util.ts";
  */
 export function rolloverHint(home: string, project: string, session: string, tokens: unknown, sub = false): string {
   if (sub || typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0) return "";
-  const configured = loadProjects(home)[project]?.rollover;
   // 150k: compactbench `v5-rollover-150k` (157k seeded) still cut cost per finished task 43%, and
   // 45 of 68 main sessions in 14 days crossed 150k against 34 crossing 250k.
-  const threshold = typeof configured === "number" && Number.isFinite(configured) && configured >= 0 ? configured : 150_000;
+  const threshold = rolloverThreshold(home, project);
   const directory = join(home, "state", "rollover");
   const latch = join(directory, createHash("sha256").update(project + "\0" + session).digest("hex"));
   try {
@@ -31,3 +30,10 @@ export function rolloverHint(home: string, project: string, session: string, tok
     return ""; // A locked/missing home never interrupts a host session.
   }
 }
+
+/** The configured hand-off threshold in tokens; `0` disables the hint, the default is 150k. */
+export function rolloverThreshold(home: string, project: string): number {
+  const configured = loadProjects(home)[project]?.rollover;
+  return typeof configured === "number" && Number.isFinite(configured) && configured >= 0 ? configured : 150_000;
+}
+
