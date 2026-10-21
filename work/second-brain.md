@@ -1,5 +1,5 @@
 ---
-at: 2026-10-19T09:06:37Z
+at: 2026-10-21T09:01:59Z
 ---
 
-Goal: FT-2 Cyberpunk pass (D36). Now: K18 queue running 5 -pa arms (flick, pan_fast, stopstart, pan_slow, pitch) on bufg_m1_32636fa5. Next: score each, FG-409 row on main; fix failing motion offline first; if all pass merge m1-k12, M2.
+Goal: Claude Code cost pass. Done: headless 55.6k -> 20.3k, desktop 51.1k -> 34.2k. Next: owner decides Chrome/computer use off in Settings; tool-result cap.
