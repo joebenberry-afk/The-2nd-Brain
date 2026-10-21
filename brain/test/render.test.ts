@@ -1,5 +1,5 @@
 /** Layer 4 (brain/src/render.ts): determinism, prefix stability, keep window, sticky keys, restore and the OMP adapter. */
-import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -65,6 +65,17 @@ describe("render core", () => {
     const home = join(tmp(), "file");
     writeFileSync(home, "blocked");
     expect(new Renderer(home, SMALL).render(history(30))).toEqual([]);
+  });
+
+  it("keeps an output that holds a credential full, so no copy of it reaches state/elided", () => {
+    const home = tmp();
+    const outputs = history(30);
+    outputs[0] = { ...outputs[0]!, text: `password=hunter2hunter2\n${outputs[0]!.text}` };
+    const elisions = new Renderer(home, SMALL).render(outputs);
+    expect(elisions.length).toBeGreaterThan(0);
+    expect(elisions.map(e => e.index)).not.toContain(0);
+    const stored = readdirSync(join(home, "state", "elided")).map(name => readFileSync(join(home, "state", "elided", name), "utf8"));
+    expect(stored.some(text => text.includes("hunter2"))).toBe(false);
   });
 
   it("recounts equal-length replacement text before deciding the watermark", () => {

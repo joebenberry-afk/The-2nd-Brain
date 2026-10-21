@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
 import { join } from "node:path";
+import { scrub } from "./scrub.ts";
 import { writeAtomic } from "./util.ts";
 
 /** One tool output as the host sent it, in conversation order. `key` is the host's call id. */
@@ -194,6 +195,9 @@ export class Renderer {
       }
       if (index > mark || tokens < this.#policy.min || output.text.startsWith(STUB_PREFIX)) continue;
       const text = output.text;
+      // An output holding a credential stays full: its secret then lives only in the host's history,
+      // never in a second copy under state/elided. Commit SHAs (long runs) do not count.
+      if (scrub(text, { longRuns: false }).scrubbed) continue;
       const id = `t-${createHash("sha256").update(text).digest("hex").slice(0, 10)}`;
       if (this.#home && !storeElided(this.#home, id, text)) continue;
       let lines = 1;
