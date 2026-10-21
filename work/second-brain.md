@@ -1,5 +1,5 @@
 ---
-at: 2026-10-21T09:01:59Z
+at: 2026-10-21T23:50:13Z
 ---
 
-Goal: Claude Code cost pass. Done: headless 55.6k -> 20.3k, desktop 51.1k -> 34.2k. Next: owner decides Chrome/computer use off in Settings; tool-result cap.
+Goal: DSH harness pass. Done: warm serve (recall 410->32 ms), capture/scan, rollover hint, child card; 24 plugin tests, tsc+eslint clean. Next: restart the Harness to load dsh/index.js, run npm run check (vitest blocked by sandbox EPERM), measure one DSH session.
