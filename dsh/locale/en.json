@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Second Brain",
+    "description": "Starts each session with what earlier sessions learned, adds brain_recall, brain_note and brain_state, and appends a tested known fix to a failed tool call."
+  }
+}

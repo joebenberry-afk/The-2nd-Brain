@@ -1,0 +1,9 @@
+# Second Brain rows for the DeepSeek Harness profile.
+#
+# The package reads its checkout from `config.home`, falling back to the
+# `SECOND_BRAIN_HOME` environment variable the Brain installer sets.
+# Every switch below can be flipped in this profile's own patch layer.
+- insert:
+    - id: second-brain
+      name: '@local/dsh-second-brain'
+      config: {}

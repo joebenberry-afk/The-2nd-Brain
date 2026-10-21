@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "第二大脑",
+    "description": "在新会话开始时带上此前会话学到的东西，提供 brain_recall、brain_note 和 brain_state，并在工具调用失败时附上已验证的已知修复。"
+  }
+}

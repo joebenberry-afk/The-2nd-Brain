@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Second Brain">
+  <rect width="64" height="64" rx="14" fill="#1F6FEB"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 44c-4 0-7-3-7-7 0-2 1-4 2-5-1-1-1-3-1-4 0-4 3-7 7-7 1-3 3-5 6-5 4 0 7 3 7 7"/>
+    <path d="M36 16c4 0 7 3 7 7 3 1 5 3 5 7 0 2-1 4-2 5 1 1 2 3 2 5 0 4-3 7-7 7-1 3-3 5-6 5-4 0-7-3-7-7"/>
+  </g>
+  <g fill="#FFFFFF">
+    <circle cx="25" cy="30" r="3"/>
+    <circle cx="39" cy="34" r="3"/>
+    <circle cx="31" cy="42" r="3"/>
+  </g>
+  <g stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.9">
+    <line x1="27" y1="31.5" x2="36" y2="33.5"/>
+    <line x1="37" y1="36.5" x2="33" y2="40"/>
+    <line x1="29" y1="33" x2="30" y2="39"/>
+  </g>
+</svg>
