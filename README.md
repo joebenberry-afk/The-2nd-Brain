@@ -36,7 +36,7 @@ Optional, only for the integration you use:
 | DeepSeek Harness Host | The `dsh/` plugin bundle |
 | [Codex CLI](https://github.com/openai/codex) | `.codex/hooks.json` + `AGENTS.md` block |
 | Any MCP client | `brain mcp` stdio server |
-| Tora (local reranker, runs on your machine) | Precision filter for recall; turn off with `BRAIN_TORA=off` |
+| Tora (local reranker) — **not publicly available yet**; without it recall uses lexical BM25 | Precision filter for recall when a Tora session is running; turn off with `BRAIN_TORA=off` |
 | TypeSafe Jev + `TYPESAFE_API_KEY` (paid) | Fallback recall judge when Tora gives no verdict; `BRAIN_JUDGE=off` disables judging |
 
 Environment: `SECOND_BRAIN_HOME` points at this checkout (the Windows installer sets it).
