@@ -31,3 +31,7 @@ Desktop.ini
 /brain/package-lock.json
 /dsh/test/
 /scripts/cloud-session-setup.sh
+
+# Tora is a private local project: its notes stay on this machine
+/notes/tora/
+/work/tora.md

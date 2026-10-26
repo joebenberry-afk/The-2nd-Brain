@@ -36,8 +36,7 @@ Optional, only for the integration you use:
 | DeepSeek Harness Host | The `dsh/` plugin bundle |
 | [Codex CLI](https://github.com/openai/codex) | `.codex/hooks.json` + `AGENTS.md` block |
 | Any MCP client | `brain mcp` stdio server |
-| Tora (local reranker) — **not publicly available yet**; without it recall uses lexical BM25 | Precision filter for recall when a Tora session is running; turn off with `BRAIN_TORA=off` |
-| TypeSafe Jev + `TYPESAFE_API_KEY` (paid) | Fallback recall judge when Tora gives no verdict; `BRAIN_JUDGE=off` disables judging |
+| TypeSafe Jev + `TYPESAFE_API_KEY` (paid) | Recall relevance judge; `BRAIN_JUDGE=off` disables judging |
 
 Environment: `SECOND_BRAIN_HOME` points at this checkout (the Windows installer sets it).
 
@@ -70,7 +69,7 @@ Every harness reads and writes the same checkout, shares notes and working state
 | **New project** | recall global procedure notes for proven setups (stack and why, scaffold steps, gotchas, done-check) | ordinary note recall |
 | **Any other prompt** | nothing | 0 |
 
-Measured on this repository (at 127 notes): the start card is ~250 tokens and builds in ~9 ms; lexical recall answers in ~1 ms warm (~26 ms at 2,000 notes, ~67 ms at 5,000) and matches the previous SQLite FTS5 engine on the frozen eval (dev 13/15, held-out 7/8). When a local **Tora** reranker or **TypeSafe Jev** judge is available, recall filters candidates and plan-doc headings for precision and fails open to lexical BM25 on timeout or offline use.
+Measured on this repository (at 127 notes): the start card is ~250 tokens and builds in ~9 ms; lexical recall answers in ~1 ms warm (~26 ms at 2,000 notes, ~67 ms at 5,000) and matches the previous SQLite FTS5 engine on the frozen eval (dev 13/15, held-out 7/8). When a **TypeSafe Jev** judge is available, recall filters candidates and plan-doc headings for precision and fails open to lexical BM25 on timeout or offline use.
 
 ---
 
@@ -157,7 +156,7 @@ Projects need no registration: the id comes from `projects.json`, the git remote
 | Module | Responsibility |
 |---|---|
 | `notes.ts` · `project.ts` · `docs.ts` | Note model, content-bound SHA trust, project/worktree resolution, live `See: path#heading` plan anchors |
-| `search.ts` · `judge.ts` · `tora.ts` | In-memory BM25 (SQLite FTS5 port) + optional local Tora reranker / TypeSafe Jev relevance and duplicate judging |
+| `search.ts` · `judge.ts` | In-memory BM25 (SQLite FTS5 port) + optional TypeSafe Jev relevance and duplicate judging |
 | `card.ts` · `work.ts` · `rollover.ts` | Main & subagent start cards, working state with staleness detection, 150k context hand-off hints |
 | `capture.ts` · `outcome.ts` · `paths.ts` | Tool-event log, self-learning tested fixes, failed→fixed & commit-trailer proposals, owner-rule & Claude memory capture, missing-path hints |
 | `render.ts` · `proxy.ts` | Layer 4 epoch-based reversible tool-output elision (in-process for OMP, HTTP proxy for Claude Code & Codex) |

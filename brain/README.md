@@ -58,20 +58,11 @@ words in the note's first line, or half of a short one. When no note answers, re
 instead: `docs/LOOP.md › Goals (line 12)`.
 
 **Recall relevance check.** CLI, OMP and MCP recall check the notes the lexical search would show
-with a judge: **Tora's local reranker** (Qwen3-Reranker-0.6B, free) whenever a Tora session runs,
-and TypeSafe Jev (`jev-latest`, paid) only when Tora gives no verdict and `TYPESAFE_API_KEY` is set.
-`BRAIN_JUDGE=tora` never calls Jev (recall or the write-time pair hint), `BRAIN_JUDGE=jev` skips
-Tora for judging (recall and that hint) while the start card's cosine ranking still uses a live
-Tora, and `BRAIN_JUDGE=off` judges nothing; `BRAIN_TORA=off` disables Tora everywhere. Notes
-scoring below **0.78** on Jev's scale are dropped
+with a judge: TypeSafe Jev (`jev-latest`, paid) when `TYPESAFE_API_KEY` is set;
+`BRAIN_JUDGE=off` judges nothing. Notes scoring below **0.78** are dropped
 (0.75 let 1-2 wrong answers through on reruns of the same 54 queries: Jev drifts about ±0.02
 between calls; 0.78 gave none in four runs), without promoting unjudged runners-up; the usual
-doc-heading or no-match fallback still applies. Tora's reranker scores saturate near 1, so they are
-mapped onto Jev's scale: its 0.999 counts as 0.78 and its 0.5 as the phrase floor 0.55. On 276
-blind-labelled October candidates it kept 116 right / 3 wrong where Jev kept 113 / 5; on the frozen
-hand-labelled September eval it is weaker (real 2 right / 2 wrong against Jev's 7-8 / 0), its
-mistakes being notes on the query's topic that do not answer it (owner chose it as the default, 15
-Oct; Tora IDEAS TJ-02). Only the scrubbed query and note body text (whitespace collapsed, scrubbed,
+doc-heading or no-match fallback still applies. Only the scrubbed query and note body text (whitespace collapsed, scrubbed,
 then cut to 2,000 characters, so a secret at the cut is masked whole; Jev reads the first 450) are
 sent. Private notes are never sent and remain lexical, unjudged.
 A lone project-local **fact** that is the only visible lexical hit and scores at least twice the next
@@ -82,19 +73,15 @@ A plan-doc heading answer (its heading and best-matching paragraph) is checked t
 When a doc heading could become the fallback answer, it is checked in the same request as the
 notes, so a rejected note no longer costs a second sequential call (54-query replay: 44 → 39
 requests, 58 → 64 questions); surviving notes still win over the heading.
-Without a judge, or on timeout, HTTP or parse errors from both, recall **fails open** to its
-unchanged lexical answer. Tora answers in about 0.13 s on the GPU and 1-4 s on the CPU, Jev in about
-300 ms. Local judging has a shared 0.8-second deadline; cold loads and slower CPU calls fail open
-rather than delaying host work. Jev retains its 5-second timeout. A failed local route cools down for
-2 seconds, keyed to that session and route; an exhausted or shortened caller deadline does not
-mark the server unhealthy, and a new session can recover at once.
-Small caches (Tora's in memory, the Brain's per process) avoid
+Without a judge, or on timeout, HTTP or parse errors, recall **fails open** to its
+unchanged lexical answer. Jev answers in about 300 ms and has a 5-second timeout.
+A small per-process cache avoids
 repeated work for the same query and text. Jev's endpoint defaults to `https://api.typesafe.ai`
 (`TYPESAFE_BASE_URL` overrides it). Recall telemetry retains query/ids and adds `judged` (a
-successful check), `judge` (`tora` or `jev`) and `dropped` (count); `brain stats` counts judged
+successful check), `judge` and `dropped` (count); `brain stats` counts judged
 recalls by judge, so Jev spend shows up. Compact `recall` diagnostics retain effective `all`, a hash
 of project id/tags, a public-note corpus content hash, bounded public candidate IDs/stage codes,
-and local route outcome/duration (including failures). Document hits retain `doc:path#heading-anchor`,
+and judge route outcome/duration (including failures). Document hits retain `doc:path#heading-anchor`,
 not heading content. Queries remain scrubbed and capped at 200 characters; private note content/IDs
 and endpoint credentials are not included in these diagnostics. A corpus mismatch means today's
 notes cannot establish a historical retrieval miss.
@@ -104,32 +91,8 @@ names no project; a child whose own folder is undeclared and has no git remote w
 parent's project — card, recall, notes, known fixes and logged events — instead of a phantom `m`
 (61 child sessions in one week had run with no project notes at all).
 
-**Tora (optional local scorer and judge).** While a Tora session (local EmbeddingGemma 2 and
-Qwen3-Reranker-0.6B servers that live as long as their agent session;
-`%LOCALAPPDATA%\tora\sessions\<pid>.json` says where it listens, and a stale file whose process is
-gone is ignored) is running, it judges recall (above) and serves three more places. It is
-**optional and fails open**: no session, a refused or slow call, or a malformed answer leaves each
-exactly as it was without Tora. `BRAIN_TORA=off` disables it; private notes are never sent to it.
-
-- **Judged recall.** Among visible, non-private, non-retired notes, BM25's top three that the lexical
-  answer gated out are eligible. With the local Tora judge, the first two join the lexical candidates
-  directly in `/judge`, without `/score`; the reranker bar stays **0.999** (0.78 mapped). Notes only
-  Tora finds are never sent. They appear only after passing the judge, within the usual three lines.
-  A temp-home replay of 788 deduplicated real queries (14 days) added 8 notes and removed none;
-  blind TypeSafe Jev rated all eight relevant (probabilities 0.77–0.97). `/score` requests fell
-  487 → 0, `/judge` increased 0.26/query. Observed latency p50 was 77 → 88 ms, p95 194 → 201 ms;
-  both replay arms shared the old cooldown state, so these are not isolated latency estimates.
-  The Jev judge path retains the cosine ≥0.74 prefilter and best-two cap (566-query evaluation:
-  15/15 relevant above that floor versus 11/16 below). Only this cosine path emits `tora`:
-  `ms` and `[id, cosine, judge probability, kept]` rows; local direct judging uses `recall`
-  candidate-stage and route diagnostics instead.
-- **The start card (OMP).** At the first prompt, and on the card a compaction brings back, a prompt
-  with three or more content words is ranked by Tora's cosine instead of BM25 when Tora answers within
-  0.3 s (45 real first prompts: precision@3 0.36 against 0.18). Without a live Tora the card renders at
-  once as before.
-- **The write-time hint.** `brain note` asks Jev about Tora's three nearest notes besides the three
-  lexical neighbours, in the same pair request (10 real replacements: one more contradiction caught;
-  40 ordinary writes: no extra hint). In OMP `brain_note` returns without waiting for that judge
+**The write-time hint.** `brain note` asks Jev about the three lexical neighbours in one pair
+request. In OMP `brain_note` returns without waiting for that judge
   (0.8-3.9 s in OMP telemetry before, ~0.1 s after); a hint it raises (`Brain: note <id> (same as …)`)
   rides the session's next tool result, else its next prompt. The CLI, MCP and DSH still wait for it.
 
@@ -186,7 +149,7 @@ Recall searches the whole registered section, preferring more distinct query ter
    ≤120 tokens and the remaining card budget. Naming a doc boosts its navigation entries, not
    full-section selection. Topical briefs rank navigation before its cap and omit unrelated
    headings unless their doc is named; without a brief a small source-order outline remains. Ordinary child
-   notes must pass lexical recall eligibility for topical briefs (Tora only orders eligible notes);
+   notes must pass lexical recall eligibility for topical briefs;
    vague/no-brief children retain static fallback. Labels and duplicated clipped headlines are
    never substituted for complete facts.
    Children never inherit Goal/Next/Done or auto observations, and cannot overwrite state through the
