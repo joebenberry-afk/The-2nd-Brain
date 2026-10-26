@@ -204,8 +204,16 @@ export function writeAuto(home: string, project: string, fields: AutoFields): Wo
   return readWork(home, project);
 }
 
+/**
+ * The instant plus its age: a plan's "running" or "waiting" is as of then, and an agent reading the
+ * card knows the date but rarely the hour (2026-10-22: a Claude Code card's "running" read as live
+ * after the chain had finished).
+ */
 function timestamp(at: string): string {
-  return at ? `${at.slice(0, 16).replace("T", " ")} UTC` : "time unknown";
+  if (!at) return "time unknown";
+  const minutes = Math.floor((Date.now() - Date.parse(at)) / 60000);
+  const age = !(minutes >= 0) ? "" : minutes < 60 ? `, ${minutes} min ago` : minutes < 2880 ? `, ${Math.floor(minutes / 60)} h ago` : `, ${Math.floor(minutes / 1440)} d ago`;
+  return `${at.slice(0, 16).replace("T", " ")} UTC${age}`;
 }
 
 function planHeading(work: Work, root: string | null): string {

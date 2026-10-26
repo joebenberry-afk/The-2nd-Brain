@@ -28,11 +28,7 @@ The installer (every step reversible):
   a self-contained copy of `brain/src` (re-run it after each `git pull`);
 - ends with `brain check` as a self-test.
 
-The installer and uninstaller are exercised by `test/install.test.ts` (PowerShell 7, and Bun
-loading the installed extension) wherever `pwsh` is available — including CI.
-
-No `npm install` is needed to run it (no runtime dependencies); `npm ci` in `brain/` is only for
-tests.
+No `npm install` is needed to run it (zero runtime dependencies).
 
 Open a **new terminal** (it picks up PATH and `SECOND_BRAIN_HOME`), then:
 
@@ -133,7 +129,9 @@ exactly as it was without Tora. `BRAIN_TORA=off` disables it; private notes are 
   once as before.
 - **The write-time hint.** `brain note` asks Jev about Tora's three nearest notes besides the three
   lexical neighbours, in the same pair request (10 real replacements: one more contradiction caught;
-  40 ordinary writes: no extra hint).
+  40 ordinary writes: no extra hint). In OMP `brain_note` returns without waiting for that judge
+  (0.8-3.9 s in OMP telemetry before, ~0.1 s after); a hint it raises (`Brain: note <id> (same as …)`)
+  rides the session's next tool result, else its next prompt. The CLI, MCP and DSH still wait for it.
 
 **Tidy and note usage.** `brain tidy [--all] [--days N] [--pair-budget N]` is a read-only report of
 duplicate or contradictory notes, active notes older than N days (default 30) with no recent use,
@@ -612,38 +610,3 @@ if no Brain command is running, delete the claim file named in the error.
 
 `brain check` reports any file it cannot read.
 
-## 6. Develop
-
-```bash
-npm ci
-npx eslint src test && npx tsc --noEmit && npx vitest run
-```
-`npm run test:unit` runs the no-subprocess test files for a fast inner loop. `npm test` runs
-both Vitest projects; `npm run check` adds lint and type checking. Every run puts its throwaway
-homes and repos under one `brain-test-run-*` folder in the OS temp directory and removes it at the
-end (`TMPDIR`/`TEMP`/`TMP` point there for the tests and their child processes); runs before
-2026-10-15 left about 1,000 `brain-*` folders each. The full gate includes
-`test/eval.test.ts`, which runs historical V3 recall queries against the complete checked-in
-`recall-v3-corpus.json` snapshot, independently of live curation, plus current-corpus scope/migration checks.
-It grades judged answers on the hand-labelled real queries against that historical corpus, plan-doc headings included: the four
-registered docs are frozen as fixtures, each doc section carries a majority-of-three blind label,
-every candidate the judge would see must have recordings (four Jev runs, and Tora's reranker on GPU
-and CPU in `recall-judge-tora.json`), and an unexpected or unlabelled doc answer counts as wrong.
-Current result: Jev runs frozen 34 right 7–8, held-out 20 right 5–6, judged wrong 0; Tora runs 2
-and 6 right with their three known wrong answers (R27, R33, H07) and V3 dev 10/15. Re-record Tora
-against a live Tora started with that device: `BRAIN_EVAL_RECORD_TORA=gpu npx vitest run test/eval.test.ts`.
-`npm run perf` measures real-home read paths plus isolated synthetic 1,000/5,000-note corpora,
-and fresh-process Node baseline, no-op/success/failure hooks, stats and check. Hook startup
-keeps optional CLI servers, judges and maintenance commands lazy-loaded. Measurements use
-Node built-ins and record aggregates in `state/perf.json` with previous-run deltas; hook writes
-and host-session scans use disposable homes.
-
-`node scripts/agentbench.ts` runs small coding tasks (rename, fix, find, combo, and a memory
-task whose answer lives only in a Brain note) with headless OMP agents, Brain `off` vs `on` vs
-experiments (`on+<name>`, read from `BRAIN_EXPERIMENT`) and host settings (`+@<preset>`), scores
-each run from its session file and ranks by cost against the same-batch control (batches drift
-±5–10 %). It costs real model usage: GPT first, then Grok/Google, Claude last. Results append to
-`state/agentbench.jsonl`; session files stay in `state/agentbench/` for turn-by-turn analysis.
-Latest (GPT, v3, 20 runs each): Brain on vs off −30 % tokens, −39 % cost, 6.7 vs 9.2 turns,
-20/20 vs 16/20 passing.
-Rules: [the V4 plan](../docs/intake/2026-09-27-plan-v4-agent-experience.md) §3.2.

@@ -1,5 +1,5 @@
 ---
-at: 2026-10-19T08:49:38Z
+at: 2026-10-22T17:36:39Z
 ---
 
-Goal: FT-2 Cyberpunk pass (D36). Now: K17 diagonal-pa queued (FG-408 e13cee9 Gaussian gate H0 + ArrivalHoldLast horizon, bufg_m1_32636fa5). K16 FAIL real 1.198 gen 1.224. Next: score K17; write FG-408 row on main; if pass pan_fast, flick, merge m1-k12, M2.
+Goal: M1 gate (FT-2 per game). Next: rerun restart_chain.sh (runs/frame_generation/20261022T111500Z_c-space-cyberpunk-update) once owner restores normal internet (steamconnecttest 204) and D: gains ~0.5 GiB; then score K41 (FG-460) and MHWblur (FG-462). Prep: Cyberpunk account-screen conditional ESC step on a branch off m1-k37 (like MHWblur's mhw.json); ft7 freeze fix; PresentMon ETW access denied (FG-463 (4)) unexplained. See: Frame Gen.md FG-463, FG-463a

@@ -51,9 +51,8 @@ The row appears as **Second Brain** in Settings → Plugins. New sessions pick i
 immediately; a session already open gets the tools at its next request, but its card
 only on its next start.
 
-`dsh/index.js` is loaded when the Harness starts. After editing it, restart the
-Harness: a running Host keeps the module generation it imported, and toggling or
-reinstalling the bundle does not re-import it.
+`dsh/index.js` is loaded when the Harness starts. If you update the checkout, restart the
+Harness so the Host imports the updated module.
 
 ## Configuration
 
@@ -107,14 +106,13 @@ The row lives in the profile's `cordis.patch.yml` as `second-brain`. Defaults:
 ## Verify
 
 ```powershell
-node dsh/test/plugin.test.mjs                  # 24 behavioural tests, no child process
+node brain/bin/brain.mjs check                 # notes and projects check
 node brain/bin/brain.mjs card --tools          # the card this project would inject
 node brain/bin/brain.mjs rollover 151000       # the hand-off hint, once
 ```
 
 Then in the Harness ask for `brain_recall` of a known note id, save a `brain_note`, and
 check `brain stats --days 1` counts the calls.
-
 ## Limits
 
 - **Start card cost.** The card is ≤320 tokens per session and the child card ≤200;

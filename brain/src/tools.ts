@@ -20,6 +20,11 @@ export interface ToolContext {
   sub: boolean;
   session: string | undefined;
   edited?: string[];
+  /**
+   * A host that can deliver context later (OMP) takes the write-time hint here instead of waiting for
+   * it: the judge takes 0.5-4 s and almost every write raises no hint. Resolves to "" or one line.
+   */
+  deferHint?: (hint: Promise<string>) => void;
 }
 
 type ToolResult = { text: string; kind?: UseKind; project: string; hits?: number; query?: string; ids?: string[]; judged?: boolean; judge?: JudgeName; dropped?: number; tora?: ToraRecall; recall?: RecallTrace };
@@ -68,7 +73,7 @@ export const brainTools: BrainTool[] = [
       global: { type: "boolean", description: "useful beyond this project", optional: true },
       replaces: { type: "string", description: "id of a note this corrects", optional: true },
     },
-    async run(params, { home, cwd, env, sub, session, edited }) {
+    async run(params, { home, cwd, env, sub, session, edited, deferHint }) {
       const text = requireString(params.text, "text");
       // As the CLI does: a kind silently stored as "note" loses the classification without a word.
       const kind = (params.kind == null || params.kind === "" ? undefined : String(params.kind)) as Kind | undefined;
@@ -94,7 +99,12 @@ export const brainTools: BrainTool[] = [
       }
       const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });
       if (old) retireNote(home, old.id, note.id);
-      const hint = sub ? "" : await noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env), judgeScorer(env));
+      let hint = "";
+      if (!sub) {
+        const pending = noteHint(home, note, loadNotes(home).notes, typesafePairJudge(env), judgeScorer(env));
+        if (deferHint) deferHint(pending.then(text => text && `Brain: note ${note.id}${text}`));
+        else hint = await pending;
+      }
       return { text: `saved ${note.id}${old ? ` (retired ${old.id})` : ""}${untested}${fixCutHint(note)}${hint}`, kind: "note", project: project.id };
     },
   },

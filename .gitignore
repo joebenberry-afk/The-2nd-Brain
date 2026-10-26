@@ -17,3 +17,17 @@ notes/*/private/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Local development, test suites, benchmarks and design docs (kept out of the install repo)
+/AGENTS.md
+/CLAUDE.md
+/.github/
+/docs/
+/brain/test/
+/brain/scripts/
+/brain/eslint.config.mjs
+/brain/tsconfig.json
+/brain/vitest.config.ts
+/brain/package-lock.json
+/dsh/test/
+/scripts/cloud-session-setup.sh

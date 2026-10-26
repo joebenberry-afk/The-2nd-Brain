@@ -1,25 +1,9 @@
 {
   "name": "second-brain",
-  "version": "4.0.0-dev",
+  "version": "4.0.0",
   "description": "Agent memory that survives compaction: start card, recall, notes, working state and known fixes.",
   "type": "module",
   "private": true,
   "bin": { "brain": "bin/brain.mjs" },
-  "engines": { "node": ">=22.18" },
-  "scripts": {
-    "test": "vitest run",
-    "test:unit": "vitest run --project unit",
-    "perf": "node scripts/perf.ts",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint src test",
-    "check": "npm run lint && npm run typecheck && npm test"
-  },
-  "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
-    "eslint": "^9.0.0",
-    "typescript": "~5.9.3",
-    "vitest": "^3.0.0"
-  }
+  "engines": { "node": ">=22.18" }
 }

@@ -20,6 +20,7 @@ import { rolloverHint } from "./rollover.ts";
 
 export const CARD_TYPE = "brain.card";
 const LEAN_TYPE = "brain.lean";
+const HINT_TYPE = "brain.hint";
 const EDITING_TOOL = /edit|write|patch|create|replace|apply|notebook|move|rename|delete/i;
 
 export interface HostLike {
@@ -57,6 +58,15 @@ interface SessionState {
   renderer?: Renderer;
   /** A compaction dropped the card: the next tool result or prompt in this session carries it again. */
   cardDue?: boolean;
+  /** Write-time hints judged after their brain_note returned; the next tool result or prompt carries them. */
+  hints?: string[];
+}
+
+/** The session's undelivered write-time hints as one block, or undefined; taking them clears them. */
+function takeHints(state: SessionState): string | undefined {
+  const hints = state.hints;
+  state.hints = undefined;
+  return hints?.length ? hints.join("\n") : undefined;
 }
 
 /** Shared by rebound extension instances; entries are removed when their session shuts down. */
@@ -452,7 +462,12 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
             const session = sessionKey(ctx);
             const sub = isSubagent(ctx);
             const inherited = inheritedProject(ctx, cwd);
-            const result = await definition.run(params, { home, cwd, env: inherited ? { ...env, BRAIN_PROJECT: inherited.id } : env, session, sub, edited: getSession(session).edited });
+            const state = getSession(session);
+            // The note returns at once; its duplicate/contradiction judge (0.5-4 s) finishes behind it.
+            const deferHint = (pending: Promise<string>): void => {
+              pending.then(text => { if (text && sessions.get(session) === state) (state.hints ??= []).push(text); }, error => failed("noteHint", error));
+            };
+            const result = await definition.run(params, { home, cwd, env: inherited ? { ...env, BRAIN_PROJECT: inherited.id } : env, session, sub, edited: state.edited, deferHint });
             if (result.kind) logUse(home, { kind: result.kind, project: result.project, tokens: estimateTokens(result.text), ms: performance.now() - started, session, sub, hits: result.hits, query: result.query, ids: result.ids, judged: result.judged, judge: result.judge, dropped: result.dropped, tora: result.tora, recall: result.recall, via: "tool" });
             return { content: [{ type: "text", text: result.text }], details: {} };
           } catch (error) {
@@ -580,7 +595,9 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
         }, undefined, "before_agent_start");
       }
 
-      return undefined;
+      // A hint judged after the last tool result of the previous run: this prompt carries it.
+      const hints = takeHints(state);
+      return hints ? buildCardMessage(hints, HINT_TYPE) : undefined;
     } catch (error) {
       failed("before_agent_start", error);
       return undefined;
@@ -877,16 +894,19 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
   // its next call, and the Brain queues no message of its own. Inside a tool result it is no
   // brain.card entry, so a process restarted before the next compaction cards once more.
   on("tool_result", (event, ctx) => {
-    const result = toolResult(event, ctx);
+    let result = toolResult(event, ctx);
     try {
       const state = getSession(sessionKey(ctx));
+      const original = asObject(event)?.content;
+      const contentOf = (): unknown[] => result?.content ?? (Array.isArray(original) ? original : typeof original === "string" && original ? [{ type: "text", text: original }] : []);
+      const hints = takeHints(state);
+      if (hints) result = { content: [...contentOf(), { type: "text", text: `\n${hints}` }] };
       if (!state.cardDue) return result;
       state.cardDue = false;
       const started = performance.now();
       const cwd = cwdOf(ctx) ?? process.cwd();
       const project = state.project ?? inheritedProject(ctx, cwd) ?? resolveProject(home, cwd, env);
-      const original = asObject(event)?.content;
-      const content = result?.content ?? (Array.isArray(original) ? original : typeof original === "string" && original ? [{ type: "text", text: original }] : []);
+      const content = contentOf();
       const notes = loadNotes(home).notes;
       return rankedCard(notes, project, state.ask, semantic => ({ content: [...content, { type: "text", text: `\n${compactionCard(ctx, state, project, notes, state.ask, started, semantic)}` }] }), result, "tool_result");
     } catch (error) {
