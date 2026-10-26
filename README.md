@@ -8,6 +8,39 @@ One Git-backed Markdown store (`notes/`, `work/`, `projects.json`) shared across
 Zero runtime dependencies and no `npm install` or build step — Node ≥ 22.18 or Bun runs the TypeScript source directly.
 
 > **Full guide:** [brain/README.md](brain/README.md) · **DSH plugin:** [dsh/README.md](dsh/README.md)
+
+**Contents:** [Requirements](#requirements) · [Supported harnesses](#supported-harnesses) ·
+[What an agent feels](#what-an-agent-feels) · [Quick start](#quick-start-on-a-new-machine) ·
+[How it works](#how-it-works) · [Everyday commands](#everyday-commands)
+
+---
+
+## Requirements
+
+The Brain has **no npm packages to install**: `brain/package.json` declares no dependencies and
+`brain/src` uses Node built-ins only.
+
+| Needed | Version | Used for |
+|---|---|---|
+| [Node.js](https://nodejs.org/) **or** [Bun](https://bun.sh/) | Node ≥ 22.18 (runs `.ts` natively) · any current Bun | Runs `brain` (`brain/bin/brain.mjs` hands an older Node to Bun) |
+| [Git](https://git-scm.com/) | any recent | Cloning, project detection from the remote, `brain sync`, commit-trailer capture |
+| PowerShell | Windows PowerShell 5.1 or PowerShell 7 | `scripts/install-v4.ps1` / `uninstall-v4.ps1` (Windows only) |
+| Git Bash (Windows) or any POSIX shell | — | The `brain/bin/brain` shim that Claude Code and Codex hooks call |
+
+Optional, only for the integration you use:
+
+| Optional | Enables |
+|---|---|
+| Oh My Pi (`@oh-my-pi/pi-coding-agent`, verified on 18.3.5) | In-process extension via `install-v4.ps1` |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Lifecycle hooks (`brain hook claude-code`) |
+| DeepSeek Harness Host | The `dsh/` plugin bundle |
+| [Codex CLI](https://github.com/openai/codex) | `.codex/hooks.json` + `AGENTS.md` block |
+| Any MCP client | `brain mcp` stdio server |
+| Tora (local reranker, runs on your machine) | Precision filter for recall; turn off with `BRAIN_TORA=off` |
+| TypeSafe Jev + `TYPESAFE_API_KEY` (paid) | Fallback recall judge when Tora gives no verdict; `BRAIN_JUDGE=off` disables judging |
+
+Environment: `SECOND_BRAIN_HOME` points at this checkout (the Windows installer sets it).
+
 ---
 
 ## Supported Harnesses
@@ -37,7 +70,7 @@ Every harness reads and writes the same checkout, shares notes and working state
 | **New project** | recall global procedure notes for proven setups (stack and why, scaffold steps, gotchas, done-check) | ordinary note recall |
 | **Any other prompt** | nothing | 0 |
 
-Measured on this repository: the start card is ~250 tokens and builds in ~9 ms; lexical recall answers in ~1 ms (warm) over 127 notes (~26 ms at 2,000 notes, ~67 ms at 5,000) and matches the previous SQLite FTS5 engine on the frozen eval (dev 13/15, held-out 7/8). When a local **Tora** reranker or **TypeSafe Jev** judge is available, recall filters candidates and plan-doc headings for precision and fails open to lexical BM25 on timeout or offline use.
+Measured on this repository (at 127 notes): the start card is ~250 tokens and builds in ~9 ms; lexical recall answers in ~1 ms warm (~26 ms at 2,000 notes, ~67 ms at 5,000) and matches the previous SQLite FTS5 engine on the frozen eval (dev 13/15, held-out 7/8). When a local **Tora** reranker or **TypeSafe Jev** judge is available, recall filters candidates and plan-doc headings for precision and fails open to lexical BM25 on timeout or offline use.
 
 ---
 
