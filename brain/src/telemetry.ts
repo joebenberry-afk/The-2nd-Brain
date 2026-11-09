@@ -99,6 +99,8 @@ export interface Use {
   id?: string;
   /** Where a fail-open handler swallowed an error, and the (scrubbed, cut) message. */
   error?: string;
+  /** First OMP card only, whole ms: reading notes, waiting for Tora's ranking, rendering. */
+  phases?: { load: number; wait: number; render: number };
 }
 
 /**

@@ -543,12 +543,17 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
       if (!state.carded && cardSinceCompaction(ctx)) state.carded = true;
       if (!state.carded) {
         state.cardDue = false;
+        const loadStart = performance.now();
         const { notes } = loadNotes(home);
+        const loaded = performance.now();
         const subagent = isSubagent(ctx);
         // Only the parent scans earlier sessions; children share its proposals without rescanning.
-        // After the card, not before: catching up on a long session's events took ~400 ms on the
-        // first prompt's path. The card's proposal count is then at most one scan behind.
-        if (!subagent) {
+        // Scheduled from inside the render, not before it: with a live Tora the card awaits its
+        // ranking, and a timer set earlier fired during that wait, putting the synchronous scan
+        // (~0.5 s over 992 event files, even with nothing new) in front of the card. The card's
+        // proposal count is then at most one scan behind.
+        const afterCard = (): void => {
+          if (subagent) return;
           setTimeout(() => {
             try {
               scanEvents(home, notes);
@@ -574,14 +579,19 @@ export default function secondBrain(pi: HostLike, env: NodeJS.ProcessEnv = proce
               failed("toolSchemas", error);
             }
           }, 0);
-        }
+        };
         const ask = typeof prompt === "string" ? prompt : undefined;
         return rankedCard(notes, project, ask, semantic => {
-          const cardContent = sessionCard(ctx, state, project, notes, ask, semantic);
-          state.carded = true;
-          if (!cardContent) return undefined;
-          logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key, sub: subagent, ids: cardIds(cardContent) });
-          return buildCardMessage(cardContent);
+          const ranked = performance.now();
+          try {
+            const cardContent = sessionCard(ctx, state, project, notes, ask, semantic);
+            state.carded = true;
+            if (!cardContent) return undefined;
+            logUse(home, { kind: "card", project: project.id, tokens: estimateTokens(cardContent), ms: performance.now() - started, session: key, sub: subagent, ids: cardIds(cardContent), phases: { load: Math.round(loaded - loadStart), wait: Math.round(ranked - loaded), render: Math.round(performance.now() - ranked) } });
+            return buildCardMessage(cardContent);
+          } finally {
+            afterCard();
+          }
         }, undefined, "before_agent_start");
       }
       // A compaction no tool result followed: this prompt brings the card back, ranked by it.
