@@ -226,6 +226,32 @@ export function fixFires(home: string, sub: boolean, days = 7, now: Date = new D
   return new Map([...sessions].map(([id, seen]) => [id, seen.size]));
 }
 
+/**
+ * The project a Claude Code session started in: its earliest main-session start card on record
+ * (hook rows carry the hook payload's cwd, not a shell's). Undefined when no such row survives
+ * rotation, so callers fall back to the shell's directory.
+ */
+export function sessionProject(home: string, session: string): string | undefined {
+  for (const file of [join(home, "state", "telemetry.1.jsonl"), telemetryPath(home)]) {
+    let text = "";
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (!line.includes('"kind":"card"') || !line.includes('"via":"hook"')) continue;
+      try {
+        const row = JSON.parse(line) as { project?: unknown; session?: unknown; sub?: unknown };
+        if (row.session === session && row.sub !== true && typeof row.project === "string") return row.project;
+      } catch {
+        // a torn line is skipped
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Adds one recall row's `tora` data to the totals; a malformed row, or an entry of another shape, counts for nothing. */
 function tallyTora(data: unknown, total: Stats["tora"]): void {
   const row = data as { c?: unknown } | null;

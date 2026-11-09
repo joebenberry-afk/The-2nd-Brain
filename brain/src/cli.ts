@@ -13,11 +13,11 @@ import { operationOf, outcomeOf, type PendingFix } from "./outcome.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
 import { projectDocs, suggestDocs } from "./docs.ts";
 import { createNote, differentBody, errorPatternProblem, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, loadVisibleNotes, markTested, retireNote, staleAfterProblem, TESTERS, updateNote, upgradeNote, type Kind } from "./notes.ts";
-import { addProjectDoc, docFile, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
+import { addProjectDoc, docFile, folderOnly, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { pathHint } from "./paths.ts";
 import type { JudgeName, ToraRecall, RecallTrace } from "./judge.ts";
 import { scrub } from "./scrub.ts";
-import { noteUsage, pausedFixes, logUse, stats, toolSchemaUse, usageWindow, type UseKind } from "./telemetry.ts";
+import { noteUsage, pausedFixes, logUse, sessionProject, stats, toolSchemaUse, usageWindow, type UseKind } from "./telemetry.ts";
 import { estimateTokens, findHome, noHome, slug, tagKey, writeAtomic } from "./util.ts";
 import { readWork, workText, stateSaved, writeAuto, writeWork, type AutoFields } from "./work.ts";
 import { rolloverHint, rolloverThreshold } from "./rollover.ts";
@@ -131,6 +131,21 @@ function positiveInt(value: string | undefined, fallback: number): number {
 /** The session a hook-like command attributes its telemetry to; a bare shell is `cli`. */
 function cliSession(env: NodeJS.ProcessEnv): string {
   return env.BRAIN_SESSION ?? env.CLAUDE_CODE_SESSION_ID ?? env.CLAUDE_SESSION_ID ?? "cli";
+}
+
+/** Commands that read or write a project's memory, and so follow the agent's session, not its shell. */
+const SESSION_SCOPED = new Set(["note", "state", "recall"]);
+
+/**
+ * As OMP's subagents: a shell standing in a folder that names no project (not in projects.json,
+ * no git remote) works for the project its session started in. A declared or remote-backed
+ * project, a bare shell and an explicit BRAIN_PROJECT all keep the directory's answer.
+ */
+function sessionScoped(home: string, own: Project, io: Io): Project {
+  const session = cliSession(io.env);
+  if (session === "cli" || io.env.BRAIN_PROJECT?.trim() || !folderOnly(home, own)) return own;
+  const started = sessionProject(home, session);
+  return started && started !== own.id ? projectById(home, started, io.cwd) : own;
 }
 
 /** One JSON object from stdin, or `{}`: a malformed host payload never throws past the command. */
@@ -345,6 +360,14 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
   state(c) {
     if (!c.args.length) {
       c.io.out(workText(readWork(c.home, c.project.id), c.project.root, c.project.docRoot, c.project.docRoot ? projectDocs(c.home, c.project) : []) || "no working state");
+      return 0;
+    }
+    // A shell's directory drifts; the session's start card names the project it works for. An
+    // explicit --project or BRAIN_PROJECT is the caller's decision and is never second-guessed.
+    const session = cliSession(c.io.env);
+    const started = c.opts.project || c.io.env.BRAIN_PROJECT?.trim() || session === "cli" ? undefined : sessionProject(c.home, session);
+    if (started && started !== c.project.id) {
+      c.io.out(`not saved: this session started in ${started}, but this shell is in ${c.project.id}; rerun with --project ${started} (or --project ${c.project.id} if that project is meant)`);
       return 0;
     }
     const work = writeWork(c.home, c.project.id, c.args.join(" "));
@@ -1085,7 +1108,8 @@ export async function main(argv: string[], ioOverrides: Partial<Io> = {}): Promi
     io.err(`brain: ${noHome(opts.home, io.env)}`);
     return 2;
   }
-  const project: Project = opts.project ? projectById(home, opts.project, io.cwd) : resolveProject(home, io.cwd, io.env);
+  const own: Project = opts.project ? projectById(home, opts.project, io.cwd) : resolveProject(home, io.cwd, io.env);
+  const project = !opts.project && SESSION_SCOPED.has(command) ? sessionScoped(home, own, io) : own;
   try {
     return await run({ home, project, args, opts, io, started });
   } catch (error) {

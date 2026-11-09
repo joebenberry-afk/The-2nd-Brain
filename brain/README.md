@@ -91,6 +91,14 @@ names no project; a child whose own folder is undeclared and has no git remote w
 parent's project — card, recall, notes, known fixes and logged events — instead of a phantom `m`
 (61 child sessions in one week had run with no project notes at all).
 
+**CLI calls from a drifting shell.** An agent's shell changes directory; its session does not change
+project. For a Claude Code session whose start card is on record, `brain note`, `brain state` and
+`brain recall` issued from a folder that is undeclared and has no git remote work for the project
+the session started in. `brain state` from a folder that names a *different* real project is
+refused with `not saved: this session started in <a>, but this shell is in <b>; rerun with
+--project …` (25 of 317 CLI state writes in 23 days had replaced another project's working state).
+`--project`, `BRAIN_PROJECT` and a bare shell keep the directory's answer; other commands always do.
+
 **The write-time hint.** `brain note` asks Jev about the three lexical neighbours in one pair
 request. In OMP `brain_note` returns without waiting for that judge
   (0.8-3.9 s in OMP telemetry before, ~0.1 s after); a hint it raises (`Brain: note <id> (same as …)`)
