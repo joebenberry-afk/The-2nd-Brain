@@ -132,7 +132,8 @@ project, with the rules for checking one. It never runs at read time and blocks 
 (Sonnet class; about $0.06 a note) reads each note, looks at the repo read-only, and answers with
 `brain checked "<id> <holds|moved|wrong|uncheckable>: <what it saw>"`. The verdict is stored on the
 note, bound to its body: recall and card lines then say `(checked 2026-11-25)`, `(moved, checked …)`
-or `(wrong, checked …)`; an id read adds what was seen. Editing the note voids the check.
+or `(wrong, checked …)`; an id read adds what was seen. A note checked `moved` or `wrong` is not
+pushed as a known fix. Editing the note voids the check.
 `uncheckable` prints nothing and is asked again after 30 days. Private and retired notes are never
 listed.
 

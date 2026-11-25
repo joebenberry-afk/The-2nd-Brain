@@ -29,6 +29,7 @@ import {
   EXIT_WRAPPER,
   GLOBAL,
   type Kind,
+  checkCurrent,
   createNote,
   errorPatternProblem,
   displayLine,
@@ -1272,6 +1273,9 @@ function findFixIn(
   for (const note of notes) {
     if (!isActive(note) || !note.errors.length || expired(note)) continue;
     if (!visibleTo(note, project) || (host && note.host && note.host !== host)) continue;
+    // A dated check that found the note moved or wrong outranks its tested stamp, until the text is corrected.
+    const verdict = checkCurrent(note)?.verdict;
+    if (verdict === "moved" || verdict === "wrong") continue;
     let valid = validation?.get(note);
     if (valid === undefined) {
       valid = testedCurrent(note);
