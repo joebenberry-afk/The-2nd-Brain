@@ -49,10 +49,7 @@
       ],
       "docs": [
         "BasicUpscaler/PLAN.md",
-        "BasicUpscaler/DECISIONS.md",
-        "BasicUpscaler/architecture/ARCHITECTURE.md",
-        "BasicUpscaler/architecture/TOOLS.md",
-        "BasicUpscaler/Frame Gen.md"
+        "BasicUpscaler/DECISIONS.md"
       ],
       "aliases": [
         "basicupscaler-frame-gen"
