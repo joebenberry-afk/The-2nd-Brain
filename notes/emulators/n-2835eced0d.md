@@ -3,6 +3,10 @@ id: n-2835eced0d
 kind: decision
 at: 2026-11-25T21:00:34Z
 source: agent
+tested: "true"
+tested_by: agent
+tested_at: 2026-11-25T21:17:00Z
+tested_sha: dc09eb038672
 checked: holds
 checked_at: 2026-11-25T21:08:11Z
 checked_why: 50 patches in wt_patches; worktree list 174, branches 293; rest labelled not re-verified
