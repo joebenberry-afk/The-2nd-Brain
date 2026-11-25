@@ -1,5 +1,6 @@
 ---
-at: 2026-10-26T01:50:29Z
+at: 2026-11-25T18:02:25Z
 ---
 
-Goal: BUFG M1 gate via K44. Next: K44 queue running (ft5-mhw, ft8-fg190) at C:/BU-wt/m1-k44/runs/frame_generation/20261026T014700Z_m1-live-queueK44; score each; ft2-mhw held on D: space pending owner OK to delete K43 ft2-mhw attempts (~37 GiB)
+Goal: V6 warranted claims. Done: M1 dated checks committed on brain/dated-checks; first pass over 94 notes recorded (plan §7.11). Next: owner decides D6-11 (changed-evidence penalty), merge; then D6-3 unresolved evidence paths. Watch out: 94 notes carry new checked_* fields, uncommitted until brain sync; kill rule 2026-12-02.
+See: docs/intake/2026-11-25-plan-v6-warranted-claims.md#7.11

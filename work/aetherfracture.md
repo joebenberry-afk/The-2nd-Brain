@@ -1,5 +1,7 @@
 ---
-at: 2026-10-25T21:42:32Z
+at: 2026-10-27T14:52:41Z
 ---
 
-Goal: AetherFracture architecture. Done: AETHERFRACTURE_Technical_Architecture_v0.1.md (decisions D1-D13, contracts). Next: owner confirms D13 (.tres defs) + installs Godot; then M0 skeleton (project.godot, BattleSim, sim_cli headless, replay hash test, HD-2D camera test). Design agent owns design/. See: arch doc section 9.
+Goal: complete ROADMAP 1.0. Done: all agent-side milestones; commits c375374, 6fc18e5 (RC, STATUS readiness list). Owner gates remain (sign-off, playtest, target-laptop FPS, balance deviations) → never goal-complete. Next: PerfHitch agent fixing stress_run 37ms hitch (docs/perf.md idle pass); then check.ps1 + commit + STATUS perf row.
+See: docs/plan/STATUS.md#Release
+readiness

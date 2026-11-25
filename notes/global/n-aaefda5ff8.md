@@ -9,6 +9,10 @@ tested: "true"
 tested_by: owner
 tested_at: 2026-10-17T15:15:28Z
 tested_sha: 482a15d020ee
+checked: holds
+checked_at: 2026-11-25T17:59:09Z
+checked_why: "The spec says a colonless PUT is a register paste with no body and a colon form takes +TEXT rows. [edit tool spec: 'PUT <N @name' register pastes have NO body; ':' ops take + rows]"
+checked_sha: 482a15d020ee
 host: omp
 ---
 

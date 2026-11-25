@@ -44,7 +44,9 @@
       "paths": [
         "C:/Users/assas/Documents/BasicUpscaler"
       ],
-      "tags": ["capture"],
+      "tags": [
+        "capture"
+      ],
       "docs": [
         "BasicUpscaler/PLAN.md",
         "BasicUpscaler/DECISIONS.md"
@@ -54,8 +56,14 @@
       "paths": [
         "C:/Users/assas/Documents/BasicUpscaler Frame-Gen"
       ],
-      "tags": ["capture"],
-      "docs": ["architecture/ARCHITECTURE.md", "architecture/TOOLS.md", "Frame Gen.md"]
+      "tags": [
+        "capture"
+      ],
+      "docs": [
+        "architecture/ARCHITECTURE.md",
+        "architecture/TOOLS.md",
+        "Frame Gen.md"
+      ]
     },
     "the-basic-upscaler": {
       "paths": [
@@ -68,6 +76,7 @@
         "dbsz-ultimate-ai",
         "dragon-ball-sparking-zero-ultimate-ai"
       ]
+    },
     "roblox": {
       "paths": [
         "C:/Users/assas/Documents/Decomps/Roblox"

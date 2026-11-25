@@ -1,5 +1,5 @@
 ---
-at: 2026-10-26T11:23:21Z
+at: 2026-11-14T01:49:19Z
 ---
 
-Goal: BUFC roadmap. Next: review P3 agent (branch p3-engine-cut) and merge if exit passes; then add testsource --swap-effect blt and exclusive fullscreen (X11, blt key source) post-P3; P4; analyse FG-493 live probe when bench admits it.
+Goal: BUFG vision. Main 628e5019. Done: 008 (fast tier 269s, target missed, Gemini SAFE TO LAND yes, owner go needed), 019 final 391837f2 (row3, Gemini accept). Running: 021 L5/L5a caps (replay=row-count envelope), 020 Commit1b M3 readiness gate, 013 Gemini recheck, 022 draft. Next: owner form (013 consents, landings 008/019/021).
