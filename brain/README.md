@@ -126,6 +126,16 @@ Its asks-by-week section reads the hosts' session files once per change: parsed 
 summaries (cwd, asks; no transcript text) are cached in the derived `state/asks-cache.json`, and
 which project a session belongs to is decided afresh on every run.
 
+**Dated checks.** `brain checks [--all] [-n N]` prints the notes shown in the last 14 days (card,
+recall, read, fix) whose current text has no check newer than 30 days, most-shown first, grouped by
+project, with the rules for checking one. It never runs at read time and blocks nothing: an agent
+(Sonnet class; about $0.06 a note) reads each note, looks at the repo read-only, and answers with
+`brain checked "<id> <holds|moved|wrong|uncheckable>: <what it saw>"`. The verdict is stored on the
+note, bound to its body: recall and card lines then say `(checked 2026-11-25)`, `(moved, checked …)`
+or `(wrong, checked …)`; an id read adds what was seen. Editing the note voids the check.
+`uncheckable` prints nothing and is asked again after 30 days. Private and retired notes are never
+listed.
+
 **Plan docs and anchors.** `brain project docs add docs/LOOP.md` (and `brain project docs list`,
 which marks an entry that does not resolve here `(missing under <root>)`)
 lets the Brain read a project's own plan files: only headings and the text under one heading
@@ -520,6 +530,10 @@ evidence:
 tested: true               # only tested notes are appended to failed tool results
 tested_by: owner           # who verified it: owner (brain tested) | capture | agent | convert
 tested_at: 2026-09-28T09:00:00Z
+checked: moved             # last dated check: holds | moved | wrong | uncheckable (brain checked)
+checked_at: 2026-11-25T18:00:06Z
+checked_why: build.ts:12 now writes out/quartz   # what the checker saw, one line, ≤ 300 chars
+checked_sha: ae0a9067f511  # fingerprint of the text that was checked; an edit voids the check
 host: omp                  # optional: fires only on this host (omp | claude-code), lower case; brain check reports any other value
 stale_after: 2027-01-01    # optional: out of date from this date (UTC) or ISO instant on
 ---
@@ -541,7 +555,7 @@ penalty to both without hiding the note, and rank them behind live notes even wh
 prompt matches them, as recall does. A
 stat-validated per-process cache reuses unchanged parsed notes; Markdown remains the truth.
 
-**Content-bound trust and keyword recall.** New file evidence (explicit or automatic, including metadata upgrades) stores flat `evidence_sha` entries (`path=12hex`, SHA-256 of file bytes with CRLF normalized); verification refreshes those snapshots and stores `tested_sha` over the whitespace-normalized body plus error patterns. Changed readable evidence shows `(evidence changed)` and gets the same -3 card penalty as missing evidence; a change after `tested_at` prevents a known-fix push. An edited verified body/error pattern loses its +3 tested bonus and fix eligibility, with `(edited since tested)` on an id read; `brain tested <id>` re-stamps both fingerprints. Missing files retain the existing advisory behavior, and absent `tested_sha` is legacy trusted (mi…
+**Content-bound trust and keyword recall.** New file evidence (explicit or automatic, including metadata upgrades) stores flat `evidence_sha` entries (`path=12hex`, SHA-256 of file bytes with CRLF normalized); verification refreshes those snapshots and stores `tested_sha` over the whitespace-normalized body plus error patterns. Changed readable evidence prints no marker (measured wrong 23 times in 29; the dated check above says what is true) but still gets the same -3 card penalty as missing evidence; a change after `tested_at` prevents a known-fix push. An edited verified body/error pattern loses its +3 tested bonus and fix eligibility, with `(edited since tested)` on an id read; `brain tested <id>` re-stamps both fingerprints. Missing files retain the existing advisory behavior, and absent `tested_sha` is legacy trusted (mi…
 
 `brain export <dir>` writes the public notes as an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
 0.2 bundle for OKF readers: `kind` becomes `type`, currently verified content gets `verified`

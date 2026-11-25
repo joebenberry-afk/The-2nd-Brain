@@ -42,6 +42,8 @@ export interface Note {
   testedAt?: string;
   /** Normalized body and error patterns when tested; absent means legacy trusted. */
   testedSha?: string;
+  /** Last dated check of the claim against the world (`brain checked`); says nothing once the body is edited. */
+  check?: Check;
   /** The one host whose tools produce this note's errors ("omp" | "claude-code"); unset, every host. */
   host?: string;
   /** Date or ISO instant from which the note is out of date (OKF `stale_after`). */
@@ -61,8 +63,38 @@ export interface Note {
 export class NoteError extends Error {}
 
 const LIST_KEYS = new Set(["tags", "errors", "evidence", "evidence_sha"]);
-const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "evidence_sha", "tested", "tested_by", "tested_at", "tested_sha", "host", "stale_after", "replaces", "replaced_by", "retired"];
+const ORDER = ["id", "kind", "at", "source", "tags", "errors", "evidence", "evidence_sha", "tested", "tested_by", "tested_at", "tested_sha", "checked", "checked_at", "checked_why", "checked_sha", "host", "stale_after", "replaces", "replaced_by", "retired"];
 const NOTE_KEYS: Record<string, true> = Object.fromEntries(ORDER.map((key) => [key, true]));
+
+/** What a reader found when it compared the claim with the checkout: still true, true once, never true, or not decidable read-only. */
+export const VERDICTS = ["holds", "moved", "wrong", "uncheckable"] as const;
+export type Verdict = (typeof VERDICTS)[number];
+export interface Check {
+  verdict: Verdict;
+  at: string;
+  /** What moved or what shows it, one line. */
+  why?: string;
+  /** `testedHash` of the note as checked. */
+  sha: string;
+}
+
+/** The note as checked now. */
+export function markChecked(note: Note, verdict: Verdict, why: string): Note {
+  return { ...note, check: { verdict, at: nowIso(), sha: testedHash(note), ...(why ? { why } : {}) } };
+}
+
+/** A check speaks for the text it read. */
+export function checkCurrent(note: Note): Check | undefined {
+  return note.check && note.check.sha === testedHash(note) ? note.check : undefined;
+}
+
+/** Recall and card suffix: the date of a check that held, the verdict of one that did not; nothing when undecided. */
+export function checkMarker(note: Note): string {
+  const check = checkCurrent(note);
+  if (!check || check.verdict === "uncheckable") return "";
+  const day = check.at.slice(0, 10);
+  return check.verdict === "holds" ? ` (checked ${day})` : ` (${check.verdict}, checked ${day})`;
+}
 
 /**
  * Who verified a note, lowest trust first: `convert` (a V3 grade), `agent` (its own claim),
@@ -303,6 +335,15 @@ function asScalar(value: string | string[] | undefined): string | undefined {
   return value || undefined;
 }
 
+function checkFields(fields: Map<string, string | string[]>): { check?: Check } {
+  const verdict = asScalar(fields.get("checked")) as Verdict | undefined;
+  const at = asScalar(fields.get("checked_at"));
+  const sha = asScalar(fields.get("checked_sha"));
+  if (!verdict || !VERDICTS.includes(verdict) || !at || Number.isNaN(Date.parse(at)) || !sha) return {};
+  const why = asScalar(fields.get("checked_why"));
+  return { check: { verdict, at, sha, ...(why ? { why } : {}) } };
+}
+
 /** Build a Note from file text. `project` and `isPrivate` come from the file's location. */
 export function parseNote(text: string, path: string, project: string, isPrivate: boolean): Note {
   const { fields, body, extra } = parseFrontmatter(text, NOTE_KEYS);
@@ -325,6 +366,7 @@ export function parseNote(text: string, path: string, project: string, isPrivate
     testedBy: asScalar(fields.get("tested_by")),
     testedAt: asScalar(fields.get("tested_at")),
     ...(asScalar(fields.get("tested_sha")) ? { testedSha: asScalar(fields.get("tested_sha")) } : {}),
+    ...checkFields(fields),
     // Hand-written: "OMP" still means omp. `brain check` reports a value that is no host.
     host: asScalar(fields.get("host"))?.trim().toLowerCase() || undefined,
     staleAfter: asScalar(fields.get("stale_after")),
@@ -351,6 +393,10 @@ export function formatNote(note: Note): string {
     tested: note.tested ? "true" : undefined,
     tested_by: note.tested ? note.testedBy : undefined,
     tested_at: note.tested ? note.testedAt : undefined,
+    checked: note.check?.verdict,
+    checked_at: note.check?.at,
+    checked_why: note.check?.why,
+    checked_sha: note.check?.sha,
     tested_sha: note.tested ? note.testedSha : undefined,
     host: note.host,
     stale_after: note.staleAfter,

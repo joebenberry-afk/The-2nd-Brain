@@ -1,6 +1,6 @@
 /** Full-text search over notes with BM25 ranking (faithful port of V3 SQLite FTS5). */
 import { resolve } from "node:path";
-import { changedEvidence, testedCurrent, expired, findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
+import { changedEvidence, checkCurrent, checkMarker, testedCurrent, expired, findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
@@ -407,7 +407,8 @@ export function renderHit(hit: Hit, max = 240): string {
   const { note } = hit;
   const idAndKind = `${note.id} [${note.kind}${testedCurrent(note) ? ", tested" : ""}]`;
   const retired = note.retired ? ` (retired${hit.tombstone ? "" : " " + note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""})` : "";
-  const marker = retired + (hit.changed ? " (evidence changed)" : "") + (hit.stale && !hit.changed ? (expired(note) ? ` (stale since ${note.staleAfter!.slice(0, 10)})` : " (stale evidence)") : "");
+  // A changed evidence file says nothing about the claim (V6 §7.5); the dated check does.
+  const marker = retired + checkMarker(note) + (hit.stale && !hit.changed ? (expired(note) ? ` (stale since ${note.staleAfter!.slice(0, 10)})` : " (stale evidence)") : "");
   const title = firstLine(note);
   let rest = hit.tombstone ? "" : restOfBody(note);
   while (title && rest.startsWith(title) && (!rest[title.length] || /[\s:;,.—–-]/.test(rest[title.length]!))) {
@@ -471,7 +472,8 @@ export function answerWithHits(notes: Note[], query: string, opts: AnswerOptions
     const tested = note.tested ? ["tested", note.testedBy && `by ${note.testedBy}`, note.testedAt?.slice(0, 10)].filter(Boolean).join(" ") : "";
     const staleAfter = note.staleAfter ? `${expired(note) ? "stale since" : "stale after"} ${note.staleAfter}` : "";
     const meta = [note.kind, tested, staleAfter, retiredMeta, note.evidence.length ? `evidence: ${note.evidence.join("; ")}` : ""];
-    const trust = (note.tested && !testedCurrent(note) ? " (edited since tested)" : "") + (changedHere(note, opts.project, noteHome(note, opts)) ? " (evidence changed)" : "");
+    const check = checkCurrent(note);
+    const trust = (note.tested && !testedCurrent(note) ? " (edited since tested)" : "") + (check ? ` (checked ${check.at.slice(0, 10)}: ${check.verdict}${check.why ? ", " + check.why : ""})` : "");
     return { text: cutToTokens(`${note.id} [${meta.filter(Boolean).join(", ")}]${trust}\n${note.body}`, FULL_NOTE_TOKENS), hits: 1, ids: [note.id] };
   }
   if (/^(?:n|mem)-[0-9a-f]{6,}$/i.test(id)) return { text: `no note ${id}`, hits: 0, ids: [] };

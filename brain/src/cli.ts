@@ -11,8 +11,9 @@ import { collectAsks, formatWeek, hostSessionRoots, MAX_WEEKS, weeklyAsks, windo
 import { acceptProposal, appendEvent, autoEvidence, captureUserRules, dismissError, findFix, fixCutHint, listClaudeMemory, listProposals, rejectProposal, renderFix, scanCommits, scanEvents, scrubCut, sessionEdits, toolEventFrom, unmatchedErrors } from "./capture.ts";
 import { operationOf, outcomeOf, type PendingFix } from "./outcome.ts";
 import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
+import { dueChecks, parseCheck, renderDue } from "./checks.ts";
 import { projectDocs, suggestDocs } from "./docs.ts";
-import { createNote, differentBody, errorPatternProblem, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, loadVisibleNotes, markTested, retireNote, staleAfterProblem, TESTERS, updateNote, upgradeNote, type Kind } from "./notes.ts";
+import { createNote, differentBody, errorPatternProblem, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, loadVisibleNotes, markChecked, markTested, retireNote, staleAfterProblem, TESTERS, updateNote, upgradeNote, type Kind } from "./notes.ts";
 import { addProjectDoc, docFile, folderOnly, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { pathHint } from "./paths.ts";
 import type { JudgeName, ToraRecall, RecallTrace } from "./judge.ts";
@@ -39,6 +40,8 @@ const USAGE = `brain — agent memory that survives compaction (V4)
   brain note <text…> [--kind K] [--error E]… [--tag T]… [--evidence P]… [--tested] [--stale-after DATE] [--replaces ID] [--global|--private]
   brain fix <error text…>                      tested known fix, or silence
   brain state [<text…>]                        show or replace the working state
+  brain checks [--all] [-n N]                  notes agents were shown that have no dated check, with how to check them
+  brain checked <id> <holds|moved|wrong|uncheckable>: <what you saw>   record a dated check on a note
   brain show <id> · retire <id> [--by <id>] · tested <id> · share <id> --tag T · move <id> --to P
   brain review [--all] · accept <pid>… · reject <pid>…
   brain dismiss <signature…>                   ignore a recurring unmatched error
@@ -400,6 +403,28 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       return markTested(fresh, "owner", (checkout ? [project.root, project.docRoot, c.home] : [c.home]).filter((root): root is string => !!root));
     });
     c.io.out(`tested ${note.id}`);
+    return 0;
+  },
+
+  /** The worklist of the dated check: an agent reads it, looks, and answers each id with `brain checked`. */
+  checks(c) {
+    const all = c.opts.all === true;
+    const due = dueChecks(c.home, loadNotes(c.home).notes).filter(({ note }) => all || note.project === GLOBAL || note.project === c.project.id);
+    c.io.out(renderDue(due, positiveInt(c.opts.limit, 20), (id) => {
+      const project = projectById(c.home, id, c.io.cwd);
+      // projectById falls back to cwd's repo; only the project's own checkout is where to look.
+      return project.root && resolveProject(c.home, project.root, {}).id === project.id ? project.root : null;
+    }));
+    return 0;
+  },
+
+  checked(c) {
+    const parsed = parseCheck(c.args.join(" "));
+    if (typeof parsed === "string") throw new UsageError(parsed);
+    const note = updateNote(c.home, parsed.id, (fresh) => markChecked(fresh, parsed.verdict, scrub(parsed.why).text));
+    const text = `checked ${note.id}: ${parsed.verdict}`;
+    c.io.out(text);
+    use(c, "check", text, undefined, note.id);
     return 0;
   },
 

@@ -177,6 +177,8 @@ brain project docs add <path>       register a plan doc for live anchors and hea
 brain move <id> --to <project>      re-home a note (share <id> --tag T makes it global for a tag)
 brain review · accept · reject      review captured command fixes, owner rules, Claude memory & unmatched errors
 brain tidy [--all]                  audit duplicate, contradictory, or unused notes
+brain checks [--all] [-n N]         notes shown lately whose current text has no dated check, with the check rules
+brain checked "<id> <verdict>: <seen>"  record one check: holds | moved | wrong | uncheckable
 brain sync                          pull, merge working states, commit and push notes/work ↔ git remote
 brain stats [--days 7]              cards, recall hit rate, fix outcomes, judge usage & schema token cost
 ```

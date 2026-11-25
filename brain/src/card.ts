@@ -1,6 +1,6 @@
 /** Start-of-session memory: complete facts, scoped context, and a hard total budget. */
 import { childDocContext, projectDocs } from "./docs.ts";
-import { displayLine, expired, firstLine, GLOBAL, testedCurrent, type Note } from "./notes.ts";
+import { checkMarker, displayLine, expired, firstLine, GLOBAL, testedCurrent, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
 import { changedHere, recall, staleHere, tokens, verifiedHere } from "./search.ts";
 import { scrub } from "./scrub.ts";
@@ -102,8 +102,8 @@ export function cardSemantic(notes: Note[], project: Project, prompt: string | u
 /** Never turn an essential fact into a clipped pointer requiring a second recall. */
 function noteLine(n: Note, room: number, project: Project, home: string): string {
   const changed = changedHere(n, project, home);
-  const marker = changed ? " (evidence changed)" : staleHere(n, project, home)
-    ? expired(n) ? ` (stale since ${n.staleAfter!.slice(0, 10)})` : " (stale evidence)" : "";
+  const marker = checkMarker(n) + (changed ? "" : staleHere(n, project, home)
+    ? expired(n) ? ` (stale since ${n.staleAfter!.slice(0, 10)})` : " (stale evidence)" : "");
   const prefix = `- [${n.kind}${testedCurrent(n) ? ", tested" : ""}] `;
   const suffix = `${marker} (${n.id})`;
   const lines = n.body.split("\n").map((line) => line.trim()).filter(Boolean);

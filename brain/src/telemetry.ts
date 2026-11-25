@@ -73,7 +73,7 @@ export function usageWindow(usage: NoteUsage, days: number): string {
   return `${usage.covered}d, ${usage.from === undefined ? "no telemetry yet" : "telemetry since " + new Date(usage.from).toISOString().slice(0, 10)}; ${days}d asked`;
 }
 
-export type UseKind = "card" | "fix" | "fixout" | "recall" | "note" | "state" | "error" | "elide";
+export type UseKind = "card" | "fix" | "fixout" | "recall" | "note" | "state" | "check" | "error" | "elide";
 
 export interface Use {
   kind: UseKind;
