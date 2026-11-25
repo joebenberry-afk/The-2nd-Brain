@@ -5,6 +5,10 @@ at: 2026-11-25T21:01:01Z
 source: agent
 evidence:
   - BasicUpscaler/AGENTS.md
+checked: holds
+checked_at: 2026-11-25T21:08:18Z
+checked_why: Frame-Gen is 725-byte file; repo has 33 fg-* and 9 salvage/fg-* branches, snapshot/main-checkout-2026-10-10 contains tools/space_guard.py, C:/BU-wt worktrees, C:/BU-gen/m1-gate cohorts with MOVED.json, D:/BU-gen absent
+checked_sha: 44cde734ae1b
 replaces: n-e41ef69592
 ---
 

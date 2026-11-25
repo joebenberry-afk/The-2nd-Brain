@@ -6,6 +6,10 @@ source: agent
 evidence:
   - src/eglantine-fork/build/release/CMakeCache.txt
   - src/fe-lab/plans/order_T0_compile.md
+checked: holds
+checked_at: 2026-11-25T21:08:08Z
+checked_why: CMakeCache YUZU_TESTS=ON, DYNARMIC_TESTS=ON; compile_commands 352 lines match src/tests; build has only c3-no-mcp, release; Catch2-3.13.0, catch2_gen, clang++.exe, order_T0_compile.md exist
+checked_sha: 2e9f1c8109bf
 replaces: n-424e5c10a1
 ---
 

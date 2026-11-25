@@ -3,6 +3,10 @@ id: n-dfed81ada1
 kind: gotcha
 at: 2026-11-25T21:05:53Z
 source: agent
+checked: uncheckable
+checked_at: 2026-11-25T21:08:01Z
+checked_why: eval wait() exit 130 on user interjection is runtime behaviour, note itself says not re-verified
+checked_sha: ca7405a95e08
 ---
 
 Kernel-side wait() on eval agent handles dies with exit 130 when the user interjects and cancels those agents (seen 2026-11, not re-verified 2026-11-25)

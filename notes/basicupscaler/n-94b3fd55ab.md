@@ -7,6 +7,10 @@ evidence:
   - AGENTS.md
 evidence_sha:
   - AGENTS.md=26bdd80ff0ad
+checked: holds
+checked_at: 2026-11-25T21:08:17Z
+checked_why: "AGENTS.md:66-67 states 60 GiB floor and 3 Nov permit; space_guard status shows C: 48.5 GiB free BELOW FLOOR, D: 162.8 free; 22 Oct sizes are labelled unverified"
+checked_sha: 20bf33d9aa53
 replaces: n-83e512455a
 ---
 

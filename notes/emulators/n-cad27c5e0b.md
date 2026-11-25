@@ -5,6 +5,10 @@ at: 2026-11-25T21:00:35Z
 source: agent
 evidence:
   - src/Eglantine-f7c0cc30ac/.gitignore
+checked: holds
+checked_at: 2026-11-25T21:08:08Z
+checked_why: Eglantine-f7c0cc30ac .gitignore has out/ then !/src/audio_core/out/ (l.10-11); git ls-files shows 4 audio_out files; a9abbdc907 'Track src/audio_core/out' exists
+checked_sha: 46cc88a74e22
 replaces: n-a17dad80d5
 ---
 

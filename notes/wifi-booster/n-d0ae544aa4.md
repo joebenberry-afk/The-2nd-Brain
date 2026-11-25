@@ -5,6 +5,10 @@ at: 2026-11-25T21:00:16Z
 source: agent
 evidence:
   - "%LOCALAPPDATA%/aria2-rpc/aria2.conf"
+checked: holds
+checked_at: 2026-11-25T21:08:00Z
+checked_why: aria2 1.37.0, 127.0.0.1:6800 LISTENING (netstat, pid aria2c), conf 16 conns, supervisor passes 64, task logon trigger runs conhost --headless powershell aria2-supervisor.ps1, no Startup lnk, ~/.aria2 conf 64, PATCHED md exists
+checked_sha: 9dece46b3ab2
 replaces: n-12c452f5d1
 ---
 

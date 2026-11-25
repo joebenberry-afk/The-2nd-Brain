@@ -5,6 +5,10 @@ at: 2026-11-25T21:03:00Z
 source: agent
 evidence:
   - src/fe-lab/remote/remote_build.py
+checked: holds
+checked_at: 2026-11-25T21:08:09Z
+checked_why: remote_build.py docstring says compiles/runs unit tests only, no game data/keys/firmware, launches no game; ship/build/test/fetch-log commands present, host lap2 ALMIGHTY; owner parts not re-verified
+checked_sha: 4f7fd3fcbe6e
 replaces: n-3ceb1bf26e
 ---
 
