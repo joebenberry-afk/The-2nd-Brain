@@ -12,6 +12,7 @@ checked_at: 2026-11-25T17:59:30Z
 checked_why: The fallback chain [sonnet-5-5, haiku-5-5] for gemini-4-hydrogen is now persisted in config.yml and task.perCallModel is "on", so the claim that per-task model is rejected and the chain is the only lever is out of date. The owner-preference and kernel wait() exit-130 parts can't be checked from disk
 checked_sha: 4350bc3bbd7a
 replaces: n-5226e0af48
+retired: 2026-11-25T21:00:04Z
 ---
 
 Model substitutes when google/gemini-4-hydrogen is down: owner wants Sonnet 5.5 as substitute, Haiku 5.5 for simple tasks.

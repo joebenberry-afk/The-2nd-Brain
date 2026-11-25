@@ -17,6 +17,8 @@ checked: moved
 checked_at: 2026-11-25T17:59:39Z
 checked_why: "The move-handle abort still holds: the code keeps a COPY handle and README 'Not fixed' (line 96) still cites 0x2a2 / 2162-0001. The stated blockers are gone. SignalAfterGpu now holds shared_from_this and QueueBackingRelease captures the GPU. Nx2ClearSparseBacking clears only the owner's handler, and"
 checked_sha: 312646e4aac2
+replaced_by: n-5811f47c6f
+retired: 2026-11-25T21:00:31Z
 ---
 
 Eglantine nx2_gsv: pushing the session as a move handle in ReturnRawSession makes Fire Emblem Fortune's Weave abort at boot

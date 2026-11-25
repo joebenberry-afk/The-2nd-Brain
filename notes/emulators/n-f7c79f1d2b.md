@@ -11,6 +11,8 @@ checked: moved
 checked_at: 2026-11-25T17:59:22Z
 checked_why: The research JSON files exist, and EDEN_NX2_NO_TRANSLATION_CACHE is the GPU translation cache (memory_manager.cpp:333). The texture budget cap is no longer unconditional. It now applies only when the driver does not report a VRAM budget (follows_reported_vram_budget is false) and the mode is not Agg
 checked_sha: e3ccd6823fce
+replaced_by: n-b693880c6e
+retired: 2026-11-25T21:00:38Z
 ---
 
 Emulator performance research (2026-11-16) saved at src/fe-lab/research/{cpu,shaders,gpu,timing,inventory,verified}.json — 139 sources, 9 pivotal ones re-opened.

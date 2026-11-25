@@ -15,6 +15,8 @@ checked: moved
 checked_at: 2026-11-25T17:59:34Z
 checked_why: The ignore rule did hide the dir, but it has since been tracked and un-ignored via a negation rule, so it is now tracked and `git check-ignore` no longer ignores it. [.gitignore:10-11 (`out/` then `!/src/audio_core/out/`); git ls-files src/audio_core shows 4 out/ files; commit a9abbdc907 'Track src/
 checked_sha: 80101a54aee5
+replaced_by: n-cad27c5e0b
+retired: 2026-11-25T21:00:36Z
 ---
 
 Eglantine repo: .gitignore line 10 `out/` hides src/audio_core/out/ — the directory was never tracked

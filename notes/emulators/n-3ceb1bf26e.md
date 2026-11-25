@@ -11,6 +11,8 @@ checked: moved
 checked_at: 2026-11-25T17:59:45Z
 checked_why: The ship/build/test/fetch-bin driver exists, but its docstring says lap2 only compiles and runs unit tests, copies no game data, and launches no game. That contradicts the note's plan for lap2 correctness game runs. The owner's cap and speed-figure rules can't be checked from files. [C:/Users/assas/
 checked_sha: 99e05eed72d8
+replaced_by: n-dc6c8b84b5
+retired: 2026-11-25T21:03:00Z
 ---
 
 Owner (Nov 17): "make full use of the 2nd laptop, do what gives the greatest gains" + cap of 10 emulator launches per game per lane order.
