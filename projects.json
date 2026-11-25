@@ -49,20 +49,13 @@
       ],
       "docs": [
         "BasicUpscaler/PLAN.md",
-        "BasicUpscaler/DECISIONS.md"
-      ]
-    },
-    "basicupscaler-frame-gen": {
-      "paths": [
-        "C:/Users/assas/Documents/BasicUpscaler Frame-Gen"
+        "BasicUpscaler/DECISIONS.md",
+        "BasicUpscaler/architecture/ARCHITECTURE.md",
+        "BasicUpscaler/architecture/TOOLS.md",
+        "BasicUpscaler/Frame Gen.md"
       ],
-      "tags": [
-        "capture"
-      ],
-      "docs": [
-        "architecture/ARCHITECTURE.md",
-        "architecture/TOOLS.md",
-        "Frame Gen.md"
+      "aliases": [
+        "basicupscaler-frame-gen"
       ]
     },
     "the-basic-upscaler": {
