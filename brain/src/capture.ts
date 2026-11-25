@@ -38,7 +38,6 @@ import {
   firstLine,
   isActive,
   testedCurrent,
-  changedEvidence,
   type Note,
 } from "./notes.ts";
 import { type Project, canonical, loadProjects, normalizePath, projectById, resolveProject, visibleTo } from "./project.ts";
@@ -1279,7 +1278,6 @@ function findFixIn(
       validation?.set(note, valid);
     }
     if (!valid && !allowUntested) continue;
-    if (!allowUntested && (note.project === GLOBAL || (note.project === project?.id && project.root)) && changedEvidence(note, [project?.root, project?.docRoot, home].filter((root): root is string => !!root), note.testedAt)) continue;
     if (note.source === "capture") {
       const paragraphs = note.body.split(/\n\s*\n/);
       const original = paragraphs[3]?.startsWith("Error:") ? paragraphs[1] : undefined;

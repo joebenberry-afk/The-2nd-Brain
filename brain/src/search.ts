@@ -1,6 +1,6 @@
 /** Full-text search over notes with BM25 ranking (faithful port of V3 SQLite FTS5). */
 import { resolve } from "node:path";
-import { changedEvidence, checkCurrent, checkMarker, testedCurrent, expired, findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
+import { checkCurrent, checkMarker, testedCurrent, expired, findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
 import { visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
@@ -149,7 +149,6 @@ export interface Hit {
   score: number;
   matched: string[];
   stale?: boolean;
-  changed?: boolean;
   tombstone?: boolean;
 }
 
@@ -370,16 +369,7 @@ export function staleHere(note: Note, project: Project | null, home: string | un
   if (expired(note)) return true;
   const root = project?.root ?? undefined;
   if (note.project !== GLOBAL && (note.project !== project?.id || !root)) return false;
-  return changedEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r)) || staleEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r));
-}
-
-export function changedHere(note: Note, project: Project | null, home?: string, after?: string): boolean {
-  if (note.project !== GLOBAL && (note.project !== project?.id || !project.root)) return false;
-  return changedEvidence(note, [project?.root, project?.docRoot, home].filter((root): root is string => !!root), after);
-}
-
-export function verifiedHere(note: Note, project: Project | null, home?: string): boolean {
-  return testedCurrent(note) && !changedHere(note, project, home, note.testedAt);
+  return staleEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r));
 }
 
 function noteHome(note: Note, opts: RecallOptions): string | undefined {
@@ -389,10 +379,7 @@ function noteHome(note: Note, opts: RecallOptions): string | undefined {
 export function filterHits(scored: Scored, opts: RecallOptions): Hit[] {
   const hits = matchingHits(scored, opts).slice(0, Math.max(1, Math.min(10, opts.limit ?? 3)));
   // Keep the BM25 shortlist (and its relevance floor), but lead with usable evidence.
-  for (const hit of hits) {
-    hit.stale = staleHere(hit.note, opts.project, noteHome(hit.note, opts));
-    hit.changed = changedHere(hit.note, opts.project, noteHome(hit.note, opts));
-  }
+  for (const hit of hits) hit.stale = staleHere(hit.note, opts.project, noteHome(hit.note, opts));
   return hits.sort((a, b) => Number(a.stale) - Number(b.stale));
 }
 
@@ -407,8 +394,7 @@ export function renderHit(hit: Hit, max = 240): string {
   const { note } = hit;
   const idAndKind = `${note.id} [${note.kind}${testedCurrent(note) ? ", tested" : ""}]`;
   const retired = note.retired ? ` (retired${hit.tombstone ? "" : " " + note.retired.slice(0, 10)}${note.replacedBy ? `, replaced by ${note.replacedBy}` : ""})` : "";
-  // A changed evidence file says nothing about the claim (V6 §7.5); the dated check does.
-  const marker = retired + checkMarker(note) + (hit.stale && !hit.changed ? (expired(note) ? ` (stale since ${note.staleAfter!.slice(0, 10)})` : " (stale evidence)") : "");
+  const marker = retired + checkMarker(note) + (hit.stale ? (expired(note) ? ` (stale since ${note.staleAfter!.slice(0, 10)})` : " (stale evidence)") : "");
   const title = firstLine(note);
   let rest = hit.tombstone ? "" : restOfBody(note);
   while (title && rest.startsWith(title) && (!rest[title.length] || /[\s:;,.—–-]/.test(rest[title.length]!))) {
@@ -442,7 +428,7 @@ export function renderHits(hits: Hit[]): string {
 
 /** A note that reached the answer by a route other than lexical scoring, trust markers as for any hit. */
 export function plainHit(note: Note, opts: RecallOptions & { home?: string }): Hit {
-  return { note, score: 0, matched: [], stale: staleHere(note, opts.project, noteHome(note, opts)), changed: changedHere(note, opts.project, noteHome(note, opts)) };
+  return { note, score: 0, matched: [], stale: staleHere(note, opts.project, noteHome(note, opts)) };
 }
 
 export interface AnswerOptions extends RecallOptions {

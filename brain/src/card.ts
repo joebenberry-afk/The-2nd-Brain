@@ -2,7 +2,7 @@
 import { childDocContext, projectDocs } from "./docs.ts";
 import { checkMarker, displayLine, expired, firstLine, GLOBAL, testedCurrent, type Note } from "./notes.ts";
 import { visibleTo, type Project } from "./project.ts";
-import { changedHere, recall, staleHere, tokens, verifiedHere } from "./search.ts";
+import { recall, staleHere, tokens } from "./search.ts";
 import { scrub } from "./scrub.ts";
 import { fixFires, pausedFixes } from "./telemetry.ts";
 import { TORA_CARD_TIMEOUT_MS, type ToraScorer } from "./tora.ts";
@@ -101,8 +101,7 @@ export function cardSemantic(notes: Note[], project: Project, prompt: string | u
 
 /** Never turn an essential fact into a clipped pointer requiring a second recall. */
 function noteLine(n: Note, room: number, project: Project, home: string): string {
-  const changed = changedHere(n, project, home);
-  const marker = checkMarker(n) + (changed ? "" : staleHere(n, project, home)
+  const marker = checkMarker(n) + (staleHere(n, project, home)
     ? expired(n) ? ` (stale since ${n.staleAfter!.slice(0, 10)})` : " (stale evidence)" : "");
   const prefix = `- [${n.kind}${testedCurrent(n) ? ", tested" : ""}] `;
   const suffix = `${marker} (${n.id})`;
@@ -149,7 +148,7 @@ export function renderChildCard(home: string, notes: Note[], project: Project, o
   add(cutToTokens(warning.replace(/\s+/g, " ").trim(), Math.min(40, Math.floor(room() / 4))));
   const fires = fixFires(home, true, 7, now, opts.host);
   const paused = pausedFixes(home, notes);
-  const recurring = notes.filter(note => !note.retired && !expired(note) && verifiedHere(note, project, home) && note.errors.length && !paused.has(note.id)
+  const recurring = notes.filter(note => !note.retired && !expired(note) && testedCurrent(note) && note.errors.length && !paused.has(note.id)
     && (fires.get(note.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(note, project)
     && !(opts.host && note.host && note.host !== opts.host))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || a.id.localeCompare(b.id))
@@ -214,7 +213,7 @@ export function renderCard(home: string, notes: Note[], project: Project, opts: 
   const paused = pausedFixes(home, notes);
   // Any note that could fire as a fix here qualifies, untagged globals included.
   const recurring = notes
-    .filter((n) => !n.retired && !expired(n) && verifiedHere(n, project, home) && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project) && !(opts.host && n.host && n.host !== opts.host))
+    .filter((n) => !n.retired && !expired(n) && testedCurrent(n) && n.errors.length && !paused.has(n.id) && (fires.get(n.id) ?? 0) >= RECURRING_FIX_SESSIONS && visibleTo(n, project) && !(opts.host && n.host && n.host !== opts.host))
     .sort((a, b) => (fires.get(b.id) ?? 0) - (fires.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1))
     .slice(0, RECURRING_FIX_LINES);
   const ranked = rankForCard(candidates, project, work?.text ?? "", now, home, opts.prompt, opts.semantic);

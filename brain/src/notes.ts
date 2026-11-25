@@ -950,14 +950,3 @@ export function evidenceHashes(evidence: string[], roots: string[]): string[] {
     return path && file ? [path + "=" + file.sha] : [];
   }))];
 }
-
-/** With after, only a changed file modified after verification invalidates a known fix. */
-export function changedEvidence(note: Note, roots: string[], after?: string): boolean {
-  const since = after ? Date.parse(after) : undefined;
-  return (note.evidenceSha ?? []).some(entry => {
-    const match = /^(.*)=([a-f\d]{12})$/i.exec(entry);
-    const path = match && evidencePath(match[1]!);
-    const file = path && evidenceFile(path, roots);
-    return !!file && file.sha !== match![2]!.toLowerCase() && (since === undefined || Number.isNaN(since) || file.mtime > since);
-  });
-}
