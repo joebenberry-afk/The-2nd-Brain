@@ -13,7 +13,7 @@
  * are the declared ones plus the stack implied by manifest files at the root (package.json → node,
  * pyproject.toml → python, …).
  */
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { GLOBAL, type Note } from "./notes.ts";
@@ -27,6 +27,14 @@ export interface Project {
   root: string | null;
   /** The declared `paths` folder when a git repo inside it is the root; registered docs also resolve there. */
   docRoot?: string;
+  /** Git checkouts directly inside a declared folder that is not itself one: sessions started in the
+   *  folder write evidence relative to them. */
+  repos?: string[];
+}
+
+/** Every folder a relative evidence path of this project may be relative to. */
+export function evidenceRoots(project: Project | null, home?: string): string[] {
+  return [project?.root, project?.docRoot, ...(project?.repos ?? []), home].filter((root): root is string => !!root);
 }
 
 export interface ProjectEntry {
@@ -251,6 +259,14 @@ export function gitRoot(cwd: string): string | null {
   }
 }
 
+function innerRepos(folder: string): string[] {
+  try {
+    return readdirSync(folder, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(folder, entry.name, ".git")))
+      .map((entry) => join(folder, entry.name));
+  } catch { return []; }
+}
+
 /** The git directory shared by all worktrees of the checkout at `root` (a linked worktree's .git is a file). */
 function gitCommonDir(root: string): string | null {
   try {
@@ -367,7 +383,8 @@ export function resolveProject(home: string, cwd: string, env: NodeJS.ProcessEnv
     // relative to it. Docs registered against the declared folder resolve through docRoot. A linked
     // worktree of the declared checkout (.claude/worktrees/x) is that checkout, not a repo inside it.
     const inner = root !== null && canonicalPath(mainCheckout(root)).startsWith(canonicalPath(best.path) + "/");
-    return { id: best.id, tags: tagsOf(projects[best.id], root ?? declared), root: root ?? declared, ...(inner ? { docRoot: declared } : {}) };
+    const repos = root === null ? innerRepos(declared) : [];
+    return { id: best.id, tags: tagsOf(projects[best.id], root ?? declared), root: root ?? declared, ...(inner ? { docRoot: declared } : {}), ...(repos.length ? { repos } : {}) };
   }
   // Linked checkouts inherit the registered main checkout, never their temporary basename
   // or a pre-split remote. Keep the worktree root for evidence and document reads.

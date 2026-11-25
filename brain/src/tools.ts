@@ -1,6 +1,6 @@
 /** Shared Brain tools; transports supply identity, rendering and telemetry. */
 import { createNote, differentBody, findNote, findSameHeadline, GLOBAL, KINDS, loadNotes, retireNote, upgradeNote, type Kind } from "./notes.ts";
-import { resolveProject } from "./project.ts";
+import { evidenceRoots, resolveProject } from "./project.ts";
 import { judgeScorer, recallFor, typesafePairJudge, type JudgeName, type ToraRecall, type RecallTrace } from "./judge.ts";
 import type { UseKind } from "./telemetry.ts";
 import { stateSaved, writeWork } from "./work.ts";
@@ -94,7 +94,7 @@ export const brainTools: BrainTool[] = [
       const untested = same?.tested ? "" : sub ? " (untested: the parent or `brain tested <id>` confirms)"
         : wantsTested && !tested ?" (untested: the owner confirms a global fix with `brain tested <id>`)" : "";
       if (same) {
-        const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root) });
+        const upgraded = upgradeNote(home, same, { kind, errors: error ? [error] : [], tested, testedBy: "agent", evidenceRoots: evidenceRoots(project) });
         return { text: `${upgraded ? "updated" : "already noted"} ${same.id}${untested}${upgraded ? fixCutHint(upgraded) : ""}`, kind: "note", project: project.id };
       }
       const note = createNote(home, { text, project: scope, kind, errors: error ? [error] : [], evidence: autoEvidence(text, project.root, project.root ? (edited ?? (session ? sessionEdits(home, session, project.root) : [])) : []), tested, testedBy: "agent", evidenceRoots: [project.root, project.docRoot].filter((root): root is string => !!root), source: "agent" });

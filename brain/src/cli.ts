@@ -14,7 +14,7 @@ import { cardIds, LEAN_LINE, renderCard } from "./card.ts";
 import { dueChecks, parseCheck, renderDue } from "./checks.ts";
 import { projectDocs, suggestDocs } from "./docs.ts";
 import { createNote, differentBody, errorPatternProblem, findNote, findSameHeadline, GLOBAL, headline, KINDS, loadNotes, loadVisibleNotes, markChecked, markTested, retireNote, staleAfterProblem, TESTERS, updateNote, upgradeNote, type Kind } from "./notes.ts";
-import { addProjectDoc, docFile, folderOnly, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
+import { addProjectDoc, docFile, evidenceRoots, folderOnly, gitRoot, idFor, loadProjects, projectById, resolveProject, type Project } from "./project.ts";
 import { pathHint } from "./paths.ts";
 import type { JudgeName, ToraRecall, RecallTrace } from "./judge.ts";
 import { scrub } from "./scrub.ts";
@@ -331,7 +331,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
         tags: c.opts.tag,
         errors: c.opts.error,
         evidence: c.opts.evidence,
-        evidenceRoots: [c.project.root, c.project.docRoot].filter((root): root is string => !!root),
+        evidenceRoots: evidenceRoots(c.project),
         tested,
         testedBy: "agent",
         staleAfter: c.opts["stale-after"],
@@ -347,7 +347,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       tags: c.opts.tag ?? [],
       errors: c.opts.error ?? [],
       evidence: c.opts.evidence ?? autoEvidence(text, c.project.root, c.project.root ? sessionEdits(c.home, c.io.env.BRAIN_SESSION ?? c.io.env.CLAUDE_CODE_SESSION_ID ?? c.io.env.CLAUDE_SESSION_ID ?? "", c.project.root) : []),
-      evidenceRoots: [c.project.root, c.project.docRoot].filter((root): root is string => !!root),
+      evidenceRoots: evidenceRoots(c.project),
       tested,
       testedBy: "agent",
       staleAfter: c.opts["stale-after"],
@@ -400,7 +400,7 @@ const COMMANDS: Record<string, (c: Ctx) => number | Promise<number>> = {
       const project = fresh.project === GLOBAL ? c.project : projectById(c.home, fresh.project, c.io.cwd);
       // Another repo's files are not this note's evidence: only the note's own checkout resolves.
       const checkout = fresh.project === GLOBAL || (!!project.root && resolveProject(c.home, project.root, {}).id === project.id);
-      return markTested(fresh, "owner", (checkout ? [project.root, project.docRoot, c.home] : [c.home]).filter((root): root is string => !!root));
+      return markTested(fresh, "owner", checkout ? evidenceRoots(project, c.home) : [c.home]);
     });
     c.io.out(`tested ${note.id}`);
     return 0;

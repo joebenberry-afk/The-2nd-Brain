@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import { checkCurrent, checkMarker, testedCurrent, expired, findNote, firstLine, GLOBAL, idQuery, restOfBody, staleEvidence, type Note } from "./notes.ts";
 import type { Project } from "./project.ts";
-import { visibleTo } from "./project.ts";
+import { evidenceRoots, visibleTo } from "./project.ts";
 import { cutToTokens } from "./util.ts";
 import { docAnswer } from "./docs.ts";
 
@@ -367,9 +367,8 @@ function matchingHits(scored: Scored, opts: RecallOptions): Hit[] {
  */
 export function staleHere(note: Note, project: Project | null, home: string | undefined): boolean {
   if (expired(note)) return true;
-  const root = project?.root ?? undefined;
-  if (note.project !== GLOBAL && (note.project !== project?.id || !root)) return false;
-  return staleEvidence(note, [root, project?.docRoot, home].filter((r): r is string => !!r));
+  if (note.project !== GLOBAL && (note.project !== project?.id || !project.root)) return false;
+  return staleEvidence(note, evidenceRoots(project, home));
 }
 
 function noteHome(note: Note, opts: RecallOptions): string | undefined {
